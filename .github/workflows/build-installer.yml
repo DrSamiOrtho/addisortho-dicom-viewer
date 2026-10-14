@@ -62,7 +62,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up JDK for compilation
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95  # v5.6.0
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
         with:
           distribution: 'temurin'
           java-version: '26'
@@ -89,7 +89,7 @@ jobs:
           echo "WEASIS_CLEAN_VERSION=${CVERSION}" >> $GITHUB_ENV
 
       - name: Upload the weasis package for building the native distribution
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: weasis-native-${{ env.WEASIS_VERSION }}
           path: weasis-distributions/target/native-dist/weasis-native.*
@@ -128,13 +128,13 @@ jobs:
           echo "WEASIS_CLEAN_VERSION=${{needs.build.outputs.cleanversion}}" >> $GITHUB_ENV
 
       - name: Set up JDK
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95  # v5.6.0
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
         with:
           distribution: 'temurin'
           java-version: '26'
 
       - name: Download weasis-native
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: weasis-native-${{ env.WEASIS_VERSION }}
           path: native-dist
@@ -166,7 +166,7 @@ jobs:
           fi
 
       - name: Import Developer Certificate
-        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466  # v7
+        uses: apple-actions/import-codesign-certs@77ba2a2a8f5cfc8c405ebf3159f767c323e238f9  # v7
         if: matrix.wsystem == 'macosx' && env.MAC_SIGN == 'yes'
         id: cert
         with:
@@ -174,7 +174,7 @@ jobs:
           p12-password: ${{ secrets.MACOS_CERTIFICATE_PWD }}
 
       - name: Import Installer Certificate
-        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466  # v7
+        uses: apple-actions/import-codesign-certs@77ba2a2a8f5cfc8c405ebf3159f767c323e238f9  # v7
         if: matrix.wsystem == 'macosx' && env.MAC_SIGN == 'yes'
         with:
           create-keychain: "false"
@@ -396,7 +396,7 @@ jobs:
           done
 
       - name: Upload the installer
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: ${{ env.APP_ARTIFACT }}
           path: final-dist
@@ -428,7 +428,7 @@ jobs:
           esac
 
       - name: Download the three installers
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           pattern: addisortho-viewer-*-${{ needs.build.outputs.version }}
           merge-multiple: true
