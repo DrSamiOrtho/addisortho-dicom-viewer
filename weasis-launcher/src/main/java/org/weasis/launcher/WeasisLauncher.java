@@ -89,6 +89,9 @@ import org.weasis.pref.ConfigData;
  */
 public class WeasisLauncher {
 
+  /** The installer's build stamp (weasis-distributions base.json). */
+  static final String P_AO_BUILD = "addisortho.build"; // NON-NLS
+
   private static final Logger LOGGER = LoggerFactory.getLogger(WeasisLauncher.class);
 
   public enum Type {
@@ -1007,6 +1010,20 @@ Starting OSGI Bundles...
       serverProp.put(
           Constants.FRAMEWORK_STORAGE_CLEAN, Constants.FRAMEWORK_STORAGE_CLEAN_ONFIRSTINIT);
       LOGGER.info("Clean plug-in cache because the version has changed");
+    }
+
+    // Addis Ortho builds of one Weasis version keep the same bundle names, so the plug-in cache
+    // kept the
+    // old bundles after an update (14 Oct 2026): each installer carries a build stamp, and a new
+    // stamp
+    // cleans the cache on this start
+    String buildNew = serverProp.get(P_AO_BUILD);
+    if (Utils.hasText(buildNew) && !buildNew.equals(localSourceProp.getProperty(P_AO_BUILD))) {
+      LOGGER.info("Clean plug-in cache: new Addis Ortho build {}", buildNew);
+      serverProp.put(
+          Constants.FRAMEWORK_STORAGE_CLEAN, Constants.FRAMEWORK_STORAGE_CLEAN_ONFIRSTINIT);
+      localSourceProp.put(P_AO_BUILD, buildNew);
+      update = true;
     }
 
     if (update) {

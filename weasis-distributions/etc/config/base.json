@@ -260,6 +260,13 @@
       "category": "LOG"
     },
     {
+      "code": "addisortho.build",
+      "value": "${build.stamp}",
+      "description": "Addis Ortho installer build stamp: a new stamp makes the launcher clean its plug-in cache",
+      "type": "A",
+      "category": "LOCK"
+    },
+    {
       "code": "weasis.version",
       "value": "${app.version}",
       "description": "Application version. This property is mandatory to launch Weasis",

@@ -186,6 +186,19 @@
               <locale>en</locale>
             </configuration>
           </execution>
+          <execution>
+            <!-- Addis Ortho: the build stamp that makes the launcher refresh its plug-in cache -->
+            <id>build-stamp-property</id>
+            <goals>
+              <goal>timestamp-property</goal>
+            </goals>
+            <configuration>
+              <name>build.stamp</name>
+              <pattern>yyyyMMddHHmmss</pattern>
+              <timeZone>UTC</timeZone>
+              <locale>en</locale>
+            </configuration>
+          </execution>
         </executions>
       </plugin>
 
