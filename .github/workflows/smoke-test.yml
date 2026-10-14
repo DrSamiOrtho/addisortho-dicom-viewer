@@ -58,6 +58,7 @@ jobs:
           FVERSION=$(awk -F'[<>]' '/<revision>/{print $3}' weasis-parent/pom.xml)$(awk -F'[<>]' '/<changelist>/{print $3}' weasis-parent/pom.xml)
           CVERSION=$(echo "$FVERSION" | sed -e 's/"//g' -e 's/-.*//' -e 's/\(\([0-9]\+\.\)\{2\}[0-9]\+\)\.[0-9]\+/\1/')
           echo "Weasis version $FVERSION, installer version $CVERSION"
+          mkdir -p native-dist
           unzip -q -o weasis-distributions/target/native-dist/weasis-native.zip -d native-dist/weasis-native
           IN=native-dist/weasis-native/bin-dist/weasis
           SCRIPT=native-dist/weasis-native/build/script
@@ -177,7 +178,8 @@ jobs:
 
           echo "--- java processes"; ps -eo pid,etime,rss,args | grep -i "[a]ddis" | cut -c1-250
           kill $APP_PID 2>/dev/null; sleep 8; pkill -9 -f "Addis Ortho Viewer" 2>/dev/null
-          echo "--- app stdout/stderr"; tail -n 60 "$RUNNER_TEMP/app.out"
+          echo "--- app stdout/stderr, without stack frames ($(wc -l < "$RUNNER_TEMP/app.out") lines in total)"
+          grep -v -E "^\s+at |Unregister|Deactivate" "$RUNNER_TEMP/app.out" | cut -c1-300 | head -400
           exit 0
 
       - name: Print the Weasis logs
@@ -292,9 +294,6 @@ jobs:
           unzip -p "$JAR" org/weasis/launcher/messages.properties 2>&1 | grep -E "aoDisclaimer|first=|ok=|no="
           unzip -p "$JAR" org/weasis/launcher/messages.properties 2>&1 | grep -q "is based on the open-source Weasis viewer. It is not a certified medical device (CE, FDA or EFDA)" \
             && res PASS disclaimer-text-in-jar "aoDisclaimer text found in weasis-launcher.jar" || res FAIL disclaimer-text-in-jar "aoDisclaimer text not found"
-          LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-          echo "--- LaunchServices entries for the URL scheme"
-          "$LSR" -dump 2>/dev/null | grep -i -B3 -A3 "weasis-addisortho" | head -30
           exit 0
 
       - name: Launch the app and screenshot
@@ -308,35 +307,110 @@ jobs:
           import CoreGraphics
           let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
           for w in list {
-            let owner = w[kCGWindowOwnerName as String] ?? ""
-            let name = w[kCGWindowName as String] ?? ""
-            let b = w[kCGWindowBounds as String] ?? ""
-            print("owner=\(owner) | title=\(name) | bounds=\(b)")
+            let owner = (w[kCGWindowOwnerName as String] as? String) ?? ""
+            let name = (w[kCGWindowName as String] as? String) ?? ""
+            let b = w[kCGWindowBounds as String] as? [String: Any] ?? [:]
+            print("owner=\(owner) | title=\(name) | \(b["Width"] ?? 0)x\(b["Height"] ?? 0)+\(b["X"] ?? 0)+\(b["Y"] ?? 0)")
           }
+          EOF
+          cat > "$RUNNER_TEMP/handler.swift" <<'EOF'
+          import AppKit
+          for s in ["weasis-addisortho://x", "weasis://x"] {
+            let u = NSWorkspace.shared.urlForApplication(toOpen: URL(string: s)!)
+            print("handler for \(s): \(u?.path ?? "none")")
+          }
+          EOF
+          cat > "$RUNNER_TEMP/menus.applescript" <<'EOF'
+          tell application "System Events"
+            tell process "Addis Ortho Viewer"
+              set frontmost to true
+              set out to ""
+              repeat with mb in (menu bar items of menu bar 1)
+                try
+                  set out to out & (name of mb as text) & ": "
+                end try
+                try
+                  repeat with mi in (menu items of menu 1 of mb)
+                    try
+                      set out to out & (name of mi as text) & " | "
+                    end try
+                  end repeat
+                end try
+                set out to out & linefeed
+              end repeat
+              return out
+            end tell
+          end tell
+          EOF
+          cat > "$RUNNER_TEMP/about.applescript" <<'EOF'
+          tell application "System Events"
+            tell process "Addis Ortho Viewer"
+              set frontmost to true
+              repeat with mb in (menu bar items of menu bar 1)
+                try
+                  repeat with mi in (menu items of menu 1 of mb)
+                    try
+                      if (name of mi as text) contains "About" then
+                        click mi
+                        return "clicked: " & (name of mi as text)
+                      end if
+                    end try
+                  end repeat
+                end try
+              end repeat
+            end tell
+          end tell
+          return "no About item found"
           EOF
           grab() {
             screencapture -x "$RUNNER_TEMP/raw.png" 2>&1
-            ls -la "$RUNNER_TEMP/raw.png" 2>&1
             [ -s "$RUNNER_TEMP/raw.png" ] && "$PY" "$H" shot "$1" --from "$RUNNER_TEMP/raw.png"
           }
+          wins() { swift "$RUNNER_TEMP/winlist.swift" 2>&1 | grep -v -E "owner=(Window Server|Control Center|SystemUIServer|Dock|Spotlight|Notification Center|Finder) "; }
+          key() { osascript -e "tell application \"System Events\" to $1" 2>&1; }
+
           rm -rf "$HOME/.weasis"
           "$APP/Contents/MacOS/Addis Ortho Viewer" "$DICOMDIR" > "$RUNNER_TEMP/app.out" 2>&1 &
           APP_PID=$!
           echo "launched pid $APP_PID with $DICOMDIR"
-          sleep 40
+          sleep 4
+          grab mac-0-splash
+          sleep 36
           if kill -0 $APP_PID 2>/dev/null; then res PASS process-alive-40s "pid $APP_PID alive"; else res FAIL process-alive-40s "pid $APP_PID exited"; fi
           ps -eo pid,etime,rss,args | grep -i "[A]ddis Ortho" | cut -c1-250
-          echo "--- on-screen windows"; swift "$RUNNER_TEMP/winlist.swift" 2>&1 | grep -v -E "owner=(Window Server|Control Center|SystemUIServer|Dock|Spotlight|Notification Center)" | head -30
-          echo "--- System Events view"; osascript -e 'tell application "System Events" to get name of every process whose background only is false' 2>&1
-          grab mac-1-after-40s
-          echo "--- try to accept the disclaimer with a key press (needs accessibility permission)"
-          osascript -e 'tell application "System Events" to keystroke " "' 2>&1
-          sleep 45
+          echo "--- on-screen windows"; W=$(wins); echo "$W"
+          echo "$W" | grep -q "title=First Time Launch of Addis Ortho DICOM Viewer" && res PASS disclaimer-window "title: First Time Launch of Addis Ortho DICOM Viewer" || res FAIL disclaimer-window "not in the window list"
+          echo "--- System Events processes"; osascript -e 'tell application "System Events" to get name of every process whose background only is false' 2>&1
+          grab mac-1-disclaimer
+
+          echo "--- Tab moves the focus from 'No' to 'I accept' (needs accessibility permission)"
+          key "key code 48"; sleep 2
+          grab mac-2-after-tab
+          echo "--- Space presses the focused button"
+          key "keystroke \" \""; sleep 5
+          echo "--- on-screen windows after accept"; W=$(wins); echo "$W"
+          echo "$W" | grep -q "title=First Time Launch" && res FAIL disclaimer-accepted "dialog still on screen" || res PASS disclaimer-accepted "dialog gone"
+          sleep 35
           if kill -0 $APP_PID 2>/dev/null; then res PASS process-alive-after-accept "pid $APP_PID alive"; else res FAIL process-alive-after-accept "pid $APP_PID exited"; fi
-          echo "--- on-screen windows"; swift "$RUNNER_TEMP/winlist.swift" 2>&1 | grep -v -E "owner=(Window Server|Control Center|SystemUIServer|Dock|Spotlight|Notification Center)" | head -30
-          grab mac-2-after-accept
-          echo "--- app stdout/stderr"; tail -n 60 "$RUNNER_TEMP/app.out"
+          echo "--- on-screen windows with the main window"; W=$(wins); echo "$W"
+          echo "$W" | grep -q "title=Addis Ortho DICOM Viewer" && res PASS main-window-title "$(echo "$W" | grep 'title=Addis Ortho DICOM Viewer' | head -1)" || res FAIL main-window-title "no window titled Addis Ortho DICOM Viewer"
+          grab mac-3-main
+
+          echo "--- menu bar contents"; osascript "$RUNNER_TEMP/menus.applescript" 2>&1
+          echo "--- open the About box"; osascript "$RUNNER_TEMP/about.applescript" 2>&1; sleep 4
+          grab mac-4-about
+          key "key code 53"; sleep 1
+
+          echo "--- URL scheme handler as seen by LaunchServices"
+          LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+          "$LSR" -f "/Applications/Addis Ortho Viewer.app"
+          swift "$RUNNER_TEMP/handler.swift" 2>&1 | tee "$RUNNER_TEMP/handler.txt"
+          grep -q "handler for weasis-addisortho://x: /Applications/Addis Ortho Viewer.app" "$RUNNER_TEMP/handler.txt" && res PASS url-scheme-handler "weasis-addisortho:// opens Addis Ortho Viewer.app" || res FAIL url-scheme-handler "$(grep 'weasis-addisortho' "$RUNNER_TEMP/handler.txt")"
+          grep -q "handler for weasis://x: none" "$RUNNER_TEMP/handler.txt" && res PASS no-weasis-handler "weasis:// has no handler" || res FAIL no-weasis-handler "$(grep 'for weasis://' "$RUNNER_TEMP/handler.txt")"
+
           kill $APP_PID 2>/dev/null; sleep 8; pkill -9 -f "Addis Ortho Viewer.app" 2>/dev/null
+          echo "--- app stdout/stderr, without stack frames ($(wc -l < "$RUNNER_TEMP/app.out") lines in total)"
+          grep -v -E "^\s+at |Unregister|Deactivate" "$RUNNER_TEMP/app.out" | cut -c1-300 | head -400
           exit 0
 
       - name: Print logs and package receipts
@@ -521,11 +595,13 @@ jobs:
           . "$env:RUNNER_TEMP\lib.ps1"
           Remove-Item "$env:USERPROFILE\.weasis" -Recurse -Force -ErrorAction SilentlyContinue
           $exe = 'C:\Program Files\Addis Ortho Viewer\Addis Ortho Viewer.exe'
-          $proc = Start-Process -FilePath $exe -ArgumentList "`"$env:DICOMDIR`"" -PassThru
+          $out = Join-Path $env:RUNNER_TEMP 'app.out'; $err = Join-Path $env:RUNNER_TEMP 'app.err'
+          $proc = Start-Process -FilePath $exe -ArgumentList "`"$env:DICOMDIR`"" -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
           "launched pid $($proc.Id) with $env:DICOMDIR"
-          Start-Sleep -Seconds 12
-          "--- visible windows at 12 s"; Get-Wins
+          Start-Sleep -Seconds 2
+          "--- visible windows at 2 s"; Get-Wins
           Shot 'win-0-splash'
+          Start-Sleep -Seconds 8
           $disc = $null
           for ($i = 0; $i -lt 150 -and -not $disc; $i++) {
             $disc = Get-Wins | Where-Object { $_ -match 'First Time Launch' } | Select-Object -First 1
@@ -566,6 +642,23 @@ jobs:
           if ($alive) { Res PASS process-alive "pid $($proc.Id) alive, working set $([math]::Round($alive.WorkingSet64/1MB)) MB" } else { Res FAIL process-alive "pid $($proc.Id) exited" }
           "--- processes"
           Get-Process | Where-Object { $_.Path -like 'C:\Program Files\Addis*' } | Format-Table Id, ProcessName, StartTime, WorkingSet64 -AutoSize | Out-String | Write-Host
+          "--- Help menu: F10, Left (wraps to Help), Down"
+          $wsh.AppActivate('Addis Ortho DICOM Viewer') | Out-Null; Start-Sleep -Seconds 1
+          [System.Windows.Forms.SendKeys]::SendWait('{F10}'); Start-Sleep -Seconds 1
+          [System.Windows.Forms.SendKeys]::SendWait('{LEFT}'); Start-Sleep -Seconds 1
+          [System.Windows.Forms.SendKeys]::SendWait('{DOWN}'); Start-Sleep -Seconds 1
+          Shot 'win-3-help-menu'
+          [System.Windows.Forms.SendKeys]::SendWait('{UP}'); Start-Sleep -Seconds 1
+          [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Seconds 4
+          Shot 'win-4-about'
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Get-Process | Where-Object { $_.Path -like 'C:\Program Files\Addis*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 4
+          "--- app stdout/stderr, without stack frames"
+          foreach ($f in @($out, $err)) {
+            "== $f ($((Get-Content $f -ErrorAction SilentlyContinue | Measure-Object -Line).Lines) lines)"
+            Get-Content $f -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\s+at |Unregister|Deactivate' } | Select-Object -First 300 | ForEach-Object { if ($_.Length -gt 300) { $_.Substring(0, 300) } else { $_ } }
+          }
           exit 0
 
       - name: Print the Weasis logs
