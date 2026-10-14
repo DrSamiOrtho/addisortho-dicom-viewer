@@ -394,7 +394,7 @@ Starting OSGI Bundles...
               int response =
                   JOptionPane.showOptionDialog(
                       mainFrame.getWindow(),
-                      String.format(Messages.getString("WeasisLauncher.msg"), appName),
+                      String.format(Messages.getString("WeasisLauncher.aoDisclaimer"), appName),
                       String.format(Messages.getString("WeasisLauncher.first"), appName),
                       JOptionPane.YES_NO_OPTION,
                       JOptionPane.WARNING_MESSAGE,

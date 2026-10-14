@@ -190,7 +190,7 @@ jobs:
           declare -a signArgs=()
           if [ "$machine" = "macosx" ] && [ "$MAC_SIGN" != "yes" ] ; then
             echo "No Apple signing certificate: building an unsigned app bundle"
-            signArgs=("--mac-package-identifier" "${{ env.IDENTIFIER }}")
+            signArgs=("--mac-package-identifier" "${{ env.IDENTIFIER }}" "--mac-package-name" "Addis Ortho")
           elif [ "$machine" = "macosx" ] ; then
             KEYCHAIN="$HOME/Library/Keychains/signing_temp.keychain-db"
 
@@ -237,7 +237,7 @@ jobs:
 
             # Use jpackage's built-in signing (--mac-sign) which applies --options runtime
             # and --timestamp correctly in inside-out order, exactly like package-weasis.sh.
-            signArgs=("--mac-package-identifier" "${{ env.IDENTIFIER }}" \
+            signArgs=("--mac-package-identifier" "${{ env.IDENTIFIER }}" "--mac-package-name" "Addis Ortho" \
               "--mac-signing-key-user-name" "$MAC_SIGNING_USER" \
               "--mac-sign")
           fi

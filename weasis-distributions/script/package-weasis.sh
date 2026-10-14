@@ -252,9 +252,9 @@ else
   DICOMIZER_CONFIG="Dicomizer=$RES/dicomizer-launcher.properties"
   if [ "$machine" = "macosx" ] ; then
     if [[ -n "$CERTIFICATE" ]] ; then
-      signArgs=("--mac-package-identifier" "$IDENTIFIER" "--mac-signing-key-user-name" "$CERTIFICATE" "--mac-sign")
+      signArgs=("--mac-package-identifier" "$IDENTIFIER" "--mac-package-name" "Addis Ortho" "--mac-signing-key-user-name" "$CERTIFICATE" "--mac-sign")
     else
-      signArgs=("--mac-package-identifier" "$IDENTIFIER")
+      signArgs=("--mac-package-identifier" "$IDENTIFIER" "--mac-package-name" "Addis Ortho")
     fi
   fi
 fi
