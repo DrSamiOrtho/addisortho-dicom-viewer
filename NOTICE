@@ -1,0 +1,23 @@
+Addis Ortho DICOM Viewer
+Copyright 2026 Addis Ortho Trading PLC
+
+This product is a modified version of Weasis (https://github.com/nroduit/Weasis),
+Copyright 2009-2026 Weasis Team. Weasis is dual-licensed under the Eclipse Public
+License 2.0 or the Apache License 2.0; this distribution uses the Apache License 2.0
+(see LICENSE.Apache-2.0).
+
+Changes made by Addis Ortho Trading PLC (see the git history from tag v4.7.3):
+- Application name, preference profiles, copyright line and first-launch disclaimer
+  (weasis-distributions/etc/config/*.json, weasis-launcher/conf/base.json,
+  weasis-launcher/src/main/java/org/weasis/launcher/messages.properties).
+- Logos, splash screen and application icons (weasis-distributions/resources/images,
+  weasis-distributions/resources/svg/logo, weasis-distributions/script/resources).
+- Installer identity, URL scheme and build workflows (weasis-distributions/script,
+  .github/workflows, weasis-launcher/src/main/java/org/weasis/launcher/WeasisLauncher.java).
+- Installer licence text and CD/DVD autorun files.
+
+The Addis Ortho name and logo are trademarks of Addis Ortho Trading PLC. They are not
+licensed under the Apache License 2.0 or the Eclipse Public License 2.0.
+
+Third-party libraries bundled with Weasis are licensed under their own terms; see
+3rd-party-licenses.md.

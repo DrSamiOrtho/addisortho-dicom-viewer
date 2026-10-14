@@ -1,9 +1,9 @@
-name: Build installers
+name: Build installers (Addis Ortho DICOM Viewer)
 on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: 'Platforms to build: "all", "none" (only the shared native package), or a comma-separated subset of windows-x86-64,macosx-x86-64,macosx-aarch64,linux-x86-64,linux-aarch64'
+        description: 'Platforms to build: "all", "none" (only the shared native package), or a comma-separated subset of windows-x86-64,macosx-x86-64,macosx-aarch64'
         required: false
         default: 'all'
 
@@ -16,7 +16,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       jpackage_matrix: ${{ steps.set.outputs.jpackage_matrix }}
-      linux_matrix: ${{ steps.set.outputs.linux_matrix }}
     steps:
       - name: Compute build matrices from the platforms input
         id: set
@@ -34,20 +33,11 @@ jobs:
             ]
             | map(select($sel == "all" or (.key as $k | ($sel | split(",")) | index($k) != null)))
             | map(del(.key))')
-          linux=$(jq -cn --arg sel "$sel" '
-            [
-              {key:"linux-x86-64",  arch:"linux/amd64"},
-              {key:"linux-aarch64", arch:"linux/arm64"}
-            ]
-            | map(select($sel == "all" or (.key as $k | ($sel | split(",")) | index($k) != null)))
-            | map(.arch)')
           {
             echo "jpackage_matrix=$jpkg"
-            echo "linux_matrix=$linux"
           } >> "$GITHUB_OUTPUT"
           echo "Selected platforms: $sel"
           echo "jpackage matrix: $jpkg"
-          echo "linux matrix:    $linux"
 
   build:
     runs-on: ubuntu-latest
@@ -95,8 +85,11 @@ jobs:
 
   jpackage:
     env:
-      NAME: "Weasis"
-      IDENTIFIER: "org.weasis.launcher"
+      NAME: "Addis Ortho Viewer"
+      IDENTIFIER: "com.addisortho.viewer"
+      # Sign and notarise on macOS only when the Apple certificates are stored as repository
+      # secrets; otherwise build unsigned installers for internal testing.
+      MAC_SIGN: ${{ secrets.MACOS_CERTIFICATE_DEVELOPMENT != '' && 'yes' || 'no' }}
       WEASIS_INPUT: "native-dist/weasis-native/bin-dist"
       WEASIS_OUTPUT: "output-dist"
       WEASIS_INPUT_BIN: "native-dist/weasis-native/bin-dist/weasis"
@@ -158,7 +151,7 @@ jobs:
 
       - name: Import Developer Certificate
         uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466  # v7
-        if: matrix.wsystem == 'macosx'
+        if: matrix.wsystem == 'macosx' && env.MAC_SIGN == 'yes'
         id: cert
         with:
           p12-file-base64: ${{ secrets.MACOS_CERTIFICATE_DEVELOPMENT }}
@@ -166,7 +159,7 @@ jobs:
 
       - name: Import Installer Certificate
         uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466  # v7
-        if: matrix.wsystem == 'macosx'
+        if: matrix.wsystem == 'macosx' && env.MAC_SIGN == 'yes'
         with:
           create-keychain: "false"
           keychain-password: ${{ steps.cert.outputs.keychain-password }}
@@ -195,7 +188,10 @@ jobs:
           source "${{ env.WEASIS_SCRIPT }}/launch-options.sh" "$machine"
 
           declare -a signArgs=()
-          if [ "$machine" = "macosx" ] ; then
+          if [ "$machine" = "macosx" ] && [ "$MAC_SIGN" != "yes" ] ; then
+            echo "No Apple signing certificate: building an unsigned app bundle"
+            signArgs=("--mac-package-identifier" "${{ env.IDENTIFIER }}")
+          elif [ "$machine" = "macosx" ] ; then
             KEYCHAIN="$HOME/Library/Keychains/signing_temp.keychain-db"
 
             # Enumerate all identities in the keychain for diagnostics.
@@ -251,7 +247,7 @@ jobs:
           --resource-dir "${{ env.RES }}" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" --add-launcher "Dicomizer=${{ env.RES }}/dicomizer-launcher.properties" \
           "${signArgs[@]}" "${customOptions[@]}" "${commonOptions[@]}"
 
-          if [ "$machine" = "macosx" ] ; then
+          if [ "$machine" = "macosx" ] && [ "$MAC_SIGN" = "yes" ] ; then
             APP_PATH="${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}.app"
             echo "--- Verifying app bundle signature (deep + strict)"
             codesign --verify --deep --strict --verbose=2 "$APP_PATH"
@@ -274,7 +270,7 @@ jobs:
             done < <(find "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/runtime" \
               -type f \( -name "*.dylib" -o -name "*.so" -o -name "jspawnhelper" \) -print0)
             # Also check the main launcher executables explicitly
-            for bin in "$APP_PATH/Contents/MacOS/Weasis" "$APP_PATH/Contents/MacOS/Dicomizer"; do
+            for bin in "$APP_PATH/Contents/MacOS/${{ env.NAME }}" "$APP_PATH/Contents/MacOS/Dicomizer"; do
               [ -f "$bin" ] || continue
               info=$(codesign -dvvv "$bin" 2>&1)
               cert=$(echo "$info" | grep "Authority=Developer ID Application" || true)
@@ -302,19 +298,19 @@ jobs:
         env:
           RES: "${{ env.WEASIS_SCRIPT }}/resources/${{ matrix.wsystem }}"
           FILE_ASSOC: "${{ env.WEASIS_SCRIPT }}/file-associations.properties"
-          VENDOR: "Weasis Team"
-          COPYRIGHT: "© 2009-2026 Weasis Team"
+          VENDOR: "Addis Ortho Trading PLC"
+          COPYRIGHT: "© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-2026 Weasis Team"
         run: |
           mkdir -p final-dist
           machine=${{ matrix.wsystem }}
           ARC_NAME=${{ matrix.warc }}
           if [ "$machine" = "windows" ] ; then
-            [ "$ARC_NAME" = "aarch64" ] && UPGRADE_UID="3aedc24e-48a8-4623-ab39-0c3c01c7383c" || UPGRADE_UID="3aedc24e-48a8-4623-ab39-0c3c01c7383a"
+            [ "$ARC_NAME" = "aarch64" ] && UPGRADE_UID="1d34dbc0-804b-491f-b9b7-cddec4b42771" || UPGRADE_UID="4179fa98-ca01-4739-b89e-92aff0702b48"
             jpackage --type "msi" --app-image "${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}" --dest "${{ env.WEASIS_OUTPUT }}" --name "${{ env.NAME }}" --resource-dir "${{ env.RES }}/msi/${ARC_NAME}" \
-            --license-file "${{ env.WEASIS_INPUT }}/Licence.txt" --description "Weasis DICOM viewer" --win-upgrade-uuid "$UPGRADE_UID" \
+            --license-file "${{ env.WEASIS_INPUT }}/Licence.txt" --description "Addis Ortho DICOM Viewer" --win-upgrade-uuid "$UPGRADE_UID" \
             --win-menu --win-menu-group "${{ env.NAME }}" --copyright "${{ env.COPYRIGHT }}" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" \
             --vendor "${{ env.VENDOR }}" --file-associations "${{ env.FILE_ASSOC }}" --verbose
-            cp ${{ env.WEASIS_OUTPUT }}/*.msi final-dist/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}-${ARC_NAME}.msi
+            cp ${{ env.WEASIS_OUTPUT }}/*.msi "final-dist/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}-${ARC_NAME}.msi"
           elif [ "$machine" = "macosx" ] ; then
             # Do not set verbose for public build.
             # Do NOT pass --mac-sign here: the app bundle was already signed with proper
@@ -328,6 +324,11 @@ jobs:
             # productsign only wraps the outer package; it does not touch the app contents.
             UNSIGNED_PKG="${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}.pkg"
             SIGNED_PKG="final-dist/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}-${ARC_NAME}.pkg"
+            if [ "$MAC_SIGN" != "yes" ] ; then
+              cp "$UNSIGNED_PKG" "final-dist/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}-${ARC_NAME}-unsigned.pkg"
+              echo "APP_ARTIFACT=addisortho-viewer-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
+              exit 0
+            fi
             KEYCHAIN="$HOME/Library/Keychains/signing_temp.keychain-db"
             INSTALLER_ID=$(security find-identity -v -p basic "$KEYCHAIN" \
               | grep "Developer ID Installer" | head -1 | awk -F'"' '{print $2}')
@@ -335,10 +336,10 @@ jobs:
             productsign --sign "$INSTALLER_ID" --keychain "$KEYCHAIN" --timestamp \
               "$UNSIGNED_PKG" "$SIGNED_PKG"
           fi
-          echo "APP_ARTIFACT=weasis-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
+          echo "APP_ARTIFACT=addisortho-viewer-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
 
       - name: Notarize Release Build
-        if: matrix.wsystem == 'macosx'
+        if: matrix.wsystem == 'macosx' && env.MAC_SIGN == 'yes'
         shell: bash
         run: |
           SUBMISSION=$(xcrun notarytool submit \
@@ -360,7 +361,7 @@ jobs:
           fi
 
       - name: Staple Release Build
-        if: matrix.wsystem == 'macosx'
+        if: matrix.wsystem == 'macosx' && env.MAC_SIGN == 'yes'
         shell: bash
         run: |
           xcrun stapler staple \
@@ -384,98 +385,3 @@ jobs:
         with:
           name: ${{ env.APP_ARTIFACT }}
           path: final-dist
-
-  linux-multiarch:
-    needs: [setup, build]
-    runs-on: ubuntu-latest
-    if: ${{ needs.setup.outputs.linux_matrix != '[]' }}
-    strategy:
-      matrix:
-        arch: ${{ fromJSON(needs.setup.outputs.linux_matrix) }}
-
-    steps:
-      - name: Download weasis-native
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: weasis-native-${{ needs.build.outputs.version }}
-          path: native-dist
-
-      - name: Unzip the native package version
-        shell: bash
-        run: |
-          unzip -o "native-dist/weasis-native.zip" -d "native-dist/weasis-native"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8  # v4
-
-      - name: Set up Docker Buildx for multi-arch
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
-
-      - name: Run Docker container to package Weasis for ${{ matrix.arch }}
-        shell: bash
-        run: |
-          ARCH="${{ matrix.arch }}"
-
-          # Build Docker image for the current architecture
-          echo "Building Docker image for ${ARCH}..."
-          docker buildx build --load --platform "${ARCH}" -t weasis/builder:latest native-dist/weasis-native/build/docker
-
-          # Run Docker container to package weasis
-          echo "Running Docker container to package Weasis for ${ARCH}..."
-          docker run --platform "${ARCH}" --rm \
-            -v "$(pwd)/native-dist/weasis-native:/work" \
-            weasis/builder:latest \
-            bash -c "export JAVA_TOOL_OPTIONS=-Djdk.lang.Process.launchMechanism=vfork; mkdir -p /work/installer; \
-            cd /work/installer; /work/build/script/package-weasis.sh --jdk /opt/java/openjdk --temp /work/temp"
-
-          echo "--- Contents of installer directory:"
-          ls -la native-dist/weasis-native/installer/ || echo "[WARN] No installer directory found"
-
-          PKG_ARTIFACT=$(ls -d native-dist/weasis-native/installer/*/ 2>/dev/null | head -n 1 | xargs -n 1 basename)
-          if [ -z "$PKG_ARTIFACT" ]; then
-            echo "[ERROR] No installer subdirectory found under native-dist/weasis-native/installer/"
-            exit 1
-          fi
-          echo "PKG_ARTIFACT=${PKG_ARTIFACT}" >> $GITHUB_ENV
-          echo "Found package artifact: ${PKG_ARTIFACT}"
-
-          echo "--- Contents of installer/${PKG_ARTIFACT}:"
-          ls -la "native-dist/weasis-native/installer/${PKG_ARTIFACT}/"
-
-          mkdir -p final-dist
-          # Copy .deb and .rpm files to the final-dist directory
-          DEB_COUNT=$(find "native-dist/weasis-native/installer/${PKG_ARTIFACT}" -maxdepth 1 -name "*.deb" | wc -l)
-          RPM_COUNT=$(find "native-dist/weasis-native/installer/${PKG_ARTIFACT}" -maxdepth 1 -name "*.rpm" | wc -l)
-          if [ "$DEB_COUNT" -gt 0 ]; then
-            cp native-dist/weasis-native/installer/${PKG_ARTIFACT}/*.deb final-dist/
-          else
-            echo "[INFO] No .deb files found to copy."
-          fi
-          if [ "$RPM_COUNT" -gt 0 ]; then
-            cp native-dist/weasis-native/installer/${PKG_ARTIFACT}/*.rpm final-dist/
-          else
-            echo "[INFO] No .rpm files found to copy."
-          fi
-
-          echo "--- Contents of final-dist:"
-          ls -la final-dist/
-
-          if [ -z "$(ls -A final-dist/)" ]; then
-            echo "[ERROR] final-dist is empty — no .deb or .rpm files were produced."
-            exit 1
-          fi
-
-          for file in final-dist/*; do
-            if [[ -f "$file" ]]; then
-              sha256sum "$file" >> "$file.sha256"
-            fi
-          done
-        timeout-minutes: 45
-        continue-on-error: false
-
-      - name: Upload Linux multi-arch installers
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: ${{ env.PKG_ARTIFACT }}
-          path: final-dist
-          if-no-files-found: error

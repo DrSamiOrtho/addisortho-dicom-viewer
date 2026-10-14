@@ -13,7 +13,7 @@
 		<key>CFBundleIconFile</key>
 		<string>DEPLOY_ICON_FILE</string>
 		<key>CFBundleIdentifier</key>
-		<string>org.weasis.launcher</string>
+		<string>com.addisortho.viewer</string>
 		<key>CFBundleInfoDictionaryVersion</key>
 		<string>6.0</string>
 		<key>CFBundleSupportedPlatforms</key>
@@ -42,10 +42,10 @@
     <array>
       <dict>
         <key>CFBundleURLName</key>
-        <string>org.weasis.url.handler</string>
+        <string>com.addisortho.viewer.url.handler</string>
         <key>CFBundleURLSchemes</key>
         <array>
-          <string>weasis</string>
+          <string>weasis-addisortho</string>
         </array>
       </dict>
     </array>

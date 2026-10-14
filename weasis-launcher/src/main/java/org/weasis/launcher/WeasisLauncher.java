@@ -1175,7 +1175,7 @@ Starting OSGI Bundles...
 
   private static String[] getArgsForURI(String uri) {
     if (SystemInfo.isMacOS) {
-      return new String[] {"open", "-n", "-b", "org.weasis.launcher", "--args", uri}; // NON-NLS
+      return new String[] {"open", "-n", "-b", "com.addisortho.viewer", "--args", uri}; // NON-NLS
     } else if (SystemInfo.isWindows) {
       return new String[] {"cmd", "/c", "start", uri}; // NON-NLS
     } else {

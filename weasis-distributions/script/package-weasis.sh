@@ -9,8 +9,8 @@ PACKAGE=YES
 
 # The JDK modules and the launch options are defined in launch-options.sh, shared with the
 # GitHub workflow building the macOS and Windows installers.
-NAME="Weasis"
-IDENTIFIER="org.weasis.launcher"
+NAME="Addis Ortho Viewer"
+IDENTIFIER="com.addisortho.viewer"
 
 # Aux functions:
 die ( ) {
@@ -271,12 +271,12 @@ fi
 
 
 if [ "$PACKAGE" = "YES" ] ; then
-  VENDOR="Weasis Team"
-  COPYRIGHT="© 2009-2026 Weasis Team"
+  VENDOR="Addis Ortho Trading PLC"
+  COPYRIGHT="© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-2026 Weasis Team"
   if [ "$machine" = "windows" ] ; then
-    [ "$arc" = "aarch64" ]  && UPGRADE_UID="3aedc24e-48a8-4623-ab39-0c3c01c7383c" || UPGRADE_UID="3aedc24e-48a8-4623-ab39-0c3c01c7383a"
+    [ "$arc" = "aarch64" ]  && UPGRADE_UID="1d34dbc0-804b-491f-b9b7-cddec4b42771" || UPGRADE_UID="4179fa98-ca01-4739-b89e-92aff0702b48"
     $JPKGCMD --type "msi" --app-image "$IMAGE_PATH" --dest "$OUTPUT_PATH" --name "$NAME" --resource-dir "$RES/msi/${arc}" \
-    --license-file "$INPUT_PATH\Licence.txt" --description "Weasis DICOM viewer" --win-upgrade-uuid "$UPGRADE_UID"  \
+    --license-file "$INPUT_PATH\Licence.txt" --description "Addis Ortho DICOM Viewer" --win-upgrade-uuid "$UPGRADE_UID"  \
     --win-menu --win-menu-group "$NAME" --copyright "$COPYRIGHT" --app-version "$WEASIS_CLEAN_VERSION" \
     --vendor "$VENDOR" --file-associations "${curPath}\file-associations.properties" "${tmpArgs[@]}" --verbose
     mv "$OUTPUT_PATH_UNIX/$NAME-$WEASIS_CLEAN_VERSION.msi" "$OUTPUT_PATH_UNIX/$NAME-$WEASIS_CLEAN_VERSION-${arc}.msi"
@@ -285,10 +285,10 @@ if [ "$PACKAGE" = "YES" ] ; then
     for installerType in "${installerTypes[@]}"; do
       if [ "${installerType}" = "rpm" ]; then
         DEPENDENCIES=""
-        declare -a typeArgs=("--linux-rpm-license-type" "EPL-2.0")
+        declare -a typeArgs=("--linux-rpm-license-type" "Apache-2.0")
       else
         DEPENDENCIES="libstdc++6, libgcc1"
-        declare -a typeArgs=("--linux-deb-maintainer" "Nicolas Roduit")
+        declare -a typeArgs=("--linux-deb-maintainer" "Addis Ortho Trading PLC")
       fi
       # Build the deb/rpm in a single step directly from --input (not from a prebuilt --app-image).
       # On JDK 26+ the two-step "--type deb --app-image <image>" path fails to resolve the launcher
@@ -298,9 +298,9 @@ if [ "$PACKAGE" = "YES" ] ; then
       $JPKGCMD --type "$installerType" --input "$INPUT_DIR" --dest "$OUTPUT_PATH" --name "$NAME" \
       --main-jar weasis-launcher.jar --main-class org.weasis.launcher.AppLauncher --add-modules "$JDK_MODULES" \
       --add-launcher "${DICOMIZER_CONFIG}" --resource-dir "$RES" \
-      --license-file "$INPUT_PATH/Licence.txt" --description "Weasis DICOM viewer" --vendor "$VENDOR" \
+      --license-file "$INPUT_PATH/Licence.txt" --description "Addis Ortho DICOM Viewer" --vendor "$VENDOR" \
       --copyright "$COPYRIGHT" --app-version "$WEASIS_CLEAN_VERSION" --file-associations "${curPath}/file-associations.properties" \
-      --linux-app-release "$REVISON_INC" --linux-package-name "weasis" \
+      --linux-app-release "$REVISON_INC" --linux-package-name "addisortho-viewer" \
       "${typeArgs[@]}" \
       --linux-menu-group "Viewer;MedicalSoftware;Graphics;" --linux-app-category "science" --linux-package-deps "${DEPENDENCIES}" \
       --linux-shortcut "${customOptions[@]}" "${commonOptions[@]}" "${tmpArgs[@]}" --verbose
