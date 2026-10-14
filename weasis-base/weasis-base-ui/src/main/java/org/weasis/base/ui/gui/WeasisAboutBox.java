@@ -13,6 +13,7 @@ import java.awt.BorderLayout;
 import java.awt.FlowLayout;
 import java.awt.Frame;
 import java.awt.event.WindowEvent;
+import java.io.File;
 import java.util.Enumeration;
 import java.util.Properties;
 import javax.swing.JButton;
@@ -24,14 +25,24 @@ import javax.swing.JTabbedPane;
 import javax.swing.JTable;
 import javax.swing.JTextPane;
 import javax.swing.WindowConstants;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.weasis.base.ui.Messages;
 import org.weasis.core.api.gui.util.AppProperties;
 import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.service.WProperties;
 import org.weasis.core.api.util.ResourceUtil;
 import org.weasis.core.ui.util.SimpleTableModel;
+import org.weasis.core.util.StringUtil;
 
 public class WeasisAboutBox extends JDialog {
+  private static final Logger LOGGER = LoggerFactory.getLogger(WeasisAboutBox.class);
+
+  /** Notice generated at build time, relative to the resources folder. */
+  static final String THIRD_PARTY_LICENSES = "legal/THIRD-PARTY-NOTICES.txt"; // NON-NLS
+
+  static final String THIRD_PARTY_LICENSES_FALLBACK_URL =
+      "https://github.com/nroduit/Weasis/blob/master/3rd-party-licenses.md"; // NON-NLS
 
   private final JTable sysTable;
 
@@ -77,11 +88,17 @@ public class WeasisAboutBox extends JDialog {
 
     jTextPane1.addHyperlinkListener(GuiUtils.buildHyperlinkListener());
     WProperties preferences = GuiUtils.getUICore().getSystemPreferences();
+    String releaseNotesUrl = preferences.getProperty("weasis.releasenotes", ""); // NON-NLS
+    String releaseNotesLink =
+        StringUtil.hasText(releaseNotesUrl)
+            ? "<a href=\"%s\">%s</a><br>"
+                .formatted(releaseNotesUrl.trim(), Messages.getString("WeasisWin.release"))
+            : "";
     String html =
         """
         <div align="center">
           <h2>%s %s</h2>
-          <a href="%s">%s</a><br>
+          %s
           %s<br>
           %s <a href="%s">%s</a><br>
           <p>%s %s, %s<br>
@@ -91,11 +108,10 @@ public class WeasisAboutBox extends JDialog {
             .formatted(
                 AppProperties.WEASIS_NAME,
                 AppProperties.WEASIS_VERSION,
-                preferences.getProperty("weasis.releasenotes", ""),
-                Messages.getString("WeasisWin.release"),
+                releaseNotesLink,
                 preferences.getProperty("weasis.copyrights", ""),
                 AppProperties.WEASIS_NAME,
-                "https://github.com/nroduit/Weasis/blob/master/3rd-party-licenses.md",
+                getThirdPartyLicensesUrl(),
                 Messages.getString("WeasisWin.otherSoft"),
                 System.getProperty("os.name"),
                 System.getProperty("os.version"),
@@ -127,6 +143,22 @@ public class WeasisAboutBox extends JDialog {
     panelRoot.add(jTabbedPane1, BorderLayout.CENTER);
 
     getContentPane().add(panelRoot, null);
+  }
+
+  /**
+   * Returns the licence notice shipped in the resources folder when it exists, otherwise the
+   * upstream page.
+   */
+  static String getThirdPartyLicensesUrl() {
+    try {
+      File file = ResourceUtil.getResource(THIRD_PARTY_LICENSES);
+      if (file.isFile()) {
+        return file.toURI().toString();
+      }
+    } catch (RuntimeException e) {
+      LOGGER.warn("Cannot locate the third-party licenses file", e);
+    }
+    return THIRD_PARTY_LICENSES_FALLBACK_URL;
   }
 
   // Overridden so we can exit when window is closed

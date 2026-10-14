@@ -15,9 +15,10 @@ review and surgical planning support only and must not be used for primary
 diagnosis. Diagnosis and treatment decisions remain with the treating clinician.
 
 Third-party components included with this program, including the Java runtime,
-are licensed under their own terms. See
-https://github.com/nroduit/Weasis/blob/master/3rd-party-licenses.md and the legal
-folder of the bundled Java runtime.
+are licensed under their own terms. They are listed, with their licences, in the
+file THIRD-PARTY-NOTICES.txt installed with the application. Open it from Help,
+About, "includes other open source software". The notices of the bundled Java
+runtime are in the legal folder of the runtime.
 
 ------------------------------------------------------------------------------
 

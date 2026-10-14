@@ -30,3 +30,14 @@ jobs:
 
       - name: Build and test
         run: mvn -B -ntp install
+
+      - name: Check the third-party notice
+        run: |
+          f=target/generated-resources/legal/THIRD-PARTY-NOTICES.txt
+          test -s "$f"
+          grep -q "based in part on the work of the Independent JPEG Group" "$f"
+          ! grep -qi "unknown license" "$f"
+          echo "$(grep -c '^  \* ' "$f") third-party libraries listed"
+          echo "::group::THIRD-PARTY-NOTICES.txt"
+          cat "$f"
+          echo "::endgroup::"

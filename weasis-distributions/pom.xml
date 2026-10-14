@@ -129,6 +129,29 @@
     </pluginManagement>
     <plugins>
       <plugin>
+        <!-- Never package an installer without the third-party notice (written by the root build) -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>require-third-party-notice</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <requireFilesExist>
+                  <files>
+                    <file>../target/generated-resources/legal/THIRD-PARTY-NOTICES.txt</file>
+                  </files>
+                  <message>The third-party notice is missing. Run "mvn install" at the repository root first: it generates target/generated-resources/legal/THIRD-PARTY-NOTICES.txt, which is packaged as resources/legal/THIRD-PARTY-NOTICES.txt.</message>
+                </requireFilesExist>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>build-helper-maven-plugin</artifactId>
         <executions>
