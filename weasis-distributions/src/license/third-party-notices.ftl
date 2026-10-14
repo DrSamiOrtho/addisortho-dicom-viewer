@@ -33,14 +33,15 @@ under the same terms and are not listed again below.
 
 The viewer includes the third-party software listed below. Each component remains under its
 own licence. The full texts of the licences that need one are in the folder "licenses" next
-to this file (Apache-2.0, EPL-2.0, LGPL-2.1, GPL-2.0 with the Classpath Exception).
+to this file (Apache-2.0, EPL-2.0, LGPL-2.1, LGPL-3.0 with GPL-3.0, and GPL-2.0 with the
+Classpath Exception).
 
 Where a component is offered under several licences, this distribution uses it under the
-first licence that applies from this list: Apache-2.0, EPL-2.0, EDL-1.0 or BSD, LGPL-2.1.
-Libraries under the LGPL are included as separate library files, in binary form, as
-published by their authors or by the Weasis project. You may replace them with a modified
-version of the same library under the terms of the LGPL; their source code is available from
-the project addresses given below.
+first licence that applies from this list: Apache-2.0, EPL-2.0, EDL-1.0 or BSD, LGPL.
+Libraries under the LGPL (version 2.1 or 3, as each project states) are included as separate
+library files, in binary form, as published by their authors or by the Weasis project. You
+may replace them with a modified version of the same library under the terms of the LGPL;
+their source code is available from the project addresses given below.
 
 
 A. COMPONENTS THAT THE BUILD DOES NOT LIST

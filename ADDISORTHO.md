@@ -89,7 +89,8 @@ real Weasis on the same computer. Linux packaging is not maintained.
   New spellings of an existing licence go into `licenseMerges` in the root `pom.xml`.
 - Both assemblies (`resources.zip` and the native package) copy the file to `resources/legal/`
   with the licence texts in `resources/legal/licenses/` (Apache-2.0 and EPL-2.0 from the repository
-  root, LGPL-2.1 and GPL-2.0 with the Classpath Exception from `weasis-distributions/resources`).
+  root; LGPL-2.1, LGPL-3.0, GPL-3.0 and GPL-2.0 with the Classpath Exception from
+  `weasis-distributions/resources/legal/licenses`).
   `weasis-distributions` fails early (`require-third-party-notice`) if the file was not generated.
 - The About box (`WeasisAboutBox`) opens `legal/THIRD-PARTY-NOTICES.txt` through `ResourceUtil`
   (the `weasis.resources.path` folder) and falls back to upstream's page when it is absent. The
