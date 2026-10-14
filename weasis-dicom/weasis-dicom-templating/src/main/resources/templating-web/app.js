@@ -821,7 +821,8 @@ function switchWf(wf) {
 }
 function ensureSlots() {
   for (const k of Object.keys(S.tpl)) if (!WF[S.wf].slots.includes(k)) delete S.tpl[k];
-  if (S.wf === 'hip' && refOther()) delete S.tpl['stem' + S.side];   // a fractured femur carries no stem, also in older plans
+  // a fractured femur carries no stem, also in older plans, unless the surgeon added one there by hand (Sami, 14 Oct)
+  if (S.wf === 'hip' && refOther() && S.tpl['stem' + S.side] && !S.tpl['stem' + S.side].byHand) delete S.tpl['stem' + S.side];
   if (S.active && !S.tpl[S.active]) S.active = null;
 }
 // a new implant for this slot, or null when no range of its kind is open to this account
@@ -839,13 +840,34 @@ function newTemplate(slot) {
 }
 function addTemplate(slot) {
   const nr = notReady(); if (nr) return prompt(nr);
-  if (refOther() && slot === 'stem' + S.side) return prompt(`The ${SIDE[S.side]} femur is not templated: plan the stem on the ${SIDE[other(S.side)]} side.`);
+  if (refOther() && slot === 'stem' + S.side) return addStemByHand(slot);
   const t = newTemplate(slot); if (!t) return prompt(`No ${SLOT[slot].label.toLowerCase()} range is open to your account.`);
   S.tpl[slot] = t; S.active = slot;
   autoPlace(slot);
   const side = slotSide(slot);
   if (SLOT[slot].side) { matchHeadToCup(side); if (SLOT[slot].kind === 'stem') autoPlace(slot); }
   save(); panel(); draw();
+}
+// A stem on the deformed surgery side when the plan is made on the other hip (Sami, 14 Oct 2026: "add option of adding
+// stem on contralateral side as needed"). It starts as the other side's stem mirrored about the pelvic midline (same
+// family, size, head and neck; its head on the mirrored head centre), or in the middle of the screen when the other side
+// has no stem yet. No rule moves it afterwards: the surgeon places it on the deformed femur by hand. The plan stays the
+// other side's; the results say so.
+function addStemByHand(slot) {
+  const sd = slotSide(slot), sN = S.tpl['stem' + other(sd)], H = hipFrame(sd);
+  const t = newTemplate(slot); if (!t) return prompt(`No stem range is open to your account.`);
+  t.byHand = true;
+  if (sN && sN.on) {
+    Object.assign(t, { fam: sN.fam, size: sN.size, headKind: sN.headKind, head: sN.head, neck: sN.neck });
+    if (H && !H.single) {   // the head centre reflected, the axis turned the other way about the pelvic vertical
+      const hN = headAt(sN), at = reflect(hN, H), tilt = sN.angle - filmTurn();
+      t.angle = filmTurn() - tilt; t.x = at.x; t.y = at.y;
+      const d = G.sub(at, headAt(t)); t.x += d.x; t.y += d.y;
+    }
+  }
+  S.tpl[slot] = t; S.active = slot;
+  save(); panel(); draw();
+  prompt(`${SIDE[sd]} stem added by hand${sN && sN.on ? `, mirrored from the ${SIDE[other(sd)]} stem` : ''}: drag and turn it onto the ${SIDE[sd]} femur. The plan is still the ${SIDE[other(sd)]} one; no rule moves this stem.`);
 }
 // the family picked on the choice card for this kind, while it is open to this account; else null
 function chosenFam(kind) { const f = S.choice[kind] && S.fam[S.choice[kind]]; return f && f.kind === kind ? f : null; }
@@ -1325,7 +1347,7 @@ function mirrorOtherNow(quiet) {
     if (cupN && cupN.on) { const f = S.fam[cup.fam], i0 = f.sizes.findIndex(z => z.size === cup.size), i1 = f.sizes.findIndex(z => z.size === cupN.size); if (Math.abs(i0 - i1) > 1) info.push(`the ${SIDE[n]} cup is ${cupN.size}: more than one size different`); }
   }
   if (refOther()) {   // Sami, 11 Oct: a fractured, shortened or rotated femur is not templated; the stem is the normal side's
-    delete S.tpl['stem' + o];
+    if (S.tpl['stem' + o] && !S.tpl['stem' + o].byHand) delete S.tpl['stem' + o];   // one added by hand stays (14 Oct)
     const cutN = stemN && stemN.on ? neckCutAboveLT(stemN, n) : null;
     S.notes['fit' + o] = { copied: true, cut: cutN }; S.notes['offset' + o] = '';
     info.push(stemN && stemN.on ? `stem as on the ${SIDE[n]}: ${S.fam[stemN.fam].label} ${stemN.size}, ${stemN.head} mm head, neck ${neckLabel(stemN, stemN.neck)}; ${cutN !== null ? `neck cut ${f1(cutN)} mm above the lesser trochanter` : `mark the ${SIDE[n]} lesser trochanter to measure the neck cut`}` : `plan the ${SIDE[n]} stem: it is the stem for the ${SIDE[o]}`);
@@ -1690,6 +1712,8 @@ function hipResults(R, k) {
   if (refOther() && stemN && stemN.on) {   // the stem for the fractured side is templated on the normal one (Sami, 11 Oct)
     const gN = geomOf(stemN), Hs = headAt(stemN), cutN = neckCutAboveLT(stemN, n), hnat = lmGeom('head' + n), cN = cupN && cupN.on ? xf(cupN)([0, 0]) : null;
     R.push([`Stem for the ${SIDE[o]} (templated on the ${SIDE[n]})`]);
+    const sO = S.tpl['stem' + o];
+    if (sO && sO.on && sO.byHand) R.push([`${SIDE[o]} stem on the film`, `${S.fam[sO.fam].label} ${sizeOf(sO).size}, placed by hand on the ${SIDE[o]} femur (not templated there)`]);
     R.push([S.fam[stemN.fam].label, `size ${sizeOf(stemN).size}`]);
     R.push(['Head', `${stemN.head} mm ${S.lib.heads[stemN.headKind].label}, neck ${neckLabel(stemN, stemN.neck)}`]);
     R.push(['Neck cut above lesser trochanter', cutN !== null ? `${f1(cutN)} mm (medial end of the cut; measure from the ${SIDE[o]} lesser trochanter at surgery)` : `mark the ${SIDE[n]} lesser trochanter to measure it`, cutN !== null ? '' : 'warn']);
@@ -3205,9 +3229,11 @@ function settingsBox() {
 }
 function templateBox(slot) {
   const t = S.tpl[slot], side = slotSide(slot), op = !SLOT[slot].side || side === S.side;
-  if (refOther() && slot === 'stem' + S.side) {   // the fractured femur: no outline, the normal side's stem instead
+  if (refOther() && slot === 'stem' + S.side && !(t && t.byHand)) {   // the fractured femur: no outline, the normal side's stem instead
     const sN = S.tpl['stem' + other(side)], cut = sN && sN.on ? neckCutAboveLT(sN, other(side)) : null;
-    return el(`<div class="tpl" data-slot="${slot}"><div class="name">${esc(slotName(slot))}</div><p class="note">Not templated on this femur (fractured, shortened or rotated). Use the ${SIDE[other(side)]} stem${sN ? `: <b>${esc(S.fam[sN.fam].label)} ${esc(sN.size)}</b>, ${esc(sN.head)} mm head, neck ${esc(neckLabel(sN, sN.neck))}` : ' (plan it on that side)'}${cut !== null ? `; neck cut <b>${f1(cut)} mm above the lesser trochanter</b>` : ''}.</p></div>`);
+    const nb = el(`<div class="tpl" data-slot="${slot}"><div class="name">${esc(slotName(slot))}</div><p class="note">Not templated on this femur (fractured, shortened or rotated). Use the ${SIDE[other(side)]} stem${sN ? `: <b>${esc(S.fam[sN.fam].label)} ${esc(sN.size)}</b>, ${esc(sN.head)} mm head, neck ${esc(neckLabel(sN, sN.neck))}` : ' (plan it on that side)'}${cut !== null ? `; neck cut <b>${f1(cut)} mm above the lesser trochanter</b>` : ''}.</p></div>`);
+    nb.appendChild(btn('Add a stem here anyway', () => addTemplate(slot), '', !mm(), `A ${SIDE[side]} stem to place by hand on this femur, starting as the ${SIDE[other(side)]} stem mirrored; the plan stays the ${SIDE[other(side)]} one`));
+    return nb;
   }
   const box = el(`<div class="tpl ${S.active === slot ? 'active' : ''} ${op ? '' : 'other'}" data-slot="${slot}"></div>`);
   if (!t) {
@@ -3220,6 +3246,7 @@ function templateBox(slot) {
   }
   const f = S.fam[t.fam];
   box.onclick = () => { if (S.active !== slot) { S.active = slot; panel(); draw(); } };
+  if (t.byHand && refOther()) box.appendChild(el(`<p class="note">Added by hand on the ${SIDE[side]} femur, which is not templated: no rule moves it. The plan is the ${SIDE[other(side)]} one.</p>`));
   const head = el(`<div class="row"><span class="name">${esc(slotName(slot))}</span></div>`);
   const fs = el('<select></select>'), grp = {};   // grouped by implant range (library "ranges")
   for (const ff of famsFor(SLOT[slot].kind)) {
