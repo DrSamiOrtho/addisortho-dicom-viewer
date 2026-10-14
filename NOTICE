@@ -8,16 +8,44 @@ License 2.0 or the Apache License 2.0; this distribution uses the Apache License
 
 Changes made by Addis Ortho Trading PLC (see the git history from tag v4.7.3):
 - Application name, preference profiles, copyright line and first-launch disclaimer
-  (weasis-distributions/etc/config/*.json, weasis-launcher/conf/base.json,
+  (weasis-distributions/etc/config/*.json,
   weasis-launcher/src/main/java/org/weasis/launcher/messages.properties).
 - Logos, splash screen and application icons (weasis-distributions/resources/images,
   weasis-distributions/resources/svg/logo, weasis-distributions/script/resources).
 - Installer identity, URL scheme and build workflows (weasis-distributions/script,
   .github/workflows, weasis-launcher/src/main/java/org/weasis/launcher/WeasisLauncher.java).
 - Installer licence text and CD/DVD autorun files.
+- Third-party licence notice generated at build time (root pom.xml, weasis-distributions/src/license,
+  weasis-distributions/resources/legal, weasis-distributions/src/assembly) and the About box link to
+  it (weasis-base/weasis-base-ui/.../WeasisAboutBox.java).
+- Help menu and product name in user-visible text: update check, bug report and release notes
+  made configurable and switched off (weasis-base/weasis-base-ui/.../WeasisWin.java,
+  weasis-distributions/etc/config/base.json), the product name in the shortcuts page, the OAuth
+  callback page, the Resource Monitor report and the theme list.
+- weasis-i18n-dist vendored as weasis-distributions/vendor/maven-repo (weasis-parent/pom.xml,
+  weasis-distributions/pom.xml); Spotless accepts the notice line below the licence header
+  (weasis-parent/pom.xml).
+
+Modified-file notices (Apache License 2.0, section 4(b)): every text file above that Addis Ortho
+Trading PLC changed carries the line "Modified by Addis Ortho Trading PLC, 2026." in its own
+comment syntax. These changed files cannot carry the line and are listed here instead:
+- JSON configuration (no comments): weasis-distributions/etc/config/base.json, dicomizer.json and
+  non-dicom-explorer.json.
+- Images and icons (binary): weasis-distributions/resources/images/about.png, about-round.png,
+  dicomizer.png and logo-button.png; weasis-distributions/script/resources/linux/Weasis.png and
+  Dicomizer.png; weasis-distributions/script/resources/macosx/Dicomizer.icns and
+  Addis Ortho Viewer.icns (replaces Weasis.icns); weasis-distributions/script/resources/windows/
+  Dicomizer.ico and Addis Ortho Viewer.ico (replaces Weasis.ico).
+- weasis-distributions/src/main/resources-native/Licence.txt, the installer licence page, which
+  states the changes in its own text.
+- Removed files: .github/workflows/changelog.yml and sonar.yml (upstream's release and Sonar
+  workflows), weasis-distributions/script/resources/macosx/Weasis.icns and windows/Weasis.ico.
+Files that Addis Ortho Trading PLC wrote entirely (ADDISORTHO.md, NOTICE, the licence template and
+vendored artifact under weasis-distributions, WeasisAboutBoxTest.java) carry no such line.
 
 The Addis Ortho name and logo are trademarks of Addis Ortho Trading PLC. They are not
 licensed under the Apache License 2.0 or the Eclipse Public License 2.0.
 
 Third-party libraries bundled with Weasis are licensed under their own terms; see
-3rd-party-licenses.md.
+resources/legal/THIRD-PARTY-NOTICES.txt in the installed application (generated at build time) and
+3rd-party-licenses.md, which is kept as it came from Weasis.

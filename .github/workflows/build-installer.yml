@@ -1,3 +1,4 @@
+# Modified by Addis Ortho Trading PLC, 2026.
 name: Build installers (Addis Ortho DICOM Viewer)
 on:
   workflow_dispatch:

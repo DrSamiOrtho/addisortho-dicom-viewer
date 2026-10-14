@@ -1,4 +1,5 @@
 #!/bin/bash
+# Modified by Addis Ortho Trading PLC, 2026.
 # This script makes the multiplatform build with jpackage
 #
 # Initial script by Nicolas Roduit
