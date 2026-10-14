@@ -7,6 +7,10 @@ on:
         description: 'Platforms to build: "all", "none" (only the shared native package), or a comma-separated subset of windows-x86-64,macosx-x86-64,macosx-aarch64'
         required: false
         default: 'all'
+      release_tag:
+        description: 'Release from main without pushing a tag: ao-<weasis version>-<n>, for example ao-4.7.3-1. The release job creates the tag on the built commit. Leave empty for a test build.'
+        required: false
+        default: ''
   # A tag ao-<weasis version>-<n> (for example ao-4.7.3-1) builds all three installers and publishes
   # them as a GitHub pre-release; the complete source of the release is the tag itself.
   push:
@@ -402,7 +406,8 @@ jobs:
   # release is marked as a pre-release; drop --prerelease once both platforms are signed.
   release:
     name: Publish the GitHub release
-    if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'ao-') }}
+    # A pushed ao-* tag, or a manual run on main with release_tag set (for clients that cannot push tags)
+    if: ${{ (github.ref_type == 'tag' && startsWith(github.ref_name, 'ao-')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && startsWith(inputs.release_tag, 'ao-')) }}
     needs: [build, jpackage]
     runs-on: ubuntu-latest
     permissions:
@@ -410,7 +415,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ inputs.release_tag || github.ref_name }}
       WEASIS_VERSION: ${{ needs.build.outputs.version }}
 
     steps:
@@ -477,7 +482,9 @@ jobs:
             gh release upload "$TAG" release-files/* --clobber
             gh release edit "$TAG" --title "Addis Ortho DICOM Viewer ${VERSION}" --notes-file notes.md --prerelease
           else
-            gh release create "$TAG" release-files/* --verify-tag --title "Addis Ortho DICOM Viewer ${VERSION}" \
+            # A pushed tag must already exist; a manual release creates the tag on the commit that was built
+            if [ "$GITHUB_EVENT_NAME" = "push" ]; then tagArgs=(--verify-tag); else tagArgs=(--target "$GITHUB_SHA"); fi
+            gh release create "$TAG" release-files/* "${tagArgs[@]}" --title "Addis Ortho DICOM Viewer ${VERSION}" \
               --notes-file notes.md --prerelease
           fi
           gh release view "$TAG" --json url,isPrerelease,assets --jq '{url, isPrerelease, assets: [.assets[].name]}'

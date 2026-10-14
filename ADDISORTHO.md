@@ -63,6 +63,8 @@ and `WEASIS_PWD` (an app-specific password for notarisation).
    `.msi` and their `.sha256` files (unsigned installers: the notes say how to open them). The
    smoke test then runs by itself on that build, once `smoke-test.yml` is on `main`
    (`workflow_run`). If it fails, delete the release and the tag, fix and tag again.
+   Where tags cannot be pushed (some automated sessions), run **Build installers** on `main` with
+   `release_tag` set to the tag name instead: the `release` job creates the tag on the built commit.
 3. Remove `--prerelease` from the `release` job when both platforms are signed.
 
 ## Identity
