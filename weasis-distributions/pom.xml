@@ -506,6 +506,20 @@
                   <outputDirectory>${tmp.bundle.dir}</outputDirectory>
                 </artifactItem>
                 <artifactItem>
+                  <!-- Addis Ortho bone surface export (STL) for the 3D viewer -->
+                  <groupId>org.weasis.dicom</groupId>
+                  <artifactId>weasis-dicom-bones</artifactId>
+                  <version>${app.version}</version>
+                  <outputDirectory>${tmp.bundle.dir}</outputDirectory>
+                </artifactItem>
+                <artifactItem>
+                  <!-- Addis Ortho X-ray templating (Template button and the offline templating page) -->
+                  <groupId>org.weasis.dicom</groupId>
+                  <artifactId>weasis-dicom-templating</artifactId>
+                  <version>${app.version}</version>
+                  <outputDirectory>${tmp.bundle.dir}</outputDirectory>
+                </artifactItem>
+                <artifactItem>
                   <groupId>org.weasis.dicom</groupId>
                   <artifactId>weasis-dicom-qr</artifactId>
                   <version>${app.version}</version>

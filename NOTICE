@@ -38,12 +38,21 @@ Changes made by Addis Ortho Trading PLC (see the git history from tag v4.7.3):
 - weasis-i18n-dist vendored as weasis-distributions/vendor/maven-repo (weasis-parent/pom.xml,
   weasis-distributions/pom.xml); Spotless accepts the notice line below the licence header
   (weasis-parent/pom.xml).
+- X-ray templating (14 Oct 2026): the new bundle weasis-dicom/weasis-dicom-templating, listed in
+  weasis-dicom/pom.xml, both base.json files (start level 110, and com.sun.net.httpserver among
+  the system packages) and weasis-distributions/pom.xml; the installer's Java runtime gains
+  jdk.httpserver (weasis-distributions/script/launch-options.sh); the third-party notice gains
+  its decoders (weasis-distributions/src/license/third-party-notices.ftl).
+- Bone surface export (STL) and 3D view improvements (14 Oct 2026): the new bundle
+  weasis-dicom/weasis-dicom-bones, listed in weasis-dicom/pom.xml, both base.json files (start level
+  125, after the 3D viewer) and weasis-distributions/pom.xml; smooth segment surfaces, a crop box and
+  a 3D picture saved to the study in weasis-dicom/weasis-dicom-3d/viewer3d.
 
 Modified-file notices (Apache License 2.0, section 4(b)): every text file above that Addis Ortho
 Trading PLC changed carries the line "Modified by Addis Ortho Trading PLC, 2026." in its own
 comment syntax. These changed files cannot carry the line and are listed here instead:
 - JSON configuration (no comments): weasis-distributions/etc/config/base.json, dicomizer.json and
-  non-dicom-explorer.json.
+  non-dicom-explorer.json; weasis-launcher/conf/base.json.
 - Images and icons (binary): weasis-distributions/resources/images/about.png, about-round.png,
   dicomizer.png and logo-button.png; weasis-distributions/script/resources/linux/Weasis.png and
   Dicomizer.png; weasis-distributions/script/resources/macosx/Dicomizer.icns and
@@ -54,8 +63,12 @@ comment syntax. These changed files cannot carry the line and are listed here in
 - Removed files: .github/workflows/changelog.yml and sonar.yml (upstream's release and Sonar
   workflows), weasis-distributions/script/resources/macosx/Weasis.icns and windows/Weasis.ico.
 Files that Addis Ortho Trading PLC wrote entirely (ADDISORTHO.md, NOTICE, the licence template and
-vendored artifact under weasis-distributions, WeasisAboutBoxTest.java, and the smoke test workflow and
-its helper script under .github) carry no such line.
+vendored artifact under weasis-distributions, WeasisAboutBoxTest.java, the smoke test workflow and
+its helper script under .github, and weasis-dicom/weasis-dicom-templating and weasis-dicom/weasis-dicom-bones, whose Java
+files carry Addis Ortho's own Apache-2.0 header) carry no such line. The templating page in
+weasis-dicom-templating/src/main/resources/templating-web is Addis Ortho's, Apache-2.0, built from
+the templating project by sync-templating-web.sh; its vendor folder holds three MIT-licensed
+decoders with their licence files.
 
 The Addis Ortho name and logo are trademarks of Addis Ortho Trading PLC. No licence grants
 any right to use them, and modified versions must not use them (an additional term

@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d;
 
 import com.jogamp.opengl.GL2ES2;
@@ -639,7 +640,7 @@ public class View3DContainer extends DicomViewerPlugin
 
   @Override
   public List<Action> getExportActions() {
-    return null;
+    return selectedImagePane == null ? null : selectedImagePane.getExportActions();
   }
 
   @Override

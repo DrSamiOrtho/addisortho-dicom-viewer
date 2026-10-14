@@ -1,3 +1,4 @@
+// Modified by Addis Ortho Trading PLC, 2026.
 // Texture data type
 uniform uint textureDataType;
 const uint dataTypeByte = 0x00000000u;
@@ -86,4 +87,11 @@ uniform int  segSegmentCount = 0;
 // Segmentation voxel mask: 0 = none, 1 = include (render only the real voxels inside visible
 // segments), 2 = exclude (remove those voxels from the rendering). No colour overlay is drawn.
 uniform int  segMaskMode = 0;
+// Smooth segment surfaces: the visible segments are found as the 0.5 level of segOccTexture, the
+// trilinear occupancy of the visible segments, instead of from the nearest label voxel.
+uniform bool segSmooth = false;
 
+// Crop box in normalised [0,1]³ volume-texture space, applied to every ray in intersect(). The
+// whole volume, (0,0,0)-(1,1,1), when the crop is off.
+uniform vec3 cropMin = vec3(0.0);
+uniform vec3 cropMax = vec3(1.0);

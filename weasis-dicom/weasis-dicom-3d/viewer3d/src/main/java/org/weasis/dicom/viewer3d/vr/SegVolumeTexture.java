@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.vr;
 
 import com.jogamp.common.nio.Buffers;
@@ -18,9 +19,16 @@ import com.jogamp.opengl.GLContext;
 import com.jogamp.opengl.util.GLPixelStorageModes;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
+import java.util.Arrays;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.ToIntFunction;
 import org.joml.Vector3d;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.weasis.core.api.gui.util.GuiExecutor;
 import org.weasis.dicom.codec.seg.SegmentationVolume;
 
 /**
@@ -38,6 +46,11 @@ import org.weasis.dicom.codec.seg.SegmentationVolume;
  * a single {@code texelFetch(segColorMap, ivec2(id, 0), 0)} — no per-bit blending at render time;
  * combination IDs already point to a pre-composited colour computed by {@link
  * SegmentationVolume#buildSegmentColorLUT()}.
+ *
+ * <p>With smooth surfaces on, a third texture on unit {@value #SEG_OCCUPANCY_UNIT} holds the {@link
+ * SegOccupancy smoothed occupancy} of the visible segments ({@code GL_R8}, trilinear), one more
+ * byte per voxel. It is built in the background through the shared context whenever the set of
+ * visible storage IDs changes, and the shader keeps the label rendering until it is ready.
  */
 public final class SegVolumeTexture {
 
@@ -48,6 +61,9 @@ public final class SegVolumeTexture {
 
   /** Texture unit for the 1D segment colour lookup texture. */
   public static final int SEG_COLOR_UNIT = 5;
+
+  /** Texture unit for the trilinear occupancy of the visible segments (smooth surfaces). */
+  public static final int SEG_OCCUPANCY_UNIT = 6;
 
   /** Upper bound on the staging block used to batch slices into a single GL transfer. */
   private static final int MAX_UPLOAD_BLOCK_BYTES = 32 << 20;
@@ -66,6 +82,29 @@ public final class SegVolumeTexture {
    * #uploadVolumeData(GL2ES2)} always transfers in the format the texture was created for.
    */
   private boolean shortStorage;
+
+  private volatile boolean smoothSurfaces;
+
+  /** Visibility per storage ID of the latest colour LUT handed to this texture. */
+  private volatile boolean[] lutVisibleIds = new boolean[0];
+
+  /** Occupancy texture in use and the visibility it was built for. */
+  private volatile int occupancyTextureId;
+
+  private volatile boolean[] occupancyVisibleIds;
+
+  /** Visibility of the occupancy build in flight, {@code null} when none is running. */
+  private boolean[] requestedVisibleIds;
+
+  /** Bumping it abandons the occupancy build in flight. */
+  private final AtomicInteger occupancyGeneration = new AtomicInteger();
+
+  /** Replaced occupancy textures, deleted on the GL thread at the next {@link #bind(GL2ES2)}. */
+  private final Queue<Integer> retiredTextures = new ConcurrentLinkedQueue<>();
+
+  private volatile boolean destroyed;
+
+  private volatile Runnable occupancyListener = () -> {};
 
   /**
    * Creates a new SegVolumeTexture.
@@ -139,6 +178,7 @@ public final class SegVolumeTexture {
     gl.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE);
 
     byte[] colorLut = segVolume.buildSegmentColorLUT();
+    updateVisibility(colorLut);
     // LUT width = number of allocated storage IDs (= segments + overlap combinations + slot 0
     // for background). Derived directly from the LUT byte length so it stays in sync with
     // SegmentationVolume.buildSegmentColorLUT().
@@ -196,9 +236,7 @@ public final class SegVolumeTexture {
       int depth = Math.min(slicesPerBlock, sizeZ - texZ);
       long start = System.nanoTime();
       buffer.clear();
-      for (int i = 0; i < depth; i++) {
-        segVolume.exportSliceInto(sizeZ - 1 - (texZ + i), buffer);
-      }
+      exportSlices(buffer, texZ, depth);
       buffer.flip();
       long exported = System.nanoTime();
       gl.glTexSubImage3D(
@@ -233,6 +271,14 @@ public final class SegVolumeTexture {
         exportNanos / 1_000_000,
         uploadNanos / 1_000_000,
         (sizeZ + slicesPerBlock - 1) / slicesPerBlock);
+  }
+
+  /** Appends {@code depth} slices starting at texture slice {@code texZ}, in texture Z order. */
+  private void exportSlices(ByteBuffer buffer, int texZ, int depth) {
+    int sizeZ = segVolume.getSizeZ();
+    for (int i = 0; i < depth; i++) {
+      segVolume.exportSliceInto(sizeZ - 1 - (texZ + i), buffer);
+    }
   }
 
   /**
@@ -271,6 +317,7 @@ public final class SegVolumeTexture {
       return;
     }
     int lutWidth = Math.max(colorLut.length / 4, 1);
+    updateVisibility(colorLut);
 
     gl.glActiveTexture(GL.GL_TEXTURE0 + SEG_COLOR_UNIT);
     gl.glBindTexture(GL.GL_TEXTURE_2D, segColorTextureId);
@@ -302,6 +349,9 @@ public final class SegVolumeTexture {
   public void setPendingColorLut(byte[] colorLut) {
     this.pendingColorLut = colorLut;
     this.needsColorUpdate = true;
+    // Before the next render reads isSmoothSurfaceReady(), so a hidden segment never shows through
+    // an occupancy texture built for the previous visibility.
+    updateVisibility(colorLut != null ? colorLut : segVolume.buildSegmentColorLUT());
   }
 
   /**
@@ -313,6 +363,7 @@ public final class SegVolumeTexture {
       return;
     }
 
+    deleteRetiredTextures(gl);
     if (needsUpload) {
       uploadVolumeData(gl);
     }
@@ -345,6 +396,16 @@ public final class SegVolumeTexture {
    * Releases all OpenGL resources and the CPU-buffer reference. Must be called from the GL thread.
    */
   public void destroy(GL2ES2 gl) {
+    synchronized (this) {
+      destroyed = true;
+      occupancyGeneration.incrementAndGet();
+      int occupancy = occupancyTextureId;
+      occupancyTextureId = 0;
+      if (occupancy > 0) {
+        retiredTextures.add(occupancy);
+      }
+    }
+    deleteRetiredTextures(gl);
     if (segTextureId > 0) {
       gl.glDeleteTextures(2, new int[] {segTextureId, segColorTextureId}, 0);
       segTextureId = 0;
@@ -353,5 +414,272 @@ public final class SegVolumeTexture {
     // Release ownership of the backing CPU data. If no other consumer retains the volume
     // (e.g. MPR was never open or has already closed), this will call removeData().
     segVolume.release();
+  }
+
+  // ---- Smooth surfaces ----
+
+  /** Called on the EDT once a new occupancy texture is ready, typically to repaint the view. */
+  public void setOccupancyListener(Runnable listener) {
+    this.occupancyListener = listener == null ? () -> {} : listener;
+  }
+
+  /** Turns the smooth surfaces on (building the occupancy texture if needed) or off. */
+  public synchronized void setSmoothSurfaces(boolean smooth) {
+    this.smoothSurfaces = smooth;
+    if (smooth) {
+      requestOccupancy();
+    } else {
+      occupancyGeneration.incrementAndGet();
+      requestedVisibleIds = null;
+      int occupancy = occupancyTextureId;
+      occupancyTextureId = 0;
+      occupancyVisibleIds = null;
+      if (occupancy > 0) {
+        retiredTextures.add(occupancy); // frees the GPU memory at the next bind
+      }
+    }
+  }
+
+  /**
+   * Returns {@code true} when the occupancy texture matches the current segment visibility, i.e.
+   * when the shader may render the smooth surfaces.
+   */
+  public boolean isSmoothSurfaceReady() {
+    return smoothSurfaces
+        && occupancyTextureId > 0
+        && Arrays.equals(occupancyVisibleIds, lutVisibleIds);
+  }
+
+  /**
+   * Binds the occupancy texture on {@value #SEG_OCCUPANCY_UNIT}.
+   *
+   * @return {@code false} when there is none, so the caller binds a placeholder instead
+   */
+  public boolean bindOccupancy(GL2ES2 gl) {
+    int occupancy = occupancyTextureId;
+    if (!smoothSurfaces || occupancy <= 0) {
+      return false;
+    }
+    gl.glActiveTexture(GL.GL_TEXTURE0 + SEG_OCCUPANCY_UNIT);
+    gl.glBindTexture(GL2ES2.GL_TEXTURE_3D, occupancy);
+    gl.glActiveTexture(GL.GL_TEXTURE0);
+    return true;
+  }
+
+  private synchronized void updateVisibility(byte[] colorLut) {
+    boolean[] visible = SegOccupancy.visibleIds(colorLut);
+    if (!Arrays.equals(visible, lutVisibleIds)) {
+      lutVisibleIds = visible;
+      requestOccupancy();
+    }
+  }
+
+  /** Starts an occupancy build for the current visibility unless one is ready or running. */
+  private synchronized void requestOccupancy() {
+    if (!smoothSurfaces || destroyed) {
+      return;
+    }
+    boolean[] visible = lutVisibleIds;
+    if (occupancyTextureId > 0 && Arrays.equals(visible, occupancyVisibleIds)) {
+      if (requestedVisibleIds != null) {
+        occupancyGeneration.incrementAndGet(); // back to the visibility already built
+        requestedVisibleIds = null;
+      }
+      return;
+    }
+    if (Arrays.equals(visible, requestedVisibleIds) || !SegOccupancy.anyVisible(visible)) {
+      return; // already building it, or nothing to show (the label rendering draws nothing too)
+    }
+    requestedVisibleIds = visible;
+    int generation = occupancyGeneration.incrementAndGet();
+    segVolume.retain(); // keeps the voxels alive if destroy() runs during the build
+    CompletableFuture.supplyAsync(() -> buildOccupancyTexture(visible, generation))
+        .whenComplete(
+            (id, e) -> {
+              segVolume.release();
+              if (e != null) {
+                LOGGER.error("Building the segmentation occupancy texture", e);
+              }
+              int textureId = id == null ? 0 : id;
+              GuiExecutor.execute(() -> installOccupancy(textureId, visible, generation));
+            });
+  }
+
+  /** EDT part of {@link #requestOccupancy()}: swaps the new texture in, or discards it. */
+  private synchronized void installOccupancy(int textureId, boolean[] visible, int generation) {
+    if (generation != occupancyGeneration.get() || destroyed || !smoothSurfaces) {
+      if (textureId > 0) {
+        discardTexture(textureId);
+      }
+      return;
+    }
+    requestedVisibleIds = null;
+    if (textureId <= 0) {
+      // Most likely out of GPU memory: keep the label rendering rather than retrying each frame.
+      LOGGER.warn("Smooth segment surfaces are off: the occupancy texture could not be built");
+      smoothSurfaces = false;
+      return;
+    }
+    int old = occupancyTextureId;
+    occupancyTextureId = textureId;
+    occupancyVisibleIds = visible;
+    if (old > 0) {
+      retiredTextures.add(old);
+    }
+    occupancyListener.run();
+  }
+
+  private void discardTexture(int textureId) {
+    if (destroyed) {
+      // No further bind() will run: delete it through the shared context.
+      CompletableFuture.runAsync(() -> withSharedContext(gl -> deleteTexture(gl, textureId)));
+    } else {
+      retiredTextures.add(textureId);
+    }
+  }
+
+  private void deleteRetiredTextures(GL2ES2 gl) {
+    Integer id;
+    while ((id = retiredTextures.poll()) != null) {
+      gl.glDeleteTextures(1, new int[] {id}, 0);
+    }
+  }
+
+  /**
+   * Background part of {@link #requestOccupancy()}; returns 0 when abandoned or failed. The shared
+   * context is held only around each GL call, not during the distance transform: other users of
+   * that context (a label upload) give up after a few seconds of waiting for it.
+   */
+  private int buildOccupancyTexture(boolean[] visible, int generation) {
+    int sizeX = segVolume.getSizeX();
+    int sizeY = segVolume.getSizeY();
+    int sizeZ = segVolume.getSizeZ();
+    int textureId = withSharedContext(gl -> allocateOccupancy(gl, sizeX, sizeY, sizeZ));
+    if (textureId <= 0) {
+      return 0;
+    }
+    boolean shortIds = segVolume.isShortMode();
+    int sliceVoxels = sizeX * sizeY;
+    int sliceBytes = sliceVoxels * (shortIds ? Short.BYTES : Byte.BYTES);
+    int slicesPerBlock = Math.max(1, Math.min(sizeZ, MAX_UPLOAD_BLOCK_BYTES / sliceBytes));
+    ByteBuffer labels = Buffers.newDirectByteBuffer(slicesPerBlock * sliceBytes);
+    ByteBuffer occupancy = Buffers.newDirectByteBuffer(slicesPerBlock * sliceVoxels);
+    long start = System.nanoTime();
+    for (int texZ = 0; texZ < sizeZ; texZ += slicesPerBlock) {
+      int z = texZ;
+      int depth = Math.min(slicesPerBlock, sizeZ - texZ);
+      boolean uploaded = false;
+      if (generation == occupancyGeneration.get()) {
+        labels.clear();
+        exportSlices(labels, texZ, depth);
+        labels.flip();
+        occupancy.clear();
+        SegOccupancy.fill(labels, shortIds, visible, occupancy, sizeX, sizeY, depth);
+        occupancy.flip();
+        uploaded =
+            withSharedContext(
+                    gl -> uploadOccupancy(gl, textureId, z, sizeX, sizeY, depth, occupancy))
+                > 0;
+      }
+      if (!uploaded) {
+        // Abandoned for a newer visibility, or the shared context was unavailable
+        withSharedContext(gl -> deleteTexture(gl, textureId));
+        return 0;
+      }
+    }
+    LOGGER.info(
+        "Built segmentation occupancy texture: {}x{}x{} ({} MB) in {} ms",
+        sizeX,
+        sizeY,
+        sizeZ,
+        (long) sliceVoxels * sizeZ >> 20,
+        (System.nanoTime() - start) / 1_000_000);
+    return textureId;
+  }
+
+  /** Runs {@code task} with the shared context current; returns 0 when it cannot be made so. */
+  private static int withSharedContext(ToIntFunction<GL2ES2> task) {
+    GLContext glContext = OpenglUtils.getDefaultGlContext();
+    if (glContext.makeCurrent() == GLContext.CONTEXT_NOT_CURRENT) {
+      LOGGER.error("Cannot make the shared OpenGL context current");
+      return 0;
+    }
+    try {
+      GL2ES2 gl = glContext.getGL().getGL2ES2();
+      int result = task.applyAsInt(gl);
+      gl.glFinish();
+      return result;
+    } finally {
+      glContext.release();
+    }
+  }
+
+  /** Allocates the occupancy texture; returns 0 when the GPU cannot (out of memory). */
+  private static int allocateOccupancy(GL2ES2 gl, int sizeX, int sizeY, int sizeZ) {
+    int[] ids = new int[1];
+    gl.glGenTextures(1, ids, 0);
+    gl.glActiveTexture(GL.GL_TEXTURE0 + SEG_OCCUPANCY_UNIT);
+    gl.glBindTexture(GL2ES2.GL_TEXTURE_3D, ids[0]);
+    gl.glTexParameteri(GL2ES2.GL_TEXTURE_3D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR);
+    gl.glTexParameteri(GL2ES2.GL_TEXTURE_3D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR);
+    // A zero border (far outside) closes the surface of a segment that touches the volume edge.
+    gl.glTexParameteri(GL2ES2.GL_TEXTURE_3D, GL.GL_TEXTURE_WRAP_S, GL2GL3.GL_CLAMP_TO_BORDER);
+    gl.glTexParameteri(GL2ES2.GL_TEXTURE_3D, GL.GL_TEXTURE_WRAP_T, GL2GL3.GL_CLAMP_TO_BORDER);
+    gl.glTexParameteri(GL2ES2.GL_TEXTURE_3D, GL2ES2.GL_TEXTURE_WRAP_R, GL2GL3.GL_CLAMP_TO_BORDER);
+    gl.glTexParameterfv(
+        GL2ES2.GL_TEXTURE_3D, GL2GL3.GL_TEXTURE_BORDER_COLOR, new float[] {0f, 0f, 0f, 0f}, 0);
+    // Clear earlier errors so that the check below only sees the allocation.
+    int pendingErrors = 0;
+    while (pendingErrors < 16 && gl.glGetError() != GL.GL_NO_ERROR) {
+      pendingErrors++;
+    }
+    gl.glTexImage3D(
+        GL2ES2.GL_TEXTURE_3D,
+        0,
+        GL.GL_R8,
+        sizeX,
+        sizeY,
+        sizeZ,
+        0,
+        GL2ES2.GL_RED,
+        GL.GL_UNSIGNED_BYTE,
+        null);
+    boolean allocated = gl.glGetError() == GL.GL_NO_ERROR;
+    gl.glBindTexture(GL2ES2.GL_TEXTURE_3D, 0);
+    gl.glActiveTexture(GL.GL_TEXTURE0);
+    if (!allocated) {
+      gl.glDeleteTextures(1, ids, 0);
+      return 0;
+    }
+    return ids[0];
+  }
+
+  private static int uploadOccupancy(
+      GL2ES2 gl, int textureId, int texZ, int sizeX, int sizeY, int depth, ByteBuffer occupancy) {
+    gl.glActiveTexture(GL.GL_TEXTURE0 + SEG_OCCUPANCY_UNIT);
+    gl.glBindTexture(GL2ES2.GL_TEXTURE_3D, textureId);
+    GLPixelStorageModes storageModes = new GLPixelStorageModes();
+    storageModes.setUnpackAlignment(gl, 1);
+    gl.glTexSubImage3D(
+        GL2ES2.GL_TEXTURE_3D,
+        0,
+        0,
+        0,
+        texZ,
+        sizeX,
+        sizeY,
+        depth,
+        GL2ES2.GL_RED,
+        GL.GL_UNSIGNED_BYTE,
+        occupancy);
+    storageModes.restore(gl);
+    gl.glBindTexture(GL2ES2.GL_TEXTURE_3D, 0);
+    gl.glActiveTexture(GL.GL_TEXTURE0);
+    return textureId;
+  }
+
+  private static int deleteTexture(GL2ES2 gl, int textureId) {
+    gl.glDeleteTextures(1, new int[] {textureId}, 0);
+    return 0;
   }
 }
