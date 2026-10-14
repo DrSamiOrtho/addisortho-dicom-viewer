@@ -18,6 +18,10 @@ import org.weasis.opencv.op.lut.LutShape;
 public class RenderingLayer<E extends ImageElement> {
 
   public static final String P_BCK_COLOR = "volume.background.color";
+
+  /** Background of the 3D view unless the user chose another: black, as the scanner's. */
+  public static final java.awt.Color DEFAULT_BCK_COLOR = java.awt.Color.BLACK;
+
   public static final String P_LIGHT_COLOR = "volume.light.color";
   public static final String P_DYNAMIC_QUALITY = "volume.dynamic.quality";
   public static final String P_MAX_TEX_XY = "volume.texture.max.xy";

@@ -19,7 +19,9 @@ import java.awt.datatransfer.Transferable;
 import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Date;
@@ -29,8 +31,11 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.imageio.ImageIO;
 import javax.swing.Action;
+import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.slf4j.Logger;
@@ -134,6 +139,39 @@ public final class View3dSnapshot {
       }
     }
     return rgb;
+  }
+
+  /** Saves the frame as a JPEG file chosen by the user. */
+  public static void saveJpeg(View3d view) {
+    Optional<Frame> frame = capture(view);
+    if (frame.isEmpty()) {
+      showError(view);
+      return;
+    }
+    JFileChooser chooser = new JFileChooser();
+    chooser.setFileFilter(
+        new FileNameExtensionFilter(Messages.getString("view.jpeg.files"), "jpg", "jpeg"));
+    chooser.setSelectedFile(Path.of("3d-view.jpg").toFile()); // NON-NLS
+    if (chooser.showSaveDialog(view) != JFileChooser.APPROVE_OPTION) {
+      return;
+    }
+    Path file = chooser.getSelectedFile().toPath();
+    String name = file.getFileName().toString().toLowerCase();
+    if (!name.endsWith(".jpg") && !name.endsWith(".jpeg")) { // NON-NLS
+      file = file.resolveSibling(file.getFileName() + ".jpg"); // NON-NLS
+    }
+    try {
+      if (!ImageIO.write(frame.get().toImage(), "jpg", Files.newOutputStream(file))) { // NON-NLS
+        throw new IOException("No JPEG writer");
+      }
+    } catch (IOException e) {
+      LOGGER.error("Cannot save the 3D picture to {}", file, e);
+      JOptionPane.showMessageDialog(
+          view,
+          Messages.getString("view.jpeg.error"),
+          Messages.getString("3d.viewer"),
+          JOptionPane.WARNING_MESSAGE);
+    }
   }
 
   public static void copyToClipboard(View3d view) {

@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.pref;
 
 import java.awt.Color;
@@ -279,7 +280,7 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
   private Color getBackgroundColor() {
     return GuiUtils.getUICore()
         .getSystemPreferences()
-        .getColorProperty(RenderingLayer.P_BCK_COLOR, Color.GRAY);
+        .getColorProperty(RenderingLayer.P_BCK_COLOR, RenderingLayer.DEFAULT_BCK_COLOR);
   }
 
   private Color getLightColor() {
@@ -325,7 +326,7 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
     localPersistence.putIntProperty(RenderingLayer.P_MAX_TEX_Z, maxSize);
     spinnerMaxXY.setValue(maxSize);
     spinnerMaxZ.setValue(maxSize);
-    preferences.putColorProperty(RenderingLayer.P_BCK_COLOR, Color.GRAY);
+    preferences.putColorProperty(RenderingLayer.P_BCK_COLOR, RenderingLayer.DEFAULT_BCK_COLOR);
     preferences.putColorProperty(RenderingLayer.P_LIGHT_COLOR, Color.WHITE);
     preferences.put(View3DFactory.P_DEFAULT_LAYOUT, View3DContainer.VIEWS_vr.getId());
     preferences.put(Camera.P_DEFAULT_ORIENTATION, CameraView.INITIAL.name());

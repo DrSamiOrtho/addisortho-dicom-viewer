@@ -152,6 +152,12 @@ bool isCrosshairCut(vec3 texCoord) {
     return false;
 }
 
+// Kept mask of the scalpel and keep/remove cuts: a sample is cut away where the mask, sampled
+// with linear filtering, is below one half. Nothing is cut when the mask is off.
+bool isCutAway(vec3 texCoord) {
+    return keptEnabled && texture(keptTexture, texCoord).r < 0.5;
+}
+
 // Ray entry and exit of the crop box, which is the whole volume [-texelSize, texelSize] when the
 // crop is off (cropMin = 0, cropMax = 1).
 void intersect(in Ray ray, out float tmin, out float tmax) {
@@ -426,7 +432,7 @@ vec4 accumulateSmoothSegOverlay(vec3 start, vec3 stepPos, vec3 ditheredRayStep, 
     for (int count = 0; count < sampleCount; count++) {
         rayPos += stepPos;
         vec3 texCoord = rayPos + ditheredRayStep;
-        if (isCrosshairCut(texCoord)) {
+        if (isCrosshairCut(texCoord) || isCutAway(texCoord)) {
             cameThroughCut = true;
             prevCoord = texCoord;
             prevOcc = 0.0;
@@ -507,7 +513,7 @@ vec4 accumulateSegOverlay(vec3 start, vec3 stepPos, vec3 ditheredRayStep, int sa
     for (int count = 0; count < sampleCount; count++) {
         rayPos += stepPos;
         vec3 texCoord = rayPos + ditheredRayStep;
-        if (isCrosshairCut(texCoord)) {
+        if (isCrosshairCut(texCoord) || isCutAway(texCoord)) {
             cameThroughCut = true;
             continue;
         }
@@ -572,6 +578,7 @@ vec4 rayCastingMip(Ray ray, float tmin, float tmax, vec2 uv) {
         rayPos += stepPos;
         texCoord = rayPos + ditheredRayStep;
         if (isCrosshairCut(texCoord)) continue;
+        if (isCutAway(texCoord)) continue;
         if (isSegMasked(texCoord)) continue;
         pix = getNormalizedWindowLevel(texCoord);
 
@@ -653,6 +660,7 @@ vec4 rayCastingComposite(Ray ray, float tmin, float tmax, vec2 uv) {
         rayPos += stepPos;
         texCoord = rayPos + ditheredRayStep;
         if (isCrosshairCut(texCoord)) continue;
+        if (isCutAway(texCoord)) continue;
         if (isSegMasked(texCoord)) continue;
         pix = getNormalizedWindowLevel(texCoord);
         //pix = guassianFilter(texCoord, stepSize);
@@ -759,6 +767,7 @@ vec4 rayCastingIsoSurface(Ray ray, float tmin, float tmax, vec2 uv) {
         rayPos += stepPos;
         texCoord = rayPos + ditheredRayStep;
         if (isCrosshairCut(texCoord)) continue;
+        if (isCutAway(texCoord)) continue;
         if (isSegMasked(texCoord)) continue;
         pix = getNormalizedWindowLevel(texCoord);
         vec4 pixel = applyVoxelColor(texCoord, pix);

@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.geometry;
 
 import static org.joml.Math.abs;
@@ -37,6 +38,7 @@ public class Camera {
   public static final double SCALE_MAX = 6.0;
   public static final double SCALE_MIN = 1.0 / SCALE_MAX;
   static final double INITIAL_FOV = 45;
+  static final double NEAR_PLANE = 0.1;
   static final double DEFAULT_ZOOM = 1;
   static final Vector3d POSITION_ZERO = new Vector3d();
 
@@ -45,9 +47,15 @@ public class Camera {
   private final Vector3d position = new Vector3d();
   private final Quaterniond rotation = new Quaterniond();
 
+  /** World point the rotation and the zoom centre on; zero is the centre of the volume. */
+  private final Vector3d pivot = new Vector3d();
+
+  /** Shift of the image on screen, in units of the view half height (y up). */
+  private final Vector2d pan = new Vector2d();
+
   private final Vector3d prevMousePos = new Vector3d();
   // Perspective
-  private double zNear = 0.1;
+  private double zNear = NEAR_PLANE;
   private double zFar = 10000;
   private double fov = INITIAL_FOV;
 
@@ -168,13 +176,75 @@ public class Camera {
 
   public Matrix4d getViewMatrix() {
     if (viewMatrix == null) {
+      // The pivot is brought to the view axis, rotated about, then shifted by the pan: rotation
+      // and zoom centre on the pivot wherever the image was panned to.
+      double hh = viewHalfHeight();
       viewMatrix =
           new Matrix4d()
-              .setTranslation(new Vector3d(0, 0, internalZoomFactor))
+              .setTranslation(new Vector3d(pan.x * hh, pan.y * hh, internalZoomFactor))
               .rotate(rotation)
-              .translate(position);
+              .translate(new Vector3d(position).sub(pivot));
     }
     return new Matrix4d(viewMatrix);
+  }
+
+  /** Half height of the view at the pivot, in world units. */
+  public double viewHalfHeight() {
+    if (orthographicProjection) {
+      return 2.0 / zoomFactor;
+    }
+    return CameraFraming.viewHalfHeight(abs(internalZoomFactor), fov);
+  }
+
+  public Vector3d getPivot() {
+    return new Vector3d(pivot);
+  }
+
+  public Vector2d getPan() {
+    return new Vector2d(pan);
+  }
+
+  public void setPan(Vector2d value) {
+    pan.set(value);
+    updateCameraTransform();
+  }
+
+  /**
+   * Moves the point the rotation and the zoom centre on. The image does not move: the pan is
+   * adjusted so that the volume stays where it is on screen.
+   */
+  public void setPivot(Vector3d worldPivot) {
+    Vector3d delta = new Vector3d(worldPivot).sub(pivot);
+    if (delta.lengthSquared() == 0.0) {
+      return;
+    }
+    pan.add(CameraFraming.panForPivotChange(rotation, delta, viewHalfHeight()));
+    pivot.set(worldPivot);
+    updateCameraTransform();
+  }
+
+  /** Centres the view on the pivot and zooms so that the box {@code [min, max]} fills it. */
+  public void fit(Vector3d min, Vector3d max) {
+    pan.set(0, 0);
+    setZoomFactor(CameraFraming.fitZoom(min, max, rotation, fov, renderer.getAspectRatio()));
+  }
+
+  /** Turns the volume about an axis of the screen: x to the right, y up, z towards the viewer. */
+  public void rotateAboutView(Vector3d viewAxis, double radians) {
+    rotation.set(CameraFraming.rotateAboutViewAxis(rotation, viewAxis, radians));
+    updateRotationAction();
+    updateCameraTransform();
+  }
+
+  /** Rolls the volume about the view axis, counter-clockwise on screen for a positive angle. */
+  public void roll(double radians) {
+    rotateAboutView(new Vector3d(0, 0, 1), radians);
+  }
+
+  /** Pans by a fraction of the view half height, x to the right and y up. */
+  public void pan(double dx, double dy) {
+    pan.add(dx, dy);
+    updateCameraTransform();
   }
 
   public Matrix4d getProjectionMatrix() {
@@ -297,10 +367,18 @@ public class Camera {
 
   public void resetPan() {
     position.set(getDefaultOrientation().position());
+    pan.set(0, 0);
     updateCameraTransform();
   }
 
+  /** Clears the pan without a repaint, for a reset that sets the rest of the view afterwards. */
+  public void clearPan() {
+    pan.set(0, 0);
+    resetTransformation();
+  }
+
   public void resetAll() {
+    pan.set(0, 0);
     setCameraView(getDefaultOrientation());
   }
 
@@ -309,23 +387,8 @@ public class Camera {
         new Vector2d(screenCoordToNDC(p)).sub(screenCoordToNDC(prevMousePos));
     prevMousePos.x = p.getX();
     prevMousePos.y = p.getY();
-    double hh;
-    if (orthographicProjection) {
-      hh = 2.0 / zoomFactor;
-    } else {
-      hh = abs(internalZoomFactor) * tan(getFieldOfView() * 0.5);
-    }
-    double hw = hh * renderer.getAspectRatio();
-
-    Vector4d invTransform =
-        new Matrix4d(getViewMatrix())
-            .invert()
-            .transform(new Vector4d(translationNDC.x() * hw, translationNDC.y() * hh, 0.0, 0));
-
-    position.x += invTransform.x;
-    position.y += invTransform.y;
-    position.z += invTransform.z;
-
+    // A pan is a shift on screen: it leaves the pivot where it is in the volume.
+    pan.add(translationNDC.x() * renderer.getAspectRatio(), translationNDC.y());
     updateCameraTransform();
   }
 
