@@ -356,6 +356,13 @@
       "category": "LAUNCH"
     },
     {
+      "code": "weasis.update.url",
+      "value": "",
+      "description": "URL of the JSON feed that describes the latest release. It is used by the startup check and by Help > Check for updates; both are off when the value is empty.",
+      "type": "A",
+      "category": "LAUNCH"
+    },
+    {
       "code": "weasis.portable.dicom.directory",
       "value": "dicom,DICOM,IMAGES,images",
       "description": "For loading automatically DICOMs in the portable Weasis distribution (CD/DVD).\nComma-separated directories relative to the Weasis executable file.",
@@ -364,8 +371,8 @@
     },
     {
       "code": "weasis.releasenotes",
-      "value": "${weasis.releasenotes}",
-      "description": "Release notes",
+      "value": "",
+      "description": "URL of the release notes, shown in the About box and in the message displayed after an upgrade. The link is hidden when the value is empty.",
       "type": "A",
       "category": "DOC"
     },
@@ -379,7 +386,7 @@
     {
       "code": "weasis.help.online",
       "value": "https://nroduit.github.io/en/tutorials/",
-      "description": "The online tutorial",
+      "description": "The online tutorial (the Weasis documentation, which also applies to this viewer). The Help menu item is hidden when the value is empty.",
       "type": "A",
       "category": "DOC"
     },
@@ -387,6 +394,13 @@
       "code": "weasis.help.shortcuts",
       "value": "https://nroduit.github.io/en/basics/shortcuts",
       "description": "Provides a list of available shortcuts.",
+      "type": "A",
+      "category": "DOC"
+    },
+    {
+      "code": "weasis.help.report",
+      "value": "",
+      "description": "URL of the issue tracker opened by Help > Submit bug report. The menu item is hidden when the value is empty.",
       "type": "A",
       "category": "DOC"
     },

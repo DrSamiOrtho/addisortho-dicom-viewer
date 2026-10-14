@@ -27,6 +27,7 @@ import javax.swing.UIManager;
 import javax.swing.WindowConstants;
 import net.miginfocom.swing.MigLayout;
 import org.weasis.base.ui.Messages;
+import org.weasis.core.api.gui.util.AppProperties;
 import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.gui.util.GuiUtils.IconColor;
 import org.weasis.core.api.util.GraphicsInfo;
@@ -241,7 +242,10 @@ public class ResourceMonitorDialog extends JDialog {
 
   private String buildTextReport(Snapshot s, Report report) {
     StringBuilder sb = new StringBuilder();
-    sb.append("Weasis - ").append(Messages.getString("ResourceMonitor.title")).append('\n');
+    sb.append(AppProperties.WEASIS_NAME)
+        .append(" - ")
+        .append(Messages.getString("ResourceMonitor.title"))
+        .append('\n');
     sb.append("=================================\n");
     sb.append(label("ResourceMonitor.os")).append(systemDescription()).append('\n');
     sb.append(label("ResourceMonitor.cpuCores")).append(s.cpuCores()).append('\n');

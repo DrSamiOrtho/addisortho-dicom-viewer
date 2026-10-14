@@ -166,6 +166,12 @@ import org.weasis.core.util.StringUtil.Suffix;
 public class WeasisWin {
   private static final Logger LOGGER = LoggerFactory.getLogger(WeasisWin.class);
 
+  /** URL of the JSON feed describing the latest release; the update check is off when empty. */
+  private static final String P_UPDATE_URL = "weasis.update.url"; // NON-NLS
+
+  /** URL of the issue tracker opened by "Submit bug report"; the menu item is off when empty. */
+  private static final String P_REPORT_URL = "weasis.help.report"; // NON-NLS
+
   public static final List<String> functions = List.of("info", "ui"); // NON-NLS
 
   private final JMenu menuFile = new JMenu(Messages.getString("WeasisWin.file"));
@@ -405,7 +411,7 @@ public class WeasisWin {
     boolean updateRelease = preferences.getBooleanProperty("weasis.update.release", true);
     boolean showDownloadRelease =
         preferences.getBooleanProperty("weasis.show.update.next.release", true);
-    if (updateRelease && showDownloadRelease) {
+    if (updateRelease && showDownloadRelease && getConfiguredUrl(P_UPDATE_URL) != null) {
       CompletableFuture.runAsync(() -> checkReleaseUpdate(frame));
     }
   }
@@ -777,7 +783,7 @@ public class WeasisWin {
     if (helpPrefURL == null) helpPrefURL = System.getProperty("weasis.help.url");
     final String helpURL = helpPrefURL;
 
-    if (helpURL != null) {
+    if (StringUtil.hasText(helpURL)) {
       final JMenuItem helpContentMenuItem = new JMenuItem(Messages.getString("WeasisWin.guide"));
       helpContentMenuItem.addActionListener(e -> openBrowser(helpContentMenuItem, helpURL));
       helpMenuItem.add(helpContentMenuItem);
@@ -796,36 +802,40 @@ public class WeasisWin {
         });
     helpMenuItem.add(webMenuItem);
 
-    final JMenuItem websiteMenuItem =
-        new JMenuItem(
-            Messages.getString("WeasisWin.online"), ResourceUtil.getIcon(ActionIcon.HELP));
-    GuiUtils.applySelectedIconEffect(websiteMenuItem);
-    websiteMenuItem.addActionListener(
-        e -> openBrowser(websiteMenuItem, preferences.getProperty("weasis.help.online")));
-    helpMenuItem.add(websiteMenuItem);
+    final String onlineHelpURL = getConfiguredUrl("weasis.help.online"); // NON-NLS
+    if (onlineHelpURL != null) {
+      final JMenuItem websiteMenuItem =
+          new JMenuItem(
+              Messages.getString("WeasisWin.online"), ResourceUtil.getIcon(ActionIcon.HELP));
+      GuiUtils.applySelectedIconEffect(websiteMenuItem);
+      websiteMenuItem.addActionListener(e -> openBrowser(websiteMenuItem, onlineHelpURL));
+      helpMenuItem.add(websiteMenuItem);
+    }
     helpMenuItem.add(new JSeparator());
 
-    final JMenuItem updateMenuItem = new JMenuItem(Messages.getString("check.for.updates"));
-    updateMenuItem.addActionListener(
-        e -> {
-          Release release = getLastRelease();
-          if (release != null) {
-            Version vOld = AppProperties.getVersion(AppProperties.WEASIS_VERSION);
-            Version vNew = AppProperties.getVersion(release.getVersion());
-            if (vNew.compareTo(vOld) > 0) {
-              openBrowser(updateMenuItem, release.getUrl());
-            } else {
-              GuiExecutor.execute(
-                  () ->
-                      JOptionPane.showMessageDialog(
-                          WinUtil.getValidComponent(updateMenuItem),
-                          Messages.getString("current.release.latest"),
-                          Messages.getString("update"),
-                          JOptionPane.INFORMATION_MESSAGE));
+    if (getConfiguredUrl(P_UPDATE_URL) != null) {
+      final JMenuItem updateMenuItem = new JMenuItem(Messages.getString("check.for.updates"));
+      updateMenuItem.addActionListener(
+          e -> {
+            Release release = getLastRelease();
+            if (release != null) {
+              Version vOld = AppProperties.getVersion(AppProperties.WEASIS_VERSION);
+              Version vNew = AppProperties.getVersion(release.getVersion());
+              if (vNew.compareTo(vOld) > 0) {
+                openBrowser(updateMenuItem, release.getUrl());
+              } else {
+                GuiExecutor.execute(
+                    () ->
+                        JOptionPane.showMessageDialog(
+                            WinUtil.getValidComponent(updateMenuItem),
+                            Messages.getString("current.release.latest"),
+                            Messages.getString("update"),
+                            JOptionPane.INFORMATION_MESSAGE));
+              }
             }
-          }
-        });
-    helpMenuItem.add(updateMenuItem);
+          });
+      helpMenuItem.add(updateMenuItem);
+    }
 
     final JMenuItem openLogFolderMenuItem =
         new JMenuItem(Messages.getString("open.logging.folder"));
@@ -835,10 +845,12 @@ public class WeasisWin {
                 openLogFolderMenuItem, AppProperties.WEASIS_PATH.resolve("log")));
     helpMenuItem.add(openLogFolderMenuItem);
 
-    final JMenuItem reportMenuItem = new JMenuItem(Messages.getString("submit.bug.report"));
-    reportMenuItem.addActionListener(
-        e -> openBrowser(reportMenuItem, "https://github.com/nroduit/Weasis/issues"));
-    helpMenuItem.add(reportMenuItem);
+    final String reportURL = getConfiguredUrl(P_REPORT_URL);
+    if (reportURL != null) {
+      final JMenuItem reportMenuItem = new JMenuItem(Messages.getString("submit.bug.report"));
+      reportMenuItem.addActionListener(e -> openBrowser(reportMenuItem, reportURL));
+      helpMenuItem.add(reportMenuItem);
+    }
     helpMenuItem.add(new JSeparator());
     WProperties p = GuiUtils.getUICore().getSystemPreferences();
     if (p.getBooleanProperty("weasis.plugins.license", false)) {
@@ -912,11 +924,21 @@ public class WeasisWin {
     return null;
   }
 
+  /** Returns the trimmed value of a URL property, or null when it is missing or empty. */
+  private static String getConfiguredUrl(String key) {
+    String value = GuiUtils.getUICore().getSystemPreferences().getProperty(key);
+    return StringUtil.hasText(value) ? value.trim() : null;
+  }
+
   private Release getLastRelease() {
+    String feedUrl = getConfiguredUrl(P_UPDATE_URL);
+    if (feedUrl == null) {
+      return null;
+    }
     try {
       HttpRequest request =
           HttpRequest.newBuilder()
-              .uri(new URI("https://nroduit.github.io/en/api/release/api.json"))
+              .uri(new URI(feedUrl))
               .timeout(Duration.of(10, SECONDS))
               .GET()
               .build();

@@ -466,15 +466,17 @@ Starting OSGI Bundles...
                     }
                   });
 
-              message.append("<BR>");
-              String rn = Messages.getString("WeasisLauncher.release"); // NON-NLS
-              message.append(
-                  String.format(
-                      "<a href=\"%s", // NON-NLS
-                      releaseNotesUrl));
-              message.append("\">"); // NON-NLS
-              message.append(rn);
-              message.append("</a>"); // NON-NLS
+              if (Utils.hasText(releaseNotesUrl)) {
+                message.append("<BR>");
+                String rn = Messages.getString("WeasisLauncher.release"); // NON-NLS
+                message.append(
+                    String.format(
+                        "<a href=\"%s", // NON-NLS
+                        releaseNotesUrl));
+                message.append("\">"); // NON-NLS
+                message.append(rn);
+                message.append("</a>"); // NON-NLS
+              }
               message.append("</P>"); // NON-NLS
               jTextPane1.setText(message.toString());
               JOptionPane.showMessageDialog(

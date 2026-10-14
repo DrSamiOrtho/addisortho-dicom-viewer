@@ -22,6 +22,7 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.weasis.core.Messages;
+import org.weasis.core.api.gui.util.AppProperties;
 import org.weasis.core.util.StreamUtil;
 import org.weasis.core.util.StringUtil;
 
@@ -96,8 +97,8 @@ public class AcceptCompletionHandler implements AcceptCallbackHandler {
     String statusLine = success ? HTTP_OK : HTTP_NOT_FOUND;
     String body =
         success
-            ? Messages.getString("code.has.been.transmitted")
-            : Messages.getString("code.has.failed") + "\n";
+            ? Messages.getString("code.has.been.transmitted").formatted(AppProperties.WEASIS_NAME)
+            : Messages.getString("code.has.failed").formatted(AppProperties.WEASIS_NAME) + "\n";
     byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
     String headers =
         statusLine

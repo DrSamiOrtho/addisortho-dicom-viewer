@@ -1191,6 +1191,10 @@ public final class ShortcutManager {
 
   // -- Utility --
 
+  private static String getHtmlTitle() {
+    return Messages.getString("ShortcutManager.html.title").formatted(AppProperties.WEASIS_NAME);
+  }
+
   /**
    * Generates a self-contained HTML page showing all registered shortcuts, grouped by category.
    * Customized shortcuts are highlighted. The page reflects the current (possibly user-modified)
@@ -1217,8 +1221,7 @@ public final class ShortcutManager {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>%s</title>
         """
-            .formatted(
-                escapeHtml(lang), escapeHtml(Messages.getString("ShortcutManager.html.title"))));
+            .formatted(escapeHtml(lang), escapeHtml(getHtmlTitle())));
     html.append(
         """
         <style>
@@ -1314,9 +1317,7 @@ public final class ShortcutManager {
         </head>
         <body>
         """);
-    html.append("<h1>⌨ ")
-        .append(escapeHtml(Messages.getString("ShortcutManager.html.title")))
-        .append("</h1>\n");
+    html.append("<h1>⌨ ").append(escapeHtml(getHtmlTitle())).append("</h1>\n");
     html.append("<div class=\"subtitle\">")
         .append(escapeHtml(Messages.getString("ShortcutManager.html.subtitle")))
         .append("</div>\n");

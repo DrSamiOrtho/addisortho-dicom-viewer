@@ -52,7 +52,7 @@ public final class LookAndFeels {
             "Core Light - FlatIntelliJ", "com.formdev.flatlaf.FlatIntelliJLaf", false); // NON-NLS
     defaultDarkTheme =
         new ReadableLookAndFeelInfo(
-            "Core Dark - Flat Weasis", // NON-NLS
+            "Core Dark - Flat Addis Ortho", // NON-NLS
             "org.weasis.launcher.FlatWeasisTheme",
             true);
     lookAndFeels = buildFlatLookAndFeels();
