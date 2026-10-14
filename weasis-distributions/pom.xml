@@ -36,6 +36,19 @@
       <id>mvn-repo-master</id>
       <url>https://raw.githubusercontent.com/nroduit/mvn-repo/master/</url>
     </repository>
+    <repository>
+      <!-- weasis-i18n-dist is only published as a floating -SNAPSHOT; the copy kept in this
+           repository (see ADDISORTHO.md) makes the translations reproducible. -->
+      <id>ao-vendored</id>
+      <name>Artifacts vendored in this repository</name>
+      <url>file://${project.basedir}/vendor/maven-repo</url>
+      <releases>
+        <enabled>true</enabled>
+      </releases>
+      <snapshots>
+        <enabled>false</enabled>
+      </snapshots>
+    </repository>
   </repositories>
 
   <pluginRepositories>

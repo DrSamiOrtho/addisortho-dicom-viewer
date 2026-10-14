@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.weasis</groupId>
+  <artifactId>weasis-i18n-dist</artifactId>
+  <version>4.0.0-ao.20261014</version>
+  <packaging>pom</packaging>
+  <name>Weasis-i18n Distribution (vendored copy)</name>
+  <description>Copy of org.weasis:weasis-i18n-dist:4.0.0-SNAPSHOT as served by https://raw.githubusercontent.com/nroduit/mvn-repo/master/ on 2026-10-14 (sha1 059760f40c56e6f7c668eabae15ec23c50e1926b). Vendored so that a rebuild gives the same translations.</description>
+</project>
