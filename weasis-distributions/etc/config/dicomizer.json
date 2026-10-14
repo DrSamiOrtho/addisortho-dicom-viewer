@@ -35,11 +35,11 @@
     },
     {
       "code": "weasis.name",
-      "value": "Weasis Dicomizer"
+      "value": "Addis Ortho Dicomizer"
     },
     {
       "code": "weasis.profile",
-      "value": "dicomizer"
+      "value": "addisortho-dicomizer"
     },
     {
       "code": "weasis.show.disclaimer",

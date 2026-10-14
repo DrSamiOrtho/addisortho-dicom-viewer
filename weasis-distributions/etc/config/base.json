@@ -291,14 +291,14 @@
     },
     {
       "code": "weasis.name",
-      "value": "Weasis",
+      "value": "Addis Ortho DICOM Viewer",
       "description": "Change the name of the application everywhere in UI",
       "type": "AP",
       "category": "LAUNCH"
     },
     {
       "code": "weasis.profile",
-      "value": "default",
+      "value": "addisortho",
       "description": "Application profile: when no profile name is provided, the value is \"default\".\nIt allows having a custom preferences' directory on the client side (will not share preferences with other Weasis instances)",
       "type": "AP",
       "category": "LAUNCH"
@@ -333,7 +333,7 @@
     },
     {
       "code": "weasis.show.disclaimer",
-      "value": "true",
+      "value": true,
       "description": "Show a disclaimer at the first launch of Weasis (requires to be accepted to start the application)",
       "type": "A",
       "javaType": "BOOLEAN",
@@ -349,7 +349,7 @@
     },
     {
       "code": "weasis.update.release",
-      "value": "true",
+      "value": false,
       "description": "Show a message when a new release is available",
       "type": "A",
       "javaType": "BOOLEAN",
@@ -371,7 +371,7 @@
     },
     {
       "code": "weasis.copyrights",
-      "value": "© 2009-${build.year} Weasis Team",
+      "value": "© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-${build.year} Weasis Team, Apache License 2.0",
       "description": "Copyrights",
       "type": "A",
       "category": "DOC"

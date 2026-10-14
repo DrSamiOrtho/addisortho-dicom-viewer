@@ -26,11 +26,11 @@
     },
     {
       "code": "weasis.name",
-      "value": "Weasis Image Explorer"
+      "value": "Addis Ortho Image Explorer"
     },
     {
       "code": "weasis.profile",
-      "value": "base-explorer"
+      "value": "addisortho-explorer"
     },
     {
       "code": "weasis.show.disclaimer",
