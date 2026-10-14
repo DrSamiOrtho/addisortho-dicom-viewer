@@ -177,8 +177,8 @@ jobs:
           grab linux-2-main-after-DICOMDIR
           kill -0 $APP_PID 2>/dev/null && res PASS process-alive "pid $APP_PID alive after load" || res FAIL process-alive "pid $APP_PID exited"
 
-          echo "--- second launch forwards '\$dicom:get -l $EXTRA_DIR' to the running instance"
-          "$APP" '$dicom:get' '-l' "$EXTRA_DIR" > "$RUNNER_TEMP/app2.out" 2>&1
+          echo "--- second launch with three .dcm files (like 'Open with') is forwarded to the running instance"
+          "$APP" "$EXTRA_DIR/CT_small.dcm" "$EXTRA_DIR/MR_small.dcm" "$EXTRA_DIR/JPEG2000.dcm" > "$RUNNER_TEMP/app2.out" 2>&1
           echo "second launch exit code $?"; head -5 "$RUNNER_TEMP/app2.out" | cut -c1-200
           sleep 20
           grab linux-3-main-after-local-load
@@ -397,11 +397,16 @@ jobs:
           echo "--- System Events processes"; osascript -e 'tell application "System Events" to get name of every process whose background only is false' 2>&1
           grab mac-1-disclaimer
 
-          echo "--- Tab moves the focus from 'No' to 'I accept' (needs accessibility permission)"
-          key "key code 48"; sleep 2
-          grab mac-2-after-tab
-          echo "--- Space presses the focused button"
-          key "keystroke \" \""; sleep 5
+          echo "--- click 'I accept' (bottom right of the dialog; macOS shows 'No' first and focuses it)"
+          read -r DW DH DX DY <<< "$(echo "$W" | grep 'title=First Time Launch' | head -1 | sed -E 's/.*\| ([0-9]+)x([0-9]+)\+(-?[0-9]+)\+(-?[0-9]+)$/\1 \2 \3 \4/')"
+          echo "dialog ${DW}x${DH}+${DX}+${DY}"
+          key "click at {$((DX + DW - 53)), $((DY + DH - 25))}"; sleep 4
+          if echo "$(wins)" | grep -q "title=First Time Launch"; then
+            echo "the click did not close it; Tab moves the focus to 'I accept', Space presses it"
+            key "key code 48"; sleep 2
+            grab mac-2-after-tab
+            key "keystroke \" \""; sleep 4
+          fi
           echo "--- on-screen windows after accept"; W=$(wins); echo "$W"
           echo "$W" | grep -q "title=First Time Launch" && res FAIL disclaimer-accepted "dialog still on screen" || res PASS disclaimer-accepted "dialog gone"
           sleep 35
@@ -410,8 +415,8 @@ jobs:
           echo "$W" | grep -q "title=Addis Ortho DICOM Viewer" && res PASS main-window-title "$(echo "$W" | grep 'title=Addis Ortho DICOM Viewer' | head -1)" || res FAIL main-window-title "no window titled Addis Ortho DICOM Viewer"
           grab mac-3-main-after-DICOMDIR
 
-          echo "--- second launch forwards '\$dicom:get -l $EXTRA_DIR' to the running instance"
-          "$APP/Contents/MacOS/Addis Ortho Viewer" '$dicom:get' '-l' "$EXTRA_DIR" > "$RUNNER_TEMP/app2.out" 2>&1
+          echo "--- second launch with three .dcm files (like 'Open with') is forwarded to the running instance"
+          "$APP/Contents/MacOS/Addis Ortho Viewer" "$EXTRA_DIR/CT_small.dcm" "$EXTRA_DIR/MR_small.dcm" "$EXTRA_DIR/JPEG2000.dcm" > "$RUNNER_TEMP/app2.out" 2>&1
           echo "second launch exit code $?"; head -5 "$RUNNER_TEMP/app2.out" | cut -c1-200
           sleep 20
           grab mac-4-main-after-local-load
@@ -520,6 +525,15 @@ jobs:
             [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
             [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
             [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+            [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+            public static void Click(int x, int y) {
+              SetCursorPos(x, y);
+              System.Threading.Thread.Sleep(400);
+              mouse_event(2, 0, 0, 0, UIntPtr.Zero);
+              System.Threading.Thread.Sleep(100);
+              mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+            }
             [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
             public static List<string> Visible() {
               var res = new List<string>();
@@ -646,17 +660,17 @@ jobs:
           Shot 'win-1-disclaimer'
           $wsh = New-Object -ComObject WScript.Shell
           $accepted = ''
-          if ($disc) {
-            "AppActivate: " + $wsh.AppActivate('First Time Launch')
-            Start-Sleep -Seconds 1
-            [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Seconds 3
+          if ($disc -match 'rect=(-?\d+),(-?\d+) (\d+)x(\d+)') {
+            $dx = [int]$Matches[1]; $dy = [int]$Matches[2]; $dw = [int]$Matches[3]; $dh = [int]$Matches[4]
+            "dialog ${dw}x${dh}+${dx}+${dy}; clicking 'I accept' (139 px left of the right edge, 33 px above the bottom of the window rectangle)"
+            [WinList]::Click($dx + $dw - 139, $dy + $dh - 33); Start-Sleep -Seconds 3
             if (Get-Wins | Where-Object { $_ -match 'First Time Launch' }) {
-              "Enter did not close the disclaimer"
-              Shot 'win-1b-after-enter'
+              "the click did not close it; Enter on the focused button"
+              Shot 'win-1b-after-click'
               $wsh.AppActivate('First Time Launch') | Out-Null; Start-Sleep -Seconds 1
               [System.Windows.Forms.SendKeys]::SendWait(' '); Start-Sleep -Seconds 3
-              if (Get-Wins | Where-Object { $_ -match 'First Time Launch' }) { "space did not close it either" } else { $accepted = 'space' }
-            } else { $accepted = 'Enter' }
+              if (-not (Get-Wins | Where-Object { $_ -match 'First Time Launch' })) { $accepted = 'space' }
+            } else { $accepted = 'mouse click' }
           }
           if ($accepted) { Res PASS disclaimer-accepted "closed with $accepted" } else { Res FAIL disclaimer-accepted "dialog still open" }
           $main = $null
@@ -673,9 +687,9 @@ jobs:
           if ($alive) { Res PASS process-alive "pid $($proc.Id) alive, working set $([math]::Round($alive.WorkingSet64/1MB)) MB" } else { Res FAIL process-alive "pid $($proc.Id) exited" }
           "--- processes"
           Get-Process | Where-Object { $_.Path -like 'C:\Program Files\Addis*' } | Format-Table Id, ProcessName, StartTime, WorkingSet64 -AutoSize | Out-String | Write-Host
-          "--- second launch forwards '`$dicom:get -l $env:EXTRA_DIR' to the running instance"
+          "--- second launch with three .dcm files (like 'Open with') is forwarded to the running instance"
           $out2 = Join-Path $env:RUNNER_TEMP 'app2.out'; $err2 = Join-Path $env:RUNNER_TEMP 'app2.err'
-          $p2 = Start-Process -FilePath $exe -ArgumentList @('$dicom:get', '-l', $env:EXTRA_DIR) -PassThru -RedirectStandardOutput $out2 -RedirectStandardError $err2
+          $p2 = Start-Process -FilePath $exe -ArgumentList @("$env:EXTRA_DIR\CT_small.dcm", "$env:EXTRA_DIR\MR_small.dcm", "$env:EXTRA_DIR\JPEG2000.dcm") -PassThru -RedirectStandardOutput $out2 -RedirectStandardError $err2
           if ($p2.WaitForExit(40000)) { "second launch exited with code $($p2.ExitCode)" } else { "second launch still running after 40 s" }
           Get-Content $out2 -TotalCount 5 -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 20
