@@ -2,6 +2,7 @@
 """Helper for .github/workflows/smoke-test.yml.
 
   smoke_helper.py sample DEST     copy pydicom's public DICOMDIR test set to DEST, print the DICOMDIR path
+  smoke_helper.py extra DEST      copy a few small public CT/MR/NM test images to DEST, print DEST
   smoke_helper.py shot NAME [--from FILE]
                                   shrink a screenshot (FILE, or the screen on Windows) to a small JPEG and
                                   print it as base64 between =====SHOT NAME BEGIN/END===== lines
@@ -32,6 +33,18 @@ def sample(dest):
     kinds = collections.Counter(str(r.DirectoryRecordType) for r in ds.DirectoryRecordSequence)
     print(f"pydicom {pydicom.__version__} sample {src.name}: {dict(kinds)}", file=sys.stderr)
     print(dest / "DICOMDIR")
+
+
+def extra(dest):
+    from pydicom.data import get_testdata_file
+
+    dest = Path(dest)
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    for name in ("CT_small.dcm", "MR_small.dcm", "JPEG2000.dcm"):
+        shutil.copy(get_testdata_file(name), dest / name)
+    print(dest)
 
 
 def shot(name, src):
@@ -74,6 +87,8 @@ def shot(name, src):
 def main(argv):
     if len(argv) >= 3 and argv[1] == "sample":
         sample(argv[2])
+    elif len(argv) >= 3 and argv[1] == "extra":
+        extra(argv[2])
     elif len(argv) >= 3 and argv[1] == "shot":
         src = argv[argv.index("--from") + 1] if "--from" in argv else None
         shot(argv[2], src)

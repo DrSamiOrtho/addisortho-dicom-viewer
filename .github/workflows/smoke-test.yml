@@ -95,6 +95,9 @@ jobs:
           DICOMDIR=$("$PY" .github/scripts/smoke_helper.py sample "$RUNNER_TEMP/dicom-sample" | tr -d '\r')
           echo "DICOMDIR=$DICOMDIR" >> "$GITHUB_ENV"
           echo "DICOMDIR is $DICOMDIR"
+          EXTRA_DIR=$("$PY" .github/scripts/smoke_helper.py extra "$RUNNER_TEMP/dicom-extra" | tr -d '\r')
+          echo "EXTRA_DIR=$EXTRA_DIR" >> "$GITHUB_ENV"
+          echo "EXTRA_DIR is $EXTRA_DIR"; ls -la "$EXTRA_DIR"
 
       - name: Run the app under Xvfb, accept the disclaimer, screenshot
         shell: bash {0}
@@ -110,18 +113,22 @@ jobs:
           xdpyinfo | grep -E 'dimensions|vendor string'
 
           grab() { import -window root "$RUNNER_TEMP/raw.png" 2>&1 && "$PY" "$H" shot "$1" --from "$RUNNER_TEMP/raw.png"; }
+          disc_open() { wmctrl -l | grep -q "First Time Launch"; }
 
           rm -rf "$HOME/.weasis"
           APP="$PWD/output-dist/$NAME/bin/$NAME"
-          "$APP" "$DICOMDIR" > "$RUNNER_TEMP/app.out" 2>&1 &
+          # Same command line as the CD autorun (weasis-distributions/resources/isowriter/RUN.bat): load the
+          # DICOMDIR found in the current directory.
+          CD_ARG='weasis://%24dicom%3Aget%20-p%20%24weasis%3Aconfig%20pro%3D%22weasis.portable.dir%20.%22'
+          ( cd "$(dirname "$DICOMDIR")" && exec "$APP" "$CD_ARG" ) > "$RUNNER_TEMP/app.out" 2>&1 &
           APP_PID=$!
-          echo "launched pid $APP_PID with $DICOMDIR"
+          echo "launched pid $APP_PID in $(dirname "$DICOMDIR") with $CD_ARG"
           sleep 6
           echo "--- windows at 6 s"; wmctrl -l
           grab linux-0-splash
 
           for i in $(seq 1 180); do
-            wmctrl -l | grep -q "First Time Launch" && break
+            disc_open && break
             kill -0 $APP_PID 2>/dev/null || break
             sleep 1
           done
@@ -136,16 +143,22 @@ jobs:
           accepted=""
           W=$(xdotool search --name "First Time Launch" | head -1)
           if [ -n "$W" ]; then
-            xdotool getwindowgeometry "$W"
-            xdotool windowfocus "$W"; sleep 1
+            eval "$(xdotool getwindowgeometry --shell "$W")"
+            echo "dialog window $W: ${WIDTH}x${HEIGHT}+${X}+${Y}"
+            xdotool windowactivate "$W" 2>&1; sleep 1
             xdotool key --clearmodifiers Return; sleep 3
-            if wmctrl -l | grep -q "First Time Launch"; then
+            if disc_open; then
               echo "Return did not close the disclaimer"
-              grab linux-1b-after-return
               xdotool key --clearmodifiers space; sleep 3
-              if wmctrl -l | grep -q "First Time Launch"; then echo "space did not close it either"; else accepted="space"; fi
+            fi
+            if disc_open; then
+              echo "space did not close it either; clicking 'I accept' (bottom right: 150 px left of the right edge, 46 px above the bottom)"
+              xdotool mousemove $((X + WIDTH - 150)) $((Y + HEIGHT - 46)); sleep 1
+              grab linux-1b-pointer-on-button
+              xdotool click 1; sleep 3
+              disc_open || accepted="mouse click"
             else
-              accepted="Return"
+              accepted="keyboard"
             fi
           fi
           if [ -n "$accepted" ]; then res PASS disclaimer-accepted "closed with $accepted"; else res FAIL disclaimer-accepted "dialog still open"; fi
@@ -159,10 +172,16 @@ jobs:
           done
           echo "waited $i s for the main window"
           if [ -n "$MAIN" ]; then res PASS main-window-title "$MAIN"; else res FAIL main-window-title "no window titled 'Addis Ortho DICOM Viewer'; windows: $(wmctrl -l)"; fi
-          sleep 40
+          sleep 30
           echo "--- windows with main window"; wmctrl -l
-          grab linux-2-main
+          grab linux-2-main-after-DICOMDIR
           kill -0 $APP_PID 2>/dev/null && res PASS process-alive "pid $APP_PID alive after load" || res FAIL process-alive "pid $APP_PID exited"
+
+          echo "--- second launch forwards '\$dicom:get -l $EXTRA_DIR' to the running instance"
+          "$APP" '$dicom:get' '-l' "$EXTRA_DIR" > "$RUNNER_TEMP/app2.out" 2>&1
+          echo "second launch exit code $?"; head -5 "$RUNNER_TEMP/app2.out" | cut -c1-200
+          sleep 20
+          grab linux-3-main-after-local-load
 
           MW=$(echo "$MAIN" | head -1 | awk '{print $1}')
           if [ -n "$MW" ]; then
@@ -170,10 +189,10 @@ jobs:
             xdotool key --clearmodifiers F10; sleep 1
             xdotool key Left; sleep 1
             xdotool key Down; sleep 1
-            grab linux-3-help-menu
+            grab linux-4-help-menu
             xdotool key Up; sleep 1
             xdotool key Return; sleep 4
-            grab linux-4-about
+            grab linux-5-about
           fi
 
           echo "--- java processes"; ps -eo pid,etime,rss,args | grep -i "[a]ddis" | cut -c1-250
@@ -255,6 +274,9 @@ jobs:
           DICOMDIR=$("$PY" .github/scripts/smoke_helper.py sample "$RUNNER_TEMP/dicom-sample" | tr -d '\r')
           echo "DICOMDIR=$DICOMDIR" >> "$GITHUB_ENV"
           echo "DICOMDIR is $DICOMDIR"
+          EXTRA_DIR=$("$PY" .github/scripts/smoke_helper.py extra "$RUNNER_TEMP/dicom-extra" | tr -d '\r')
+          echo "EXTRA_DIR=$EXTRA_DIR" >> "$GITHUB_ENV"
+          echo "EXTRA_DIR is $EXTRA_DIR"; ls -la "$EXTRA_DIR"
           sw_vers; uname -m
 
       - name: Install the pkg and inspect the app bundle
@@ -346,21 +368,10 @@ jobs:
           tell application "System Events"
             tell process "Addis Ortho Viewer"
               set frontmost to true
-              repeat with mb in (menu bar items of menu bar 1)
-                try
-                  repeat with mi in (menu items of menu 1 of mb)
-                    try
-                      if (name of mi as text) contains "About" then
-                        click mi
-                        return "clicked: " & (name of mi as text)
-                      end if
-                    end try
-                  end repeat
-                end try
-              end repeat
+              click menu item "About Addis Ortho DICOM Viewer" of menu 1 of menu bar item "Help" of menu bar 1
+              return "clicked: About Addis Ortho DICOM Viewer (Help menu)"
             end tell
           end tell
-          return "no About item found"
           EOF
           grab() {
             screencapture -x "$RUNNER_TEMP/raw.png" 2>&1
@@ -370,9 +381,12 @@ jobs:
           key() { osascript -e "tell application \"System Events\" to $1" 2>&1; }
 
           rm -rf "$HOME/.weasis"
-          "$APP/Contents/MacOS/Addis Ortho Viewer" "$DICOMDIR" > "$RUNNER_TEMP/app.out" 2>&1 &
+          # Same command line as the CD autorun (weasis-distributions/resources/isowriter/RUN.bat): load the
+          # DICOMDIR found in the current directory.
+          CD_ARG='weasis://%24dicom%3Aget%20-p%20%24weasis%3Aconfig%20pro%3D%22weasis.portable.dir%20.%22'
+          ( cd "$(dirname "$DICOMDIR")" && exec "$APP/Contents/MacOS/Addis Ortho Viewer" "$CD_ARG" ) > "$RUNNER_TEMP/app.out" 2>&1 &
           APP_PID=$!
-          echo "launched pid $APP_PID with $DICOMDIR"
+          echo "launched pid $APP_PID in $(dirname "$DICOMDIR") with $CD_ARG"
           sleep 4
           grab mac-0-splash
           sleep 36
@@ -394,11 +408,21 @@ jobs:
           if kill -0 $APP_PID 2>/dev/null; then res PASS process-alive-after-accept "pid $APP_PID alive"; else res FAIL process-alive-after-accept "pid $APP_PID exited"; fi
           echo "--- on-screen windows with the main window"; W=$(wins); echo "$W"
           echo "$W" | grep -q "title=Addis Ortho DICOM Viewer" && res PASS main-window-title "$(echo "$W" | grep 'title=Addis Ortho DICOM Viewer' | head -1)" || res FAIL main-window-title "no window titled Addis Ortho DICOM Viewer"
-          grab mac-3-main
+          grab mac-3-main-after-DICOMDIR
+
+          echo "--- second launch forwards '\$dicom:get -l $EXTRA_DIR' to the running instance"
+          "$APP/Contents/MacOS/Addis Ortho Viewer" '$dicom:get' '-l' "$EXTRA_DIR" > "$RUNNER_TEMP/app2.out" 2>&1
+          echo "second launch exit code $?"; head -5 "$RUNNER_TEMP/app2.out" | cut -c1-200
+          sleep 20
+          grab mac-4-main-after-local-load
 
           echo "--- menu bar contents"; osascript "$RUNNER_TEMP/menus.applescript" 2>&1
-          echo "--- open the About box"; osascript "$RUNNER_TEMP/about.applescript" 2>&1; sleep 4
-          grab mac-4-about
+          echo "--- open the application menu"
+          osascript -e 'tell application "System Events" to tell process "Addis Ortho Viewer" to click menu bar item 2 of menu bar 1' 2>&1; sleep 2
+          grab mac-5-app-menu
+          key "key code 53"; sleep 1
+          echo "--- open the About box from the Help menu"; osascript "$RUNNER_TEMP/about.applescript" 2>&1; sleep 4
+          grab mac-6-about
           key "key code 53"; sleep 1
 
           echo "--- URL scheme handler as seen by LaunchServices"
@@ -528,6 +552,9 @@ jobs:
           DICOMDIR=$("$PY" .github/scripts/smoke_helper.py sample "$RUNNER_TEMP/dicom-sample" | tr -d '\r')
           echo "DICOMDIR=$DICOMDIR" >> "$GITHUB_ENV"
           echo "DICOMDIR is $DICOMDIR"
+          EXTRA_DIR=$("$PY" .github/scripts/smoke_helper.py extra "$RUNNER_TEMP/dicom-extra" | tr -d '\r')
+          echo "EXTRA_DIR=$EXTRA_DIR" >> "$GITHUB_ENV"
+          echo "EXTRA_DIR is $EXTRA_DIR"; ls -la "$EXTRA_DIR"
 
       - name: Install the MSI and inspect the install
         shell: pwsh
@@ -596,8 +623,12 @@ jobs:
           Remove-Item "$env:USERPROFILE\.weasis" -Recurse -Force -ErrorAction SilentlyContinue
           $exe = 'C:\Program Files\Addis Ortho Viewer\Addis Ortho Viewer.exe'
           $out = Join-Path $env:RUNNER_TEMP 'app.out'; $err = Join-Path $env:RUNNER_TEMP 'app.err'
-          $proc = Start-Process -FilePath $exe -ArgumentList "`"$env:DICOMDIR`"" -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
-          "launched pid $($proc.Id) with $env:DICOMDIR"
+          # Same command line as the CD autorun (weasis-distributions/resources/isowriter/RUN.bat): load the
+          # DICOMDIR found in the current directory.
+          $cdArg = 'weasis://%24dicom%3Aget%20-p%20%24weasis%3Aconfig%20pro%3D%22weasis.portable.dir%20.%22'
+          $sampleDir = Split-Path $env:DICOMDIR
+          $proc = Start-Process -FilePath $exe -ArgumentList $cdArg -WorkingDirectory $sampleDir -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+          "launched pid $($proc.Id) in $sampleDir with $cdArg"
           Start-Sleep -Seconds 2
           "--- visible windows at 2 s"; Get-Wins
           Shot 'win-0-splash'
@@ -637,20 +668,28 @@ jobs:
           if ($main) { Res PASS main-window-title $main } else { Res FAIL main-window-title "no window titled 'Addis Ortho DICOM Viewer'" }
           Start-Sleep -Seconds 40
           "--- visible windows with the main window"; Get-Wins
-          Shot 'win-2-main'
+          Shot 'win-2-main-after-DICOMDIR'
           $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
           if ($alive) { Res PASS process-alive "pid $($proc.Id) alive, working set $([math]::Round($alive.WorkingSet64/1MB)) MB" } else { Res FAIL process-alive "pid $($proc.Id) exited" }
           "--- processes"
           Get-Process | Where-Object { $_.Path -like 'C:\Program Files\Addis*' } | Format-Table Id, ProcessName, StartTime, WorkingSet64 -AutoSize | Out-String | Write-Host
+          "--- second launch forwards '`$dicom:get -l $env:EXTRA_DIR' to the running instance"
+          $out2 = Join-Path $env:RUNNER_TEMP 'app2.out'; $err2 = Join-Path $env:RUNNER_TEMP 'app2.err'
+          $p2 = Start-Process -FilePath $exe -ArgumentList @('$dicom:get', '-l', $env:EXTRA_DIR) -PassThru -RedirectStandardOutput $out2 -RedirectStandardError $err2
+          if ($p2.WaitForExit(40000)) { "second launch exited with code $($p2.ExitCode)" } else { "second launch still running after 40 s" }
+          Get-Content $out2 -TotalCount 5 -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 20
+          "--- visible windows after the second launch"; Get-Wins
+          Shot 'win-3-main-after-local-load'
           "--- Help menu: F10, Left (wraps to Help), Down"
           $wsh.AppActivate('Addis Ortho DICOM Viewer') | Out-Null; Start-Sleep -Seconds 1
           [System.Windows.Forms.SendKeys]::SendWait('{F10}'); Start-Sleep -Seconds 1
           [System.Windows.Forms.SendKeys]::SendWait('{LEFT}'); Start-Sleep -Seconds 1
           [System.Windows.Forms.SendKeys]::SendWait('{DOWN}'); Start-Sleep -Seconds 1
-          Shot 'win-3-help-menu'
+          Shot 'win-4-help-menu'
           [System.Windows.Forms.SendKeys]::SendWait('{UP}'); Start-Sleep -Seconds 1
           [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Seconds 4
-          Shot 'win-4-about'
+          Shot 'win-5-about'
           [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
           Get-Process | Where-Object { $_.Path -like 'C:\Program Files\Addis*' } | Stop-Process -Force -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 4
