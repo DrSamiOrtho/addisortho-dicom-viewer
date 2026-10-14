@@ -57,6 +57,37 @@ vec3 gradient(vec3 uvw, float delta) {
     return normalize(pix1);
 }
 
+// Shading normal for smoothShading, pointing outwards like gradient(). Central differences one
+// voxel apart along each axis, each taken at the four half-voxel diagonal offsets across it, so the
+// trilinear filter folds a [1 2 1] weighting over the 3x3 neighbours in as a Sobel operator does.
+// The differences are scaled by the voxel spacing, so a thick-slice volume is not shaded as if its
+// slices were as thin as its pixels.
+vec3 smoothGradient(vec3 uvw) {
+    vec3 voxel = 1.0 / vec3(textureSize(volTexture, 0));
+    vec3 g = vec3(0.0);
+    for (int i = 0; i < 4; ++i) {
+        vec2 o = vec2((i & 1) == 0 ? -0.5 : 0.5, (i & 2) == 0 ? -0.5 : 0.5);
+        vec3 ox = vec3(voxel.x, o.x * voxel.y, o.y * voxel.z);
+        vec3 oy = vec3(o.x * voxel.x, voxel.y, o.y * voxel.z);
+        vec3 oz = vec3(o.x * voxel.x, o.y * voxel.y, voxel.z);
+        g.x += getNormalizedWindowLevel(uvw - ox) - getNormalizedWindowLevel(uvw + vec3(ox.x, -ox.yz));
+        g.y += getNormalizedWindowLevel(uvw - oy) - getNormalizedWindowLevel(uvw + vec3(-oy.x, oy.y, -oy.z));
+        g.z += getNormalizedWindowLevel(uvw - oz) - getNormalizedWindowLevel(uvw + vec3(-oz.xy, oz.z));
+    }
+    // Voxel spacing in world units is texelSize * voxel (up to a common factor).
+    g /= texelSize * voxel;
+    float len = length(g);
+    return len > 0.0 ? g / len : vec3(0.0);
+}
+
+// Opacity of one sample once corrected to the distance between samples, with one in-plane voxel as
+// the unit the preset opacities are given for (as VTK's scalar opacity unit distance).
+float correctedOpacity(float alpha, vec3 stepPos) {
+    vec3 voxel = 1.0 / vec3(textureSize(volTexture, 0));
+    float steps = length(stepPos * texelSize) / (texelSize.x * voxel.x);
+    return 1.0 - pow(1.0 - min(alpha, 0.9999), steps);
+}
+
 Ray makeRay(vec3 origin, vec3 direction) {
     vec3 inv_direction = vec3(1.0) / direction;
 
@@ -628,10 +659,38 @@ vec4 rayCastingComposite(Ray ray, float tmin, float tmax, vec2 uv) {
         vec4 pixel = applyVoxelColor(texCoord, pix);
         pixel.a = min(pixel.a * opacityFactor, 1.0);
 
+        if (accurateBlending) {
+            // Front-to-back "over": a sample only adds what the samples in front still let through.
+            if (pixel.a > 0.0) {
+                float a = correctedOpacity(pixel.a, stepPos);
+                vec3 color = pixel.rgb;
+                if (shading) {
+                    vec3 normalPos = smoothShading ? smoothGradient(texCoord) : gradient(texCoord, stepSize);
+                    vec3 lit = vec3(0.0);
+                    for (int i = 0; i < 4; ++i) {
+                        if (lights[i].enabled) {
+                            vec3 V = normalize(vec3(viewMatrix * lights[i].position) - texCoord);
+                            vec3 L = normalize(lights[i].position.xyz - texCoord);
+                            // double sided lighting
+                            vec3 n = dot(L, normalPos) < 0.0 ? -normalPos : normalPos;
+                            lit += blinnPhong(n, V, L, i, pix, defaultDiffuse);
+                        }
+                    }
+                    color *= lit;
+                }
+                pxColor.rgb += (1.0 - pxColor.a) * a * color;
+                pxColor.a += (1.0 - pxColor.a) * a;
+            }
+            if (pxColor.a >= 0.99) {
+                break;
+            }
+            continue;
+        }
+
         if (pixel.a > 0.0) {
             float alpha = (1.0 - pixel.a) * pxColor.a;
             if (shading) {
-                vec3 normalPos = gradient(texCoord, stepSize);
+                vec3 normalPos = smoothShading ? smoothGradient(texCoord) : gradient(texCoord, stepSize);
                 for (int i = 0; i < 4; ++i) {
                     if (lights[i].enabled) {
                         vec3 V = normalize(vec3(viewMatrix * lights[i].position) - texCoord);
@@ -665,6 +724,10 @@ vec4 rayCastingComposite(Ray ray, float tmin, float tmax, vec2 uv) {
         }
     }
 
+    if (accurateBlending && !segOnly && pxColor.a > 0.0 && pxColor.a < 0.99) {
+        // The blit weights the colour by its alpha again: hand it the straight colour.
+        pxColor.rgb /= pxColor.a;
+    }
     if (pxColor.a >= 0.99) {
         pxColor.a = 1.0;
     }
@@ -702,7 +765,7 @@ vec4 rayCastingIsoSurface(Ray ray, float tmin, float tmax, vec2 uv) {
         bool sign_cur = pix > center;
         if (pixel.a > 0.0) {
             if (sign_cur != prev_sign) {
-                vec3 normalPos = gradient(texCoord, stepSize);
+                vec3 normalPos = smoothShading ? smoothGradient(texCoord) : gradient(texCoord, stepSize);
                 vec4 diffuse = pixel;
 
                 for (int i = 0; i < 4; ++i) {

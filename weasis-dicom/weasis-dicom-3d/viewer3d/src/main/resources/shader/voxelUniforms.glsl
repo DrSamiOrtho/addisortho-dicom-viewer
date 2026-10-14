@@ -95,3 +95,10 @@ uniform bool segSmooth = false;
 // whole volume, (0,0,0)-(1,1,1), when the crop is off.
 uniform vec3 cropMin = vec3(0.0);
 uniform vec3 cropMax = vec3(1.0);
+
+// Smooth volume rendering (Addis Ortho). smoothShading takes the shading normal from a wide,
+// Sobel-like stencil one voxel across in world space instead of a sub-voxel central difference.
+// accurateBlending composites front to back with each sample's opacity corrected to the distance
+// it covers (one in-plane voxel is the unit), so the result no longer depends on the sampling rate.
+uniform bool smoothShading = false;
+uniform bool accurateBlending = false;

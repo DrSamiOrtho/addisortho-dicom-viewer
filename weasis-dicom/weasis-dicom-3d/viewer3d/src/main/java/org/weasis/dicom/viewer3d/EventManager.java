@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d;
 
 import java.awt.Point;
@@ -105,6 +106,7 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
     setAction(newOpacityAction());
 
     setAction(newVolumeShadingAction());
+    setAction(newVolumeSmoothAction());
     setAction(newVolumeProjection());
     setAction(newAxisRotationAction());
 
@@ -445,6 +447,17 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
     };
   }
 
+  private ToggleButtonListener newVolumeSmoothAction() {
+    return new ToggleButtonListener(ActionVol.VOL_SMOOTH, true) {
+      @Override
+      public void actionPerformed(boolean selected) {
+        if (getSelectedView2dContainer() instanceof View3DContainer container) {
+          container.setVolumeSmoothing(selected);
+        }
+      }
+    };
+  }
+
   private ToggleButtonListener newVolumeProjection() {
     return new ToggleButtonListener(ActionVol.VOL_PROJECTION, false) {
       @Override
@@ -597,6 +610,12 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
     Optional<ComboItemListener<CrosshairCutMode>> crosshairCutMode =
         getAction(ActionVol.CROSSHAIR_CUT_MODE);
     volumeLighting.ifPresent(a -> a.setSelectedWithoutTriggerAction(rendering.isShading()));
+    getAction(ActionVol.VOL_SMOOTH)
+        .ifPresent(
+            a -> {
+              a.setSelectedWithoutTriggerAction(canvas.getVolTexture().isSmoothing());
+              a.enableAction(true);
+            });
     volumeProjection.ifPresent(
         a -> a.setSelectedWithoutTriggerAction(canvas.getCamera().isOrthographicProjection()));
     volumeQuality.ifPresent(a -> a.setSliderValue(rendering.getQuality(), false));

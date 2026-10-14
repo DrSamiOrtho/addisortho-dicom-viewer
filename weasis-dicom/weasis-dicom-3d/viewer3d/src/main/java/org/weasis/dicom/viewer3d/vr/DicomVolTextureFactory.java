@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.vr;
 
 import java.beans.PropertyChangeListener;
@@ -23,6 +24,7 @@ import org.weasis.core.api.media.data.MediaSeries.MEDIA_POSITION;
 import org.weasis.core.api.service.WProperties;
 import org.weasis.core.ui.editor.image.ViewProgress;
 import org.weasis.dicom.codec.DicomImageElement;
+import org.weasis.dicom.codec.display.Modality;
 import org.weasis.dicom.viewer2d.Messages;
 import org.weasis.dicom.viewer2d.mpr.BuildContext;
 import org.weasis.dicom.viewer2d.mpr.MPRGenerator;
@@ -124,8 +126,13 @@ public class DicomVolTextureFactory {
       throw new IllegalArgumentException("Pixel format not supported");
     }
 
-    return new DicomVolTexture(
-        new Vector3i(width, height, depth), volume, imageDataPixFormat, changeSupport);
+    DicomVolTexture texture =
+        new DicomVolTexture(
+            new Vector3i(width, height, depth), volume, imageDataPixFormat, changeSupport);
+    texture.setSmoothing(
+        texture.getModality() == Modality.CT
+            && localPersistence.getBooleanProperty(RenderingLayer.P_SMOOTH_CT, true));
+    return texture;
   }
 
   public void addPropertyChangeListener(PropertyChangeListener listener) {

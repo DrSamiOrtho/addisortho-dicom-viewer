@@ -153,6 +153,16 @@ public class VolumeTool extends PluginTool {
                   GuiUtils.getFlowLayoutPanel(box, GuiUtils.boxHorizontalStrut(10), btnOptions));
               volumePanel.add(GuiUtils.boxVerticalStrut(gabY));
             });
+
+    EventManager.getInstance()
+        .getAction(ActionVol.VOL_SMOOTH)
+        .ifPresent(
+            b -> {
+              JCheckBox box = b.createCheckBox(ActionVol.VOL_SMOOTH.getTitle());
+              box.setToolTipText(Messages.getString("smooth.tip"));
+              volumePanel.add(GuiUtils.getFlowLayoutPanel(box));
+              volumePanel.add(GuiUtils.boxVerticalStrut(gabY));
+            });
     return volumePanel;
   }
 

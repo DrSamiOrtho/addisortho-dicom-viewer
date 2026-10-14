@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.vr;
 
 import java.awt.Dimension;
@@ -55,6 +56,9 @@ public class DicomVolTexture extends VolumeTexture implements MediaSeriesGroup {
   private final PropertyChangeListener crossHairRelay;
 
   private String pixelValueUnit;
+
+  /** Pre-filters the volume on upload and smooths its shading (see VolumeSmoother). */
+  private volatile boolean smoothing;
 
   public DicomVolTexture(
       Vector3i size, Volume<?, ?> v, PixelFormat pixelFormat, PropertyChangeSupport changeSupport) {
@@ -118,6 +122,15 @@ public class DicomVolTexture extends VolumeTexture implements MediaSeriesGroup {
               output.toMat(), new Dimension(width, height), Imgproc.INTER_LINEAR);
     }
     return output;
+  }
+
+  public boolean isSmoothing() {
+    return smoothing;
+  }
+
+  /** Takes effect on the next upload of the volume, see VolumeBuilder#rebuild(). */
+  public void setSmoothing(boolean smoothing) {
+    this.smoothing = smoothing;
   }
 
   public Vector3d getScale() {

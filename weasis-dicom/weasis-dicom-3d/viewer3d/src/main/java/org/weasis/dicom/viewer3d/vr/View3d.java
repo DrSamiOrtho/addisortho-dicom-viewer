@@ -606,6 +606,12 @@ public class View3d extends VolumeCanvas
     program.allocateUniform(
         gl, "shading", (g, loc) -> g.glUniform1i(loc, renderingLayer.isShading() ? 1 : 0));
     program.allocateUniform(
+        gl, "smoothShading", (g, loc) -> g.glUniform1i(loc, isVolumeSmooth() ? 1 : 0)); // NON-NLS
+    program.allocateUniform(
+        gl,
+        "accurateBlending",
+        (g, loc) -> g.glUniform1i(loc, isVolumeSmooth() ? 1 : 0)); // NON-NLS
+    program.allocateUniform(
         gl,
         "texelSize",
         (g, loc) -> {
@@ -805,6 +811,12 @@ public class View3d extends VolumeCanvas
         (long) vertexBufferData.length * Float.BYTES,
         Buffers.newDirectFloatBuffer(vertexBufferData),
         GL.GL_STATIC_DRAW);
+  }
+
+  /** Smooth rendering of the volume, see DicomVolTexture#isSmoothing(). */
+  private boolean isVolumeSmooth() {
+    DicomVolTexture tex = volTexture;
+    return tex != null && tex.isSmoothing() && !isSegMode();
   }
 
   private boolean isSegMode() {
