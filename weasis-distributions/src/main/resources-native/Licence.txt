@@ -2,13 +2,27 @@ Addis Ortho DICOM Viewer
 Copyright 2026 Addis Ortho Trading PLC
 
 This program is a modified version of Weasis (https://github.com/nroduit/Weasis),
-Copyright 2009-2026 Weasis Team, which is dual-licensed under the Eclipse Public
-License 2.0 or the Apache License 2.0. This distribution is provided under the
-Apache License 2.0, reproduced in full below. Addis Ortho Trading PLC changed the
-application name, logos, icons, installer identity and first-launch notice.
+Copyright 2009-2026 Weasis Team, which is licensed under the Eclipse Public License 2.0
+or the Apache License 2.0. Addis Ortho Trading PLC uses Weasis under the Apache License
+2.0, reproduced in full below, and changed the name, logos, icons, installer identity,
+first-launch notice and some menu items.
 
-The Addis Ortho name and logo are trademarks of Addis Ortho Trading PLC and are not
-licensed under the Apache License 2.0.
+Because the program includes CheckboxTree, a library licensed under the GNU General
+Public License version 2 or later, Addis Ortho Trading PLC distributes the program as a
+whole under the GNU General Public License version 3. The text of that licence is
+installed with the application, in the file legal/licenses/GPL-3.0.txt of its resources
+folder, and is also at https://www.gnu.org/licenses/gpl-3.0.html. Each component keeps
+its own licence; they are listed in the file legal/THIRD-PARTY-NOTICES.txt of the same
+folder. Open it from Help, About, "includes other open source software". The notices of
+the bundled Java runtime are in the legal folder of the runtime.
+
+The complete corresponding source code of every release is published at
+https://github.com/DrSamiOrtho/addisortho-dicom-viewer under the release tag, for
+example ao-4.7.3-1.
+
+The Addis Ortho name and logo are trademarks of Addis Ortho Trading PLC. No licence
+grants any right to use them, and modified versions must not use them. This is an
+additional term permitted by section 7(e) of the GNU General Public License version 3.
 
 This program is not a certified medical device (CE, FDA or EFDA). It is for image
 review and surgical planning support only and must not be used for primary
@@ -16,9 +30,7 @@ diagnosis. Diagnosis and treatment decisions remain with the treating clinician.
 
 Third-party components included with this program, including the Java runtime,
 are licensed under their own terms. They are listed, with their licences, in the
-file THIRD-PARTY-NOTICES.txt installed with the application. Open it from Help,
-About, "includes other open source software". The notices of the bundled Java
-runtime are in the legal folder of the runtime.
+file THIRD-PARTY-NOTICES.txt installed with the application.
 
 ------------------------------------------------------------------------------
 

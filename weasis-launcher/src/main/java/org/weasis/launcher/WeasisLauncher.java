@@ -401,7 +401,7 @@ Starting OSGI Bundles...
                       JOptionPane.WARNING_MESSAGE,
                       null,
                       options,
-                      null);
+                      options[0]);
 
               if (response == 0) {
                 // Write "false" in weasis.properties. It can be useful when preferences are stored

@@ -7,8 +7,14 @@ on:
         description: 'Platforms to build: "all", "none" (only the shared native package), or a comma-separated subset of windows-x86-64,macosx-x86-64,macosx-aarch64'
         required: false
         default: 'all'
+  # A tag ao-<weasis version>-<n> (for example ao-4.7.3-1) builds all three installers and publishes
+  # them as a GitHub pre-release; the complete source of the release is the tag itself.
+  push:
+    tags:
+      - 'ao-*'
 
-# Least privilege: this pipeline only builds and uploads artifacts; it never writes to the repo.
+# Least privilege: the build jobs only build and upload artifacts. Only the release job below
+# gets write access, and only to create the release of a tag.
 permissions:
   contents: read
 
@@ -88,6 +94,11 @@ jobs:
     env:
       NAME: "Addis Ortho Viewer"
       IDENTIFIER: "com.addisortho.viewer"
+      # Windows file properties (CompanyName, LegalCopyright, FileDescription) and macOS
+      # NSHumanReadableCopyright; given to the app-image step as well as to the installer step.
+      VENDOR: "Addis Ortho Trading PLC"
+      COPYRIGHT: "© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-2026 Weasis Team"
+      DESCRIPTION: "Addis Ortho DICOM Viewer"
       # Sign and notarise on macOS only when the Apple certificates are stored as repository
       # secrets; otherwise build unsigned installers for internal testing.
       MAC_SIGN: ${{ secrets.MACOS_CERTIFICATE_DEVELOPMENT != '' && 'yes' || 'no' }}
@@ -246,6 +257,7 @@ jobs:
           jpackage --type app-image --input "${{ env.WEASIS_INPUT_BIN }}" --dest "${{ env.WEASIS_OUTPUT }}" --name "${{ env.NAME }}" \
           --main-jar weasis-launcher.jar --main-class org.weasis.launcher.AppLauncher --add-modules "$JDK_MODULES" \
           --resource-dir "${{ env.RES }}" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" --add-launcher "Dicomizer=${{ env.RES }}/dicomizer-launcher.properties" \
+          --vendor "${{ env.VENDOR }}" --copyright "${{ env.COPYRIGHT }}" --description "${{ env.DESCRIPTION }}" \
           "${signArgs[@]}" "${customOptions[@]}" "${commonOptions[@]}"
 
           if [ "$machine" = "macosx" ] && [ "$MAC_SIGN" = "yes" ] ; then
@@ -299,8 +311,6 @@ jobs:
         env:
           RES: "${{ env.WEASIS_SCRIPT }}/resources/${{ matrix.wsystem }}"
           FILE_ASSOC: "${{ env.WEASIS_SCRIPT }}/file-associations.properties"
-          VENDOR: "Addis Ortho Trading PLC"
-          COPYRIGHT: "© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-2026 Weasis Team"
         run: |
           mkdir -p final-dist
           machine=${{ matrix.wsystem }}
@@ -308,7 +318,7 @@ jobs:
           if [ "$machine" = "windows" ] ; then
             [ "$ARC_NAME" = "aarch64" ] && UPGRADE_UID="1d34dbc0-804b-491f-b9b7-cddec4b42771" || UPGRADE_UID="4179fa98-ca01-4739-b89e-92aff0702b48"
             jpackage --type "msi" --app-image "${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}" --dest "${{ env.WEASIS_OUTPUT }}" --name "${{ env.NAME }}" --resource-dir "${{ env.RES }}/msi/${ARC_NAME}" \
-            --license-file "${{ env.WEASIS_INPUT }}/Licence.txt" --description "Addis Ortho DICOM Viewer" --win-upgrade-uuid "$UPGRADE_UID" \
+            --license-file "${{ env.WEASIS_INPUT }}/Licence.txt" --description "${{ env.DESCRIPTION }}" --win-upgrade-uuid "$UPGRADE_UID" \
             --win-menu --win-menu-group "${{ env.NAME }}" --copyright "${{ env.COPYRIGHT }}" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" \
             --vendor "${{ env.VENDOR }}" --file-associations "${{ env.FILE_ASSOC }}" --verbose
             cp ${{ env.WEASIS_OUTPUT }}/*.msi "final-dist/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}-${ARC_NAME}.msi"
@@ -386,3 +396,88 @@ jobs:
         with:
           name: ${{ env.APP_ARTIFACT }}
           path: final-dist
+
+  # Runs only for a pushed tag ao-*; a manual run never publishes anything. The installers are
+  # unsigned (the macOS ones when the Apple secrets are missing, the Windows ones always), so the
+  # release is marked as a pre-release; drop --prerelease once both platforms are signed.
+  release:
+    name: Publish the GitHub release
+    if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'ao-') }}
+    needs: [build, jpackage]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      WEASIS_VERSION: ${{ needs.build.outputs.version }}
+
+    steps:
+      - name: Check that the tag matches the version that was built
+        shell: bash
+        run: |
+          case "$TAG" in
+            "ao-${WEASIS_VERSION}-"[0-9]*) echo "Tag $TAG releases Weasis $WEASIS_VERSION" ;;
+            *) echo "::error::Tag $TAG does not match ao-${WEASIS_VERSION}-<n>, the version in weasis-parent/pom.xml"; exit 1 ;;
+          esac
+
+      - name: Download the three installers
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: addisortho-viewer-*-${{ needs.build.outputs.version }}
+          merge-multiple: true
+          path: release-files
+
+      - name: Check the files and rename them without spaces
+        shell: bash
+        working-directory: release-files
+        run: |
+          shopt -s nullglob
+          ls -la
+          msi=(*.msi); pkg=(*.pkg)
+          if [ "${#msi[@]}" -ne 1 ] || [ "${#pkg[@]}" -ne 2 ]; then
+            echo "::error::Expected 1 .msi and 2 .pkg installers, found ${#msi[@]} and ${#pkg[@]}"
+            exit 1
+          fi
+          for f in *.msi *.pkg; do
+            expected=$(awk '{print $1}' "$f.sha256")
+            actual=$(sha256sum "$f" | awk '{print $1}')
+            if [ "$expected" != "$actual" ]; then
+              echo "::error::Checksum of $f does not match its .sha256 file"
+              exit 1
+            fi
+            new="${f// /-}"
+            mv "$f" "$new"
+            rm "$f.sha256"
+            sha256sum "$new" > "$new.sha256"
+          done
+          ls -la
+          cat ./*.sha256
+
+      - name: Create the release
+        shell: bash
+        run: |
+          VERSION="${TAG#ao-}"
+          cat > notes.md <<EOF
+          Addis Ortho DICOM Viewer ${VERSION}: Weasis ${WEASIS_VERSION} with the Addis Ortho name, logos, first-launch notice and menu changes.
+
+          **Not a certified medical device** (CE, FDA or EFDA). For image review and surgical planning support only, not for primary diagnosis.
+
+          **These installers are not signed**, so macOS and Windows warn on first use:
+          - macOS: open the .pkg; if it is blocked, go to System Settings, Privacy and Security, and click Open Anyway.
+          - Windows: in the blue "Windows protected your PC" window click More info, then Run anyway.
+
+          Files: macOS Apple Silicon (aarch64) and Intel (x86-64) .pkg, Windows x64 .msi, each with its .sha256 checksum.
+
+          The complete source code of this release is this tag: https://github.com/${GITHUB_REPOSITORY}/tree/${TAG}. The program as a whole is distributed under the GNU General Public License version 3; see the licence page of the installer and legal/THIRD-PARTY-NOTICES.txt in the installed application.
+          EOF
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG exists (re-run): replacing its files"
+            gh release upload "$TAG" release-files/* --clobber
+            gh release edit "$TAG" --title "Addis Ortho DICOM Viewer ${VERSION}" --notes-file notes.md --prerelease
+          else
+            gh release create "$TAG" release-files/* --verify-tag --title "Addis Ortho DICOM Viewer ${VERSION}" \
+              --notes-file notes.md --prerelease
+          fi
+          gh release view "$TAG" --json url,isPrerelease,assets --jq '{url, isPrerelease, assets: [.assets[].name]}'

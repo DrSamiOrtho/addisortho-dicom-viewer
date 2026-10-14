@@ -378,7 +378,7 @@
     },
     {
       "code": "weasis.copyrights",
-      "value": "© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-${build.year} Weasis Team, Apache License 2.0",
+      "value": "© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-${build.year} Weasis Team. GNU GPL version 3",
       "description": "Copyrights",
       "type": "A",
       "category": "DOC"

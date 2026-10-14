@@ -194,6 +194,12 @@ fi
 
 WEASIS_CLEAN_VERSION=$(echo "$WEASIS_VERSION" | sed -e 's/"//g' -e 's/-.*//' -e 's/\(\([0-9]\+\.\)\{2\}[0-9]\+\)\.[0-9]\+/\1/')
 
+# Shown in the Windows file properties (CompanyName, LegalCopyright, FileDescription) and in the macOS
+# NSHumanReadableCopyright: they must be given to the app-image step, which builds the launchers.
+VENDOR="Addis Ortho Trading PLC"
+COPYRIGHT="© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-2026 Weasis Team"
+DESCRIPTION="Addis Ortho DICOM Viewer"
+
 
 # Remove pack jar for launcher
 rm -f "$INPUT_DIR"/*.jar.pack.gz
@@ -267,17 +273,16 @@ if [ "$machine" != "linux" ] || [ "$PACKAGE" = "NO" ] ; then
   $JPKGCMD --type app-image --input "$INPUT_DIR" --dest "$OUTPUT_PATH" --name "$NAME" \
   --main-jar weasis-launcher.jar --main-class org.weasis.launcher.AppLauncher --add-modules "$JDK_MODULES" \
   --add-launcher "${DICOMIZER_CONFIG}" --resource-dir "$RES"  --app-version "$WEASIS_CLEAN_VERSION" \
+  --vendor "$VENDOR" --copyright "$COPYRIGHT" --description "$DESCRIPTION" \
   "${tmpArgs[@]}" --verbose "${signArgs[@]}" "${customOptions[@]}" "${commonOptions[@]}"
 fi
 
 
 if [ "$PACKAGE" = "YES" ] ; then
-  VENDOR="Addis Ortho Trading PLC"
-  COPYRIGHT="© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-2026 Weasis Team"
   if [ "$machine" = "windows" ] ; then
     [ "$arc" = "aarch64" ]  && UPGRADE_UID="1d34dbc0-804b-491f-b9b7-cddec4b42771" || UPGRADE_UID="4179fa98-ca01-4739-b89e-92aff0702b48"
     $JPKGCMD --type "msi" --app-image "$IMAGE_PATH" --dest "$OUTPUT_PATH" --name "$NAME" --resource-dir "$RES/msi/${arc}" \
-    --license-file "$INPUT_PATH\Licence.txt" --description "Addis Ortho DICOM Viewer" --win-upgrade-uuid "$UPGRADE_UID"  \
+    --license-file "$INPUT_PATH\Licence.txt" --description "$DESCRIPTION" --win-upgrade-uuid "$UPGRADE_UID"  \
     --win-menu --win-menu-group "$NAME" --copyright "$COPYRIGHT" --app-version "$WEASIS_CLEAN_VERSION" \
     --vendor "$VENDOR" --file-associations "${curPath}\file-associations.properties" "${tmpArgs[@]}" --verbose
     mv "$OUTPUT_PATH_UNIX/$NAME-$WEASIS_CLEAN_VERSION.msi" "$OUTPUT_PATH_UNIX/$NAME-$WEASIS_CLEAN_VERSION-${arc}.msi"
@@ -299,7 +304,7 @@ if [ "$PACKAGE" = "YES" ] ; then
       $JPKGCMD --type "$installerType" --input "$INPUT_DIR" --dest "$OUTPUT_PATH" --name "$NAME" \
       --main-jar weasis-launcher.jar --main-class org.weasis.launcher.AppLauncher --add-modules "$JDK_MODULES" \
       --add-launcher "${DICOMIZER_CONFIG}" --resource-dir "$RES" \
-      --license-file "$INPUT_PATH/Licence.txt" --description "Addis Ortho DICOM Viewer" --vendor "$VENDOR" \
+      --license-file "$INPUT_PATH/Licence.txt" --description "$DESCRIPTION" --vendor "$VENDOR" \
       --copyright "$COPYRIGHT" --app-version "$WEASIS_CLEAN_VERSION" --file-associations "${curPath}/file-associations.properties" \
       --linux-app-release "$REVISON_INC" --linux-package-name "addisortho-viewer" \
       "${typeArgs[@]}" \

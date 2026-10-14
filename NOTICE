@@ -3,8 +3,21 @@ Copyright 2026 Addis Ortho Trading PLC
 
 This product is a modified version of Weasis (https://github.com/nroduit/Weasis),
 Copyright 2009-2026 Weasis Team. Weasis is dual-licensed under the Eclipse Public
-License 2.0 or the Apache License 2.0; this distribution uses the Apache License 2.0
-(see LICENSE.Apache-2.0).
+License 2.0 or the Apache License 2.0; Addis Ortho Trading PLC uses it under the
+Apache License 2.0 (see LICENSE.Apache-2.0). The Weasis source files keep their licence
+headers.
+
+Licence of the distribution: because the program includes CheckboxTree
+(eu.essilab:lablib-checkboxtree), which is licensed under the GNU General Public License
+version 2 or later, Addis Ortho Trading PLC distributes the program as a whole under the
+GNU General Public License version 3 (weasis-distributions/resources/legal/licenses/
+GPL-3.0.txt; installed as legal/licenses/GPL-3.0.txt). The Apache License 2.0 is
+compatible with it. Each component keeps its own licence, listed in
+legal/THIRD-PARTY-NOTICES.txt of the installed application.
+
+Source code: this repository, https://github.com/DrSamiOrtho/addisortho-dicom-viewer, is
+public. The complete corresponding source code of every release is the repository at the
+release tag (for example ao-4.7.3-1).
 
 Changes made by Addis Ortho Trading PLC (see the git history from tag v4.7.3):
 - Application name, preference profiles, copyright line and first-launch disclaimer
@@ -14,7 +27,7 @@ Changes made by Addis Ortho Trading PLC (see the git history from tag v4.7.3):
   weasis-distributions/resources/svg/logo, weasis-distributions/script/resources).
 - Installer identity, URL scheme and build workflows (weasis-distributions/script,
   .github/workflows, weasis-launcher/src/main/java/org/weasis/launcher/WeasisLauncher.java).
-- Installer licence text and CD/DVD autorun files.
+- Installer licence text (GPLv3 for the whole program) and CD/DVD autorun files.
 - Third-party licence notice generated at build time (root pom.xml, weasis-distributions/src/license,
   weasis-distributions/resources/legal, weasis-distributions/src/assembly) and the About box link to
   it (weasis-base/weasis-base-ui/.../WeasisAboutBox.java).
@@ -41,11 +54,13 @@ comment syntax. These changed files cannot carry the line and are listed here in
 - Removed files: .github/workflows/changelog.yml and sonar.yml (upstream's release and Sonar
   workflows), weasis-distributions/script/resources/macosx/Weasis.icns and windows/Weasis.ico.
 Files that Addis Ortho Trading PLC wrote entirely (ADDISORTHO.md, NOTICE, the licence template and
-vendored artifact under weasis-distributions, WeasisAboutBoxTest.java) carry no such line.
+vendored artifact under weasis-distributions, WeasisAboutBoxTest.java, and the smoke test workflow and
+its helper script under .github) carry no such line.
 
-The Addis Ortho name and logo are trademarks of Addis Ortho Trading PLC. They are not
-licensed under the Apache License 2.0 or the Eclipse Public License 2.0.
+The Addis Ortho name and logo are trademarks of Addis Ortho Trading PLC. No licence grants
+any right to use them, and modified versions must not use them (an additional term
+permitted by section 7(e) of the GNU General Public License version 3).
 
-Third-party libraries bundled with Weasis are licensed under their own terms; see
+Third-party libraries bundled with the program are licensed under their own terms; see
 resources/legal/THIRD-PARTY-NOTICES.txt in the installed application (generated at build time) and
 3rd-party-licenses.md, which is kept as it came from Weasis.

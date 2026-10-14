@@ -1,8 +1,19 @@
 # Addis Ortho DICOM Viewer
 
 A rebranded build of [Weasis](https://github.com/nroduit/Weasis) for macOS (Apple Silicon and Intel)
-and Windows x64, distributed by Addis Ortho Trading PLC under the Apache License 2.0. See `NOTICE`
-for what changed. The upstream `README.md` is kept as is and describes the viewer itself.
+and Windows x64, distributed by Addis Ortho Trading PLC. See `NOTICE` for what changed. The upstream
+`README.md` is kept as is and describes the viewer itself.
+
+## Licence and source
+
+This repository is public. Each release tag `ao-<weasis version>-<n>` is the complete corresponding
+source code of that release. Addis Ortho Trading PLC uses Weasis under the Apache License 2.0 and
+distributes the program as a whole under the GNU General Public License version 3, because it
+includes CheckboxTree (GPL version 2 or later). The Addis Ortho name and logo are trademarks that no
+licence grants and modified versions must not use (GPLv3 section 7(e)). The same text is in `NOTICE`,
+in the installer licence page (`weasis-distributions/src/main/resources-native/Licence.txt`) and in
+the third-party notice template; the About box states "GNU GPL version 3" (`weasis.copyrights` in
+`weasis-distributions/etc/config/base.json`). Keep all of them in step.
 
 It is not a certified medical device. It is for image review and surgical planning support only;
 the first-launch disclaimer must be accepted before the viewer opens.
@@ -10,7 +21,7 @@ the first-launch disclaimer must be accepted before the viewer opens.
 ## Branches and upstream
 
 - `main`: the Addis Ortho build line. A release is a tag `ao-<weasis version>-<n>`, for example
-  `ao-4.7.3-1`, made only after both installers pass the smoke test below.
+  `ao-4.7.3-1` (see "Releasing" below).
 - `addisortho/*`: work branches.
 - `upstream` remote: `https://github.com/nroduit/weasis`. Merge each upstream release tag
   (`git fetch upstream --tags && git merge v4.x.y`), never upstream `master`. Keep upstream's
@@ -28,7 +39,7 @@ The first command also writes `target/generated-resources/legal/THIRD-PARTY-NOTI
 "Third-party notice" below); the second fails if that file is missing, so run them in this order.
 
 Installers are built on GitHub Actions: run **Build installers (Addis Ortho DICOM Viewer)**
-(`.github/workflows/build-installer.yml`) from the Actions tab. It produces:
+(`.github/workflows/build-installer.yml`) from the Actions tab, or push a tag `ao-*`. It produces:
 
 - macOS: `Addis Ortho Viewer-<version>-<arch>.pkg`, signed and notarised when the Apple secrets
   below exist, otherwise `...-unsigned.pkg` for internal testing (macOS asks the user to allow it
@@ -40,6 +51,19 @@ Apple signing secrets (repository secrets): `MACOS_CERTIFICATE_DEVELOPMENT` and
 `MACOS_CERTIFICATE_INSTALLER` (base64 .p12 of the Developer ID Application and Developer ID
 Installer certificates), `MACOS_CERTIFICATE_PWD`, `APPLE_DEVELOPER_AC_USERNAME`, `APPLE_TEAM_ID`,
 and `WEASIS_PWD` (an app-specific password for notarisation).
+
+## Releasing
+
+1. On the work branch, run **Build installers** (platforms `all`), then **Smoke test installers**
+   with that run's id (`.github/workflows/smoke-test.yml`). It installs both installers on real
+   macOS and Windows runners and prints every check as `CHECK PASS|FAIL`; read the screenshots too.
+2. Merge to `main` and push a tag `ao-<weasis version>-<n>` (the version must be `revision` of
+   `weasis-parent/pom.xml`; the workflow refuses a tag that does not match). The tag builds all
+   three installers and the `release` job creates a GitHub **pre-release** with the two `.pkg`, the
+   `.msi` and their `.sha256` files (unsigned installers: the notes say how to open them). The
+   smoke test then runs by itself on that build, once `smoke-test.yml` is on `main`
+   (`workflow_run`). If it fails, delete the release and the tag, fix and tag again.
+3. Remove `--prerelease` from the `release` job when both platforms are signed.
 
 ## Identity
 
@@ -68,11 +92,9 @@ real Weasis on the same computer. Linux packaging is not maintained.
 5. Open. Smoke test both installers next to a real Weasis install: disclaimer, DICOMDIR from a CD,
    length and angle, About box (third-party link opens `THIRD-PARTY-NOTICES.txt`), Help menu (no
    update check, no bug report, no release notes), URL scheme, uninstall leaves Weasis untouched.
-6. Open, for review before release. `lablib-checkboxtree` 4.0 (CheckboxTree, embedded in
-   `weasis-core`) declares GPL-2.0-or-later in its POM, which does not fit a closed-source
-   distribution. Confirm its real licence with ESSI-Lab or replace it. The notice lists what the POM
-   says. The wording of the "which licence applies" paragraph and the LGPL source statement in
-   `weasis-distributions/src/license/third-party-notices.ftl` also need a legal read.
+   `smoke-test.yml` automates most of it (not length and angle, nor a real Weasis next to it).
+6. Done. Decision by the owner, 2026-10-14: CheckboxTree (GPL-2.0-or-later) stays, the complete
+   source is public and the program as a whole is distributed under GPLv3 (see "Licence and source").
 
 ### Third-party notice
 

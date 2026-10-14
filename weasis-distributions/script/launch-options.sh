@@ -1,4 +1,5 @@
 #!/bin/bash
+# Modified by Addis Ortho Trading PLC, 2026.
 # Single source of truth for the jpackage JDK modules and launch options. It is shared by
 # package-weasis.sh (local builds and the Linux deb/rpm built in Docker) and by
 # .github/workflows/build-installer.yml (macOS and Windows builds), so that every installer
@@ -15,9 +16,13 @@ JDK_MODULES_BASE="java.base,java.compiler,java.datatransfer,java.net.http,java.d
 case "$1" in
   macosx)
     JDK_MODULES="$JDK_MODULES_BASE"
+    # apple.awt.application.name is the name in the application menu ("About ...", "Hide ...",
+    # "Quit ..."); without it macOS shows the main class, "AppLauncher". jpackage splits a
+    # --java-options value at spaces, so the embedded double quotes keep the name in one option.
     customOptions=("--java-options" "-splash:\$APPDIR/resources/images/about-round.png" \
     "--java-options" "-Dapple.laf.useScreenMenuBar=true" \
-    "--java-options" "-Dapple.awt.application.appearance=NSAppearanceNameDarkAqua")
+    "--java-options" "-Dapple.awt.application.appearance=NSAppearanceNameDarkAqua" \
+    "--java-options" "-Dapple.awt.application.name=\"Addis Ortho DICOM Viewer\"")
     ;;
   windows)
     JDK_MODULES="$JDK_MODULES_BASE,jdk.crypto.mscapi"

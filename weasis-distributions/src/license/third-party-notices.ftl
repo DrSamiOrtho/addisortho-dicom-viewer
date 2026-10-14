@@ -26,18 +26,25 @@ Addis Ortho DICOM Viewer is a modified version of Weasis
 (https://github.com/nroduit/Weasis), Copyright 2009-2026 Weasis Team, used under the
 Apache License 2.0. Addis Ortho Trading PLC changed the application name, logos, icons,
 installer identity, help menu and licence notices (see the NOTICE file of the source
-distribution). The licence of the viewer itself is in the file Licence.txt of the installer
-and in licenses/Apache-2.0.txt next to this file. The Weasis modules and libraries
-(weasis-core, weasis-core-img, weasis-dicom-codec, and the other org.weasis artifacts) are
-under the same terms and are not listed again below.
+distribution). The Weasis modules and libraries (weasis-core, weasis-core-img,
+weasis-dicom-codec, and the other org.weasis artifacts) are under the same terms and are
+not listed again below.
+
+The program as a whole is distributed by Addis Ortho Trading PLC under the GNU General
+Public License version 3 (licenses/GPL-3.0.txt next to this file), because it includes
+CheckboxTree, which is licensed under the GNU General Public License version 2 or later.
+The Apache License 2.0 of the Weasis parts (licenses/Apache-2.0.txt) is compatible with
+it. The complete corresponding source code of every release is published at
+https://github.com/DrSamiOrtho/addisortho-dicom-viewer under the release tag.
 
 The viewer includes the third-party software listed below. Each component remains under its
 own licence. The full texts of the licences that need one are in the folder "licenses" next
-to this file (Apache-2.0, EPL-2.0, LGPL-2.1, LGPL-3.0 with GPL-3.0, and GPL-2.0 with the
+to this file (Apache-2.0, EPL-2.0, LGPL-2.1, LGPL-3.0, GPL-3.0, and GPL-2.0 with the
 Classpath Exception).
 
 Where a component is offered under several licences, this distribution uses it under the
-first licence that applies from this list: Apache-2.0, EPL-2.0, EDL-1.0 or BSD, LGPL.
+first licence that applies from this list: Apache-2.0, EPL-2.0, EDL-1.0 or BSD, LGPL, GPL.
+A component under the GPL version 2 or later is used under the GPL version 3.
 Libraries under the LGPL (version 2.1 or 3, as each project states) are included as separate
 library files, in binary form, as published by their authors or by the Weasis project. You
 may replace them with a modified version of the same library under the terms of the LGPL;

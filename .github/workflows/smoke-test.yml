@@ -1,18 +1,16 @@
 name: Smoke test installers (Addis Ortho DICOM Viewer)
 on:
+  # By hand: test the installers of any run of "Build installers (Addis Ortho DICOM Viewer)".
   workflow_dispatch:
     inputs:
       run_id:
         description: 'Run id of build-installer.yml whose macOS and Windows installer artifacts are tested'
-        required: false
-        default: '38505861654'
-      version:
-        description: 'Version in the installer artifact names'
-        required: false
-        default: '4.7.3'
-  push:
-    branches:
-      - addisortho/smoke-test
+        required: true
+  # Automatically: after a tag build (ao-*) succeeded, test the installers of that run. GitHub runs a
+  # workflow_run workflow from the default branch only, so this starts once the file is on main.
+  workflow_run:
+    workflows: ["Build installers (Addis Ortho DICOM Viewer)"]
+    types: [completed]
 
 # Reads the installer artifacts of another run; never writes to the repo.
 permissions:
@@ -20,8 +18,7 @@ permissions:
   contents: read
 
 env:
-  RUN_ID: ${{ inputs.run_id || '38505861654' }}
-  AO_VERSION: ${{ inputs.version || '4.7.3' }}
+  RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
 
 # Every check prints a "CHECK PASS|FAIL: name -- evidence" line instead of stopping the step; the
 # last step of each job fails the job if any check failed. Screenshots are printed to the job log as
@@ -29,6 +26,8 @@ env:
 # .github/scripts/smoke_helper.py), because artifacts cannot always be downloaded.
 jobs:
   linux-ui:
+    # A workflow_run starts for every build run; only a successful tag build (event push) is tested.
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -37,6 +36,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+          # the commit that was built (a workflow_run would otherwise check out the default branch)
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up JDK
         uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95  # v5.6.0
@@ -146,18 +147,24 @@ jobs:
             eval "$(xdotool getwindowgeometry --shell "$W")"
             echo "dialog window $W: ${WIDTH}x${HEIGHT}+${X}+${Y}"
             xdotool windowactivate "$W" 2>&1; sleep 1
+            # 'I accept' must be the default button: Return alone has to accept the disclaimer.
             xdotool key --clearmodifiers Return; sleep 3
             if disc_open; then
-              echo "Return did not close the disclaimer"
+              res FAIL disclaimer-default-button "Return did not close the dialog: 'I accept' is not the default button"
               xdotool key --clearmodifiers space; sleep 3
+            elif kill -0 $APP_PID 2>/dev/null; then
+              res PASS disclaimer-default-button "Return closed the dialog and the app kept running"
+              accepted="Return key"
+            else
+              res FAIL disclaimer-default-button "the app exited after Return: the default button is 'No'"
             fi
-            if disc_open; then
+            if [ -z "$accepted" ] && disc_open; then
               echo "space did not close it either; clicking 'I accept' (bottom right: 150 px left of the right edge, 46 px above the bottom)"
               xdotool mousemove $((X + WIDTH - 150)) $((Y + HEIGHT - 46)); sleep 1
               grab linux-1b-pointer-on-button
               xdotool click 1; sleep 3
               disc_open || accepted="mouse click"
-            else
+            elif [ -z "$accepted" ]; then
               accepted="keyboard"
             fi
           fi
@@ -237,6 +244,8 @@ jobs:
 
   macos:
     name: macos (${{ matrix.arch }})
+    # A workflow_run starts for every build run; only a successful tag build (event push) is tested.
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -251,11 +260,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+          # the commit that was built (a workflow_run would otherwise check out the default branch)
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Download the installer artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          name: addisortho-viewer-macosx-${{ matrix.arch }}-${{ env.AO_VERSION }}
+          pattern: addisortho-viewer-macosx-${{ matrix.arch }}-*
+          merge-multiple: true
           run-id: ${{ env.RUN_ID }}
           github-token: ${{ github.token }}
           path: dl
@@ -305,6 +317,15 @@ jobs:
           URLS=$($PB -c "Print :CFBundleURLTypes" "$P" 2>&1)
           [ "$ID" = "com.addisortho.viewer" ] && res PASS bundle-id "$ID" || res FAIL bundle-id "saw '$ID', expected com.addisortho.viewer"
           [ "$BN" = "Addis Ortho" ] && res PASS bundle-name "$BN" || res FAIL bundle-name "saw '$BN', expected 'Addis Ortho'"
+          COPY=$($PB -c "Print :NSHumanReadableCopyright" "$P" 2>&1)
+          WANT_COPY="© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-2026 Weasis Team"
+          [ "$COPY" = "$WANT_COPY" ] && res PASS bundle-copyright "$COPY" || res FAIL bundle-copyright "saw '$COPY', expected '$WANT_COPY'"
+          echo "--- launcher configuration (the java-options show the application menu name)"
+          for c in "$APP"/Contents/app/*.cfg; do echo "== $c"; cat "$c"; echo; done
+          grep -q -x "java-options=-Dapple.awt.application.name=Addis Ortho DICOM Viewer" "$APP/Contents/app/Addis Ortho Viewer.cfg" \
+            && res PASS cfg-app-name-main "java-options=-Dapple.awt.application.name=Addis Ortho DICOM Viewer" || res FAIL cfg-app-name-main "option missing or split at the spaces in Addis Ortho Viewer.cfg"
+          grep -q -x "java-options=-Dapple.awt.application.name=Addis Ortho Dicomizer" "$APP/Contents/app/Dicomizer.cfg" \
+            && res PASS cfg-app-name-dicomizer "java-options=-Dapple.awt.application.name=Addis Ortho Dicomizer" || res FAIL cfg-app-name-dicomizer "option missing or split at the spaces in Dicomizer.cfg"
           echo "$URLS" | grep -q "weasis-addisortho" && res PASS url-scheme "weasis-addisortho present" || res FAIL url-scheme "weasis-addisortho not in CFBundleURLTypes"
           echo "$URLS" | grep -q -E "^ +weasis$" && res FAIL url-scheme-clash "plain 'weasis' scheme registered" || res PASS url-scheme-clash "no plain 'weasis' scheme"
           if [ -f "$APP/Contents/Resources/$ICON" ] || [ -f "$APP/Contents/Resources/$ICON.icns" ]; then res PASS icon-file "$ICON found in Resources"; else res FAIL icon-file "$ICON not found in Resources"; fi
@@ -343,26 +364,28 @@ jobs:
           }
           EOF
           cat > "$RUNNER_TEMP/menus.applescript" <<'EOF'
-          tell application "System Events"
-            tell process "Addis Ortho Viewer"
-              set frontmost to true
-              set out to ""
-              repeat with mb in (menu bar items of menu bar 1)
-                try
-                  set out to out & (name of mb as text) & ": "
-                end try
-                try
-                  repeat with mi in (menu items of menu 1 of mb)
-                    try
-                      set out to out & (name of mi as text) & " | "
-                    end try
-                  end repeat
-                end try
-                set out to out & linefeed
-              end repeat
-              return out
+          on run argv
+            tell application "System Events"
+              tell process (item 1 of argv)
+                set frontmost to true
+                set out to ""
+                repeat with mb in (menu bar items of menu bar 1)
+                  try
+                    set out to out & (name of mb as text) & ": "
+                  end try
+                  try
+                    repeat with mi in (menu items of menu 1 of mb)
+                      try
+                        set out to out & (name of mi as text) & " | "
+                      end try
+                    end repeat
+                  end try
+                  set out to out & linefeed
+                end repeat
+                return out
+              end tell
             end tell
-          end tell
+          end run
           EOF
           cat > "$RUNNER_TEMP/about.applescript" <<'EOF'
           tell application "System Events"
@@ -397,15 +420,19 @@ jobs:
           echo "--- System Events processes"; osascript -e 'tell application "System Events" to get name of every process whose background only is false' 2>&1
           grab mac-1-disclaimer
 
-          echo "--- click 'I accept' (bottom right of the dialog; macOS shows 'No' first and focuses it)"
+          echo "--- Return must press 'I accept' (the default button)"
           read -r DW DH DX DY <<< "$(echo "$W" | grep 'title=First Time Launch' | head -1 | sed -E 's/.*\| ([0-9]+)x([0-9]+)\+(-?[0-9]+)\+(-?[0-9]+)$/\1 \2 \3 \4/')"
           echo "dialog ${DW}x${DH}+${DX}+${DY}"
-          key "click at {$((DX + DW - 53)), $((DY + DH - 25))}"; sleep 4
+          key "key code 36"; sleep 4
           if echo "$(wins)" | grep -q "title=First Time Launch"; then
-            echo "the click did not close it; Tab moves the focus to 'I accept', Space presses it"
-            key "key code 48"; sleep 2
-            grab mac-2-after-tab
-            key "keystroke \" \""; sleep 4
+            res FAIL disclaimer-default-button "Return did not close the dialog: 'I accept' is not the default button"
+            grab mac-2-after-return
+            echo "click 'I accept' instead (bottom right of the dialog)"
+            key "click at {$((DX + DW - 53)), $((DY + DH - 25))}"; sleep 4
+          elif kill -0 $APP_PID 2>/dev/null; then
+            res PASS disclaimer-default-button "Return closed the dialog and the app kept running"
+          else
+            res FAIL disclaimer-default-button "the app exited after Return: the default button is 'No'"
           fi
           echo "--- on-screen windows after accept"; W=$(wins); echo "$W"
           echo "$W" | grep -q "title=First Time Launch" && res FAIL disclaimer-accepted "dialog still on screen" || res PASS disclaimer-accepted "dialog gone"
@@ -421,7 +448,14 @@ jobs:
           sleep 20
           grab mac-4-main-after-local-load
 
-          echo "--- menu bar contents"; osascript "$RUNNER_TEMP/menus.applescript" 2>&1
+          echo "--- menu bar contents"; MENUS=$(osascript "$RUNNER_TEMP/menus.applescript" "Addis Ortho Viewer" 2>&1); echo "$MENUS"
+          APPM=$(echo "$MENUS" | grep '^Addis Ortho:')
+          if echo "$APPM" | grep -q "AppLauncher"; then res FAIL app-menu-name "$APPM"
+          elif echo "$APPM" | grep -q "About Addis Ortho DICOM Viewer" && echo "$APPM" | grep -q "Hide Addis Ortho DICOM Viewer" && echo "$APPM" | grep -q "Quit Addis Ortho DICOM Viewer"; then res PASS app-menu-name "$APPM"
+          else res FAIL app-menu-name "unexpected application menu: $APPM"; fi
+          HELPM=$(echo "$MENUS" | grep '^Help:')
+          if echo "$HELPM" | grep -q -i -E "Check for Updates|Submit a Bug Report|Release Notes"; then res FAIL help-menu "upstream item present: $HELPM"
+          else res PASS help-menu "no update check, bug report or release notes: $HELPM"; fi
           echo "--- open the application menu"
           osascript -e 'tell application "System Events" to tell process "Addis Ortho Viewer" to click menu bar item 2 of menu bar 1' 2>&1; sleep 2
           grab mac-5-app-menu
@@ -440,6 +474,22 @@ jobs:
           kill $APP_PID 2>/dev/null; sleep 8; pkill -9 -f "Addis Ortho Viewer.app" 2>/dev/null
           echo "--- app stdout/stderr, without stack frames ($(wc -l < "$RUNNER_TEMP/app.out") lines in total)"
           grep -v -E "^\s+at |Unregister|Deactivate" "$RUNNER_TEMP/app.out" | cut -c1-300 | head -400
+
+          echo "--- Dicomizer launcher: application menu"
+          "$APP/Contents/MacOS/Dicomizer" > "$RUNNER_TEMP/dicomizer.out" 2>&1 &
+          DZ_PID=$!
+          sleep 45
+          if kill -0 $DZ_PID 2>/dev/null; then res PASS dicomizer-alive "pid $DZ_PID alive after 45 s"; else res FAIL dicomizer-alive "pid $DZ_PID exited"; fi
+          echo "--- on-screen windows"; wins
+          DMENUS=$(osascript "$RUNNER_TEMP/menus.applescript" "Dicomizer" 2>&1); echo "$DMENUS"
+          DAPPM=$(echo "$DMENUS" | grep '^Addis Ortho:')
+          osascript -e 'tell application "System Events" to tell process "Dicomizer" to click menu bar item 2 of menu bar 1' 2>&1; sleep 2
+          grab mac-7-dicomizer-app-menu
+          if echo "$DAPPM" | grep -q "AppLauncher"; then res FAIL dicomizer-app-menu-name "$DAPPM"
+          elif echo "$DAPPM" | grep -q "About Addis Ortho Dicomizer" && echo "$DAPPM" | grep -q "Quit Addis Ortho Dicomizer"; then res PASS dicomizer-app-menu-name "$DAPPM"
+          else res FAIL dicomizer-app-menu-name "unexpected application menu: $DAPPM"; fi
+          kill $DZ_PID 2>/dev/null; sleep 5; pkill -9 -f "Addis Ortho Viewer.app" 2>/dev/null
+          grep -v -E "^\s+at |Unregister|Deactivate" "$RUNNER_TEMP/dicomizer.out" | cut -c1-300 | head -60
           exit 0
 
       - name: Print logs and package receipts
@@ -486,17 +536,22 @@ jobs:
           if [ ! -s "$RUNNER_TEMP/results.txt" ] || grep -q "CHECK FAIL" "$RUNNER_TEMP/results.txt"; then exit 1; fi
 
   windows:
+    # A workflow_run starts for every build run; only a successful tag build (event push) is tested.
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+          # the commit that was built (a workflow_run would otherwise check out the default branch)
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Download the installer artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          name: addisortho-viewer-windows-x86-64-${{ env.AO_VERSION }}
+          pattern: addisortho-viewer-windows-x86-64-*
+          merge-multiple: true
           run-id: ${{ env.RUN_ID }}
           github-token: ${{ github.token }}
           path: dl
@@ -596,6 +651,12 @@ jobs:
           $vi = (Get-Item $exe -ErrorAction SilentlyContinue).VersionInfo
           $vi | Format-List CompanyName, ProductName, FileDescription, FileVersion, ProductVersion, LegalCopyright, OriginalFilename, InternalName | Out-String | Write-Host
           if ($vi.CompanyName -eq 'Addis Ortho Trading PLC') { Res PASS exe-vendor $vi.CompanyName } else { Res FAIL exe-vendor "saw '$($vi.CompanyName)', expected 'Addis Ortho Trading PLC'" }
+          $c = [string][char]0x00A9
+          $wantCopy = "$c 2026 Addis Ortho Trading PLC. Based on Weasis $c 2009-2026 Weasis Team"
+          if ($vi.LegalCopyright -eq $wantCopy) { Res PASS exe-copyright $vi.LegalCopyright } else { Res FAIL exe-copyright "saw '$($vi.LegalCopyright)' ($([string]::Join(' ', ($vi.LegalCopyright.ToCharArray() | Select-Object -First 3 | ForEach-Object { [int]$_ })))), expected '$wantCopy'" }
+          if ($vi.FileDescription -eq 'Addis Ortho DICOM Viewer') { Res PASS exe-description $vi.FileDescription } else { Res FAIL exe-description "saw '$($vi.FileDescription)', expected 'Addis Ortho DICOM Viewer'" }
+          $dvi = (Get-Item (Join-Path $dir 'Dicomizer.exe') -ErrorAction SilentlyContinue).VersionInfo
+          if ($dvi.CompanyName -eq 'Addis Ortho Trading PLC') { Res PASS dicomizer-exe-vendor $dvi.CompanyName } else { Res FAIL dicomizer-exe-vendor "saw '$($dvi.CompanyName)'" }
           "--- reg query HKCR\weasis-addisortho /s"
           $reg = (& reg query 'HKCR\weasis-addisortho' /s 2>&1 | Out-String)
           $regRc = $LASTEXITCODE
@@ -662,15 +723,21 @@ jobs:
           $accepted = ''
           if ($disc -match 'rect=(-?\d+),(-?\d+) (\d+)x(\d+)') {
             $dx = [int]$Matches[1]; $dy = [int]$Matches[2]; $dw = [int]$Matches[3]; $dh = [int]$Matches[4]
-            "dialog ${dw}x${dh}+${dx}+${dy}; clicking 'I accept' (139 px left of the right edge, 33 px above the bottom of the window rectangle)"
-            [WinList]::Click($dx + $dw - 139, $dy + $dh - 33); Start-Sleep -Seconds 3
+            "dialog ${dw}x${dh}+${dx}+${dy}; Enter must press 'I accept' (the default button)"
+            $wsh.AppActivate('First Time Launch') | Out-Null; Start-Sleep -Seconds 1
+            [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Seconds 4
             if (Get-Wins | Where-Object { $_ -match 'First Time Launch' }) {
-              "the click did not close it; Enter on the focused button"
-              Shot 'win-1b-after-click'
-              $wsh.AppActivate('First Time Launch') | Out-Null; Start-Sleep -Seconds 1
-              [System.Windows.Forms.SendKeys]::SendWait(' '); Start-Sleep -Seconds 3
-              if (-not (Get-Wins | Where-Object { $_ -match 'First Time Launch' })) { $accepted = 'space' }
-            } else { $accepted = 'mouse click' }
+              Res FAIL disclaimer-default-button "Enter did not close the dialog: 'I accept' is not the default button"
+              Shot 'win-1b-after-enter'
+              "clicking 'I accept' instead (139 px left of the right edge, 33 px above the bottom of the window rectangle)"
+              [WinList]::Click($dx + $dw - 139, $dy + $dh - 33); Start-Sleep -Seconds 3
+              if (-not (Get-Wins | Where-Object { $_ -match 'First Time Launch' })) { $accepted = 'mouse click' }
+            } elseif (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue) {
+              Res PASS disclaimer-default-button "Enter closed the dialog and the app kept running"
+              $accepted = 'Enter key'
+            } else {
+              Res FAIL disclaimer-default-button "the app exited after Enter: the default button is 'No'"
+            }
           }
           if ($accepted) { Res PASS disclaimer-accepted "closed with $accepted" } else { Res FAIL disclaimer-accepted "dialog still open" }
           $main = $null
