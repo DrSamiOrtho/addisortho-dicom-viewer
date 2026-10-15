@@ -1730,13 +1730,113 @@ public class View3d extends VolumeCanvas
         renderingLayer.getOpacity());
   }
 
-  /** The voxel values of the displayed volume, in the units the window/level applies to. */
+  /**
+   * The field the renderer samples, texture voxel by texture voxel: the volume as uploaded, scaled
+   * and smoothed as the texture is. A new instance per operation; its slices are made on demand.
+   */
   public VoxelSampler voxelSampler() {
-    Volume<?, ?> volume = volTexture == null ? null : volTexture.getVolume();
+    DicomVolTexture tex = volTexture;
+    Volume<?, ?> volume = tex == null ? null : tex.getVolume();
     if (volume == null) {
       return (x, y, z) -> Double.NaN;
     }
-    return (x, y, z) -> volume.getNearestDouble(x, y, z, 0);
+    Vector3d texel = tex.getTexelSize();
+    VolumeSmoother smoother =
+        TextureField.smootherOf(
+            isUploadSmoothed(tex), tex.getWidth(), tex.getHeight(), texel.x, texel.z);
+    return new TextureField(
+        new VolumeSliceSource(volume),
+        new Vector3i(tex.getWidth(), tex.getHeight(), tex.getDepth()),
+        smoother);
+  }
+
+  /** Whether VolumeBuilder smooths this texture: a smoothed, single-channel, 16-bit volume. */
+  private static boolean isUploadSmoothed(DicomVolTexture tex) {
+    int cvType = tex.getVolume().getCvType();
+    int depth = org.opencv.core.CvType.depth(cvType);
+    return tex.isSmoothing()
+        && org.opencv.core.CvType.channels(cvType) == 1
+        && (depth == org.opencv.core.CvType.CV_16S || depth == org.opencv.core.CvType.CV_16U);
+  }
+
+  /** The axial slices of the CPU volume as the upload reads them, one at a time. */
+  private static final class VolumeSliceSource implements TextureField.SliceSource {
+    private final Volume<?, ?> volume;
+    private final int cvDepth;
+    private final int channels;
+
+    VolumeSliceSource(Volume<?, ?> volume) {
+      this.volume = volume;
+      this.cvDepth = org.opencv.core.CvType.depth(volume.getCvType());
+      this.channels = org.opencv.core.CvType.channels(volume.getCvType());
+    }
+
+    @Override
+    public int width() {
+      return volume.getSizeX();
+    }
+
+    @Override
+    public int height() {
+      return volume.getSizeY();
+    }
+
+    @Override
+    public int depth() {
+      return volume.getSizeZ();
+    }
+
+    @Override
+    public int unsignedOffset() {
+      return cvDepth == org.opencv.core.CvType.CV_16S ? 32768 : 0;
+    }
+
+    @Override
+    public float[] slice(int z) {
+      int n = width() * height();
+      float[] out = new float[n];
+      if (channels != 1) {
+        // A colour volume is windowed on its luminance in the shaders.
+        for (int y = 0; y < height(); y++) {
+          for (int x = 0; x < width(); x++) {
+            out[y * width() + x] = (float) volume.getNearestDouble(x, y, z, 0);
+          }
+        }
+        return out;
+      }
+      PlanarImage image = volume.getAxialSlice(z);
+      try {
+        switch (cvDepth) {
+          case org.opencv.core.CvType.CV_16S, org.opencv.core.CvType.CV_16U -> {
+            short[] data = new short[n];
+            image.get(0, 0, data);
+            boolean signed = cvDepth == org.opencv.core.CvType.CV_16S;
+            for (int i = 0; i < n; i++) {
+              out[i] = signed ? data[i] : data[i] & 0xFFFF;
+            }
+          }
+          case org.opencv.core.CvType.CV_8U, org.opencv.core.CvType.CV_8S -> {
+            byte[] data = new byte[n];
+            image.get(0, 0, data);
+            boolean signed = cvDepth == org.opencv.core.CvType.CV_8S;
+            for (int i = 0; i < n; i++) {
+              out[i] = signed ? data[i] : data[i] & 0xFF;
+            }
+          }
+          case org.opencv.core.CvType.CV_32F -> image.get(0, 0, out);
+          default -> {
+            for (int y = 0; y < height(); y++) {
+              for (int x = 0; x < width(); x++) {
+                out[y * width() + x] = (float) volume.getNearestDouble(x, y, z, 0);
+              }
+            }
+          }
+        }
+      } finally {
+        image.release();
+      }
+      return out;
+    }
   }
 
   /** Whether a texture coordinate is removed by the cuts or the MPR crosshair cut. */

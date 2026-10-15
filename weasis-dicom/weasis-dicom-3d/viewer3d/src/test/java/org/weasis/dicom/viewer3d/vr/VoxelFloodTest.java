@@ -38,11 +38,12 @@ class VoxelFloodTest {
     return cubeA || cubeB || bridge;
   }
 
-  /** The grid voxel of a volume voxel: the flood works on the grid, whose z is reversed. */
-  private static Vector3i gridOf(int vx, int vy, int vz) {
-    return SPACE.gridOfVolume(vx, vy, vz, new Vector3i());
+  /** The flood works on the mask grid, which is the texture here: indices are texture voxels. */
+  private static Vector3i gridOf(int x, int y, int z) {
+    return new Vector3i(x, y, z);
   }
 
+  /** The texture field: the solid shapes, in texture voxel indices. */
   private static final VoxelSampler VOLUME =
       (x, y, z) -> {
         if (x < 0 || y < 0 || z < 0 || x >= N || y >= N || z >= N) {

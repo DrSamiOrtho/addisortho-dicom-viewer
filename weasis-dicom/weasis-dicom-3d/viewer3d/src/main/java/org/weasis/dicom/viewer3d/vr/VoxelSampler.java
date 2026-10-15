@@ -10,13 +10,16 @@
 // Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.vr;
 
-/** Voxel values of the CPU volume, in the units the preset and window/level apply to (HU). */
+/**
+ * Values of the texture voxels, in the units the preset and window/level apply to (HU): the field
+ * the renderer samples, see {@link TextureField}.
+ */
 public interface VoxelSampler {
 
-  /** Value of the voxel {@code (x, y, z)} of the volume, {@link Double#NaN} outside it. */
+  /** Value of the texture voxel {@code (x, y, z)}, {@link Double#NaN} outside the texture. */
   double valueAt(int x, int y, int z);
 
-  /** Trilinear value at a fractional voxel coordinate, {@link Double#NaN} outside the volume. */
+  /** Trilinear value at a fractional texture voxel, as GL_LINEAR, {@link Double#NaN} outside. */
   default double interpolate(double x, double y, double z) {
     int x0 = (int) Math.floor(x);
     int y0 = (int) Math.floor(y);

@@ -91,7 +91,7 @@ public final class VoxelFlood {
    * Grows the structure of {@code seed}.
    *
    * @param kept the voxels shown; the region stays inside them
-   * @param sampler the volume values
+   * @param sampler the texture's values, see {@link TextureField}
    * @param threshold lowest value taken into the region
    * @param seed the picked grid voxel; the nearest shown voxel above the threshold within a few
    *     voxels is taken when it is below
@@ -179,10 +179,11 @@ public final class VoxelFlood {
     return b.build();
   }
 
+  /** The value of the texture voxel at the centre of a grid voxel. */
   private static double valueOfGrid(VolumeSpace space, VoxelSampler sampler, int x, int y, int z) {
     Vector3d t = space.texCoordOfGrid(x, y, z, new Vector3d());
-    Vector3d v = space.volumeOfTexCoord(t, new Vector3d());
-    return sampler.valueAt((int) Math.round(v.x), (int) Math.round(v.y), (int) Math.round(v.z));
+    Vector3i v = space.textureVoxelOf(t, new Vector3i());
+    return sampler.valueAt(v.x, v.y, v.z);
   }
 
   private static boolean qualifies(

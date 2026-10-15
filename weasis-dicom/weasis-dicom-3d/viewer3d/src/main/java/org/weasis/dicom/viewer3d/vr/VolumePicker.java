@@ -100,7 +100,7 @@ public final class VolumePicker {
     double step = 0.5 * Math.min(voxel.x, Math.min(voxel.y, voxel.z));
     Vector3d world = new Vector3d();
     Vector3d tex = new Vector3d();
-    Vector3d vol = new Vector3d();
+    Vector3d texVoxel = new Vector3d();
     double accumulated = 0.0;
     double previous = tmin;
     for (double t = tmin + step * 0.5; t <= tmax; t += step) {
@@ -110,8 +110,9 @@ public final class VolumePicker {
         previous = t;
         continue;
       }
-      space.volumeOfTexCoord(tex, vol);
-      double value = sampler.interpolate(vol.x, vol.y, vol.z);
+      // The texture's own voxels, trilinearly as the sampler of the shaders.
+      space.textureVoxelOfTexCoord(tex, texVoxel);
+      double value = sampler.interpolate(texVoxel.x, texVoxel.y, texVoxel.z);
       if (Double.isNaN(value)) {
         previous = t;
         continue;
@@ -125,7 +126,8 @@ public final class VolumePicker {
         accumulated += (1.0 - accumulated) * corrected;
         if (accumulated >= HIT_OPACITY) {
           Vector3i grid = space.gridOfTexCoord(tex, new Vector3i());
-          return Optional.of(new Hit(new Vector3d(tex), grid, new Vector3d(vol), t));
+          Vector3d vol = space.volumeOfTexCoord(tex, new Vector3d());
+          return Optional.of(new Hit(new Vector3d(tex), grid, vol, t));
         }
       }
       previous = t;
