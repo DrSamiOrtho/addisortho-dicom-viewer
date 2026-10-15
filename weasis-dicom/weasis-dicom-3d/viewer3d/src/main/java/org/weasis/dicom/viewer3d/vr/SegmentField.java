@@ -13,15 +13,24 @@ package org.weasis.dicom.viewer3d.vr;
 import org.joml.Vector3d;
 
 /**
- * Where the visible segments are, for the CPU picking and selection: the segmentation texture of
- * the shaders with the visibility of the segment colour LUT applied, see {@link SegVolumeField}.
+ * Where the visible segments are and how opaque they are drawn, for the CPU picking and selection:
+ * the segmentation of the shaders, label voxels or smoothed occupancy as the renderer has it, with
+ * the colour LUT the user set, see {@link SegVolumeField}.
  */
 @FunctionalInterface
 public interface SegmentField {
 
+  /**
+   * Opacity, in [0, 1], of the visible segment at the texture coordinate as its colour LUT entry
+   * gives it; 0 outside every visible segment.
+   */
+  double opacity(Vector3d texCoord);
+
   /** Whether the texture coordinate lies in a segment the user has visible. */
-  boolean insideVisible(Vector3d texCoord);
+  default boolean insideVisible(Vector3d texCoord) {
+    return opacity(texCoord) > 0;
+  }
 
   /** No segmentation: nothing is inside. */
-  SegmentField NONE = t -> false;
+  SegmentField NONE = t -> 0;
 }

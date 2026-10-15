@@ -270,7 +270,7 @@ class VoxelFloodTest {
     // Mask include with a segment over cube A only: cube B and the bridge are not shown, so the
     // selection from A stops at the segment's edge even though the bridge joins the cubes.
     VolumeSpace space = SPACE;
-    SegmentField overA = t -> t.x * N < 10;
+    SegmentField overA = t -> t.x * N < 10 ? 1.0 : 0.0;
     VoxelFlood.Visibility shown =
         (x, y, z, v) -> {
           if (v < 200) {

@@ -77,6 +77,9 @@ public final class SegVolumeTexture {
   private boolean needsColorUpdate = true;
   private byte[] pendingColorLut;
 
+  /** The last LUT the visibility was taken from, see {@link #getColorLut()}. */
+  private volatile byte[] currentColorLut;
+
   /**
    * Storage width the texture was allocated with, captured in {@link #init(GL2ES2)} so that {@link
    * #uploadVolumeData(GL2ES2)} always transfers in the format the texture was created for.
@@ -392,6 +395,12 @@ public final class SegVolumeTexture {
     return lutVisibleIds.clone();
   }
 
+  /** The segment colour LUT the user set, RGBA bytes by storage ID, for the CPU picking. */
+  public byte[] getColorLut() {
+    byte[] lut = currentColorLut;
+    return lut == null ? new byte[0] : lut.clone();
+  }
+
   /** Returns the scale factors for mapping between segVolume and DicomVolTexture coordinates. */
   public Vector3d getScale() {
     return new Vector3d(scale);
@@ -472,6 +481,7 @@ public final class SegVolumeTexture {
   }
 
   private synchronized void updateVisibility(byte[] colorLut) {
+    currentColorLut = colorLut;
     boolean[] visible = SegOccupancy.visibleIds(colorLut);
     if (!Arrays.equals(visible, lutVisibleIds)) {
       lutVisibleIds = visible;

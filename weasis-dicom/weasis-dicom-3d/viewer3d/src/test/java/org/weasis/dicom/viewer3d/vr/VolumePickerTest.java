@@ -157,9 +157,9 @@ class VolumePickerTest {
       (x, y, z) -> x < 0 || y < 0 || z < 0 || x >= N || y >= N || z >= N ? Double.NaN : 0;
 
   /** A segment filling the front half of the texture (z < 0.5), another one the back half. */
-  private static final SegmentField FRONT = t -> t.z < 0.5;
+  private static final SegmentField FRONT = t -> t.z < 0.5 ? 1.0 : 0.0;
 
-  private static final SegmentField BACK = t -> t.z >= 0.5;
+  private static final SegmentField BACK = t -> t.z >= 0.5 ? 1.0 : 0.0;
 
   private static double depthOf(VolumePicker picker) {
     return picker

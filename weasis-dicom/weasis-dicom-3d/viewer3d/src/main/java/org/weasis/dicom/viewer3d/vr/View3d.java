@@ -1860,7 +1860,9 @@ public class View3d extends VolumeCanvas
     if (svt == null || !isSegTextureActive() || svt.getSegVolume().isDisposed()) {
       return SegmentField.NONE;
     }
-    return new SegVolumeField(svt.getSegVolume(), svt.getVisibleIds());
+    // The smooth surfaces are rendered only once their occupancy matches this visibility, which
+    // is exactly when the CPU field must read the occupancy too.
+    return new SegVolumeField(svt.getSegVolume(), svt.getColorLut(), isSegSmoothReady());
   }
 
   /**
