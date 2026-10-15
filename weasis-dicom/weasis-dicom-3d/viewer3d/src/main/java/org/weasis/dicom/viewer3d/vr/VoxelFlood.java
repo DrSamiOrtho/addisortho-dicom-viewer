@@ -297,8 +297,11 @@ public final class VoxelFlood {
         IntQueue queue;
         while ((queue = pending[z]) != null) {
           pending[z] = null;
-          drain(queue, z, space, kept, sampler, visible, tested, grown, pending, budget);
-          queue.free();
+          try {
+            drain(queue, z, space, kept, sampler, visible, tested, grown, pending, budget);
+          } finally {
+            queue.free();
+          }
         }
       }
       upwards = !upwards;
@@ -417,30 +420,34 @@ public final class VoxelFlood {
       }
       boolean[] outside = new boolean[bw * bh];
       IntQueue queue = new IntQueue(2 * (bw + bh), budget);
-      for (int x = 0; x < bw; x++) {
-        reach(mask, box, outside, queue, x, 0, z, bw);
-        reach(mask, box, outside, queue, x, bh - 1, z, bw);
-      }
-      for (int y = 0; y < bh; y++) {
-        reach(mask, box, outside, queue, 0, y, z, bw);
-        reach(mask, box, outside, queue, bw - 1, y, z, bw);
-      }
-      while (!queue.isEmpty()) {
-        int i = queue.poll();
-        int x = i % bw;
-        int y = i / bw;
-        if (x > 0) {
-          reach(mask, box, outside, queue, x - 1, y, z, bw);
+      try {
+        for (int x = 0; x < bw; x++) {
+          reach(mask, box, outside, queue, x, 0, z, bw);
+          reach(mask, box, outside, queue, x, bh - 1, z, bw);
         }
-        if (x < bw - 1) {
-          reach(mask, box, outside, queue, x + 1, y, z, bw);
+        for (int y = 0; y < bh; y++) {
+          reach(mask, box, outside, queue, 0, y, z, bw);
+          reach(mask, box, outside, queue, bw - 1, y, z, bw);
         }
-        if (y > 0) {
-          reach(mask, box, outside, queue, x, y - 1, z, bw);
+        while (!queue.isEmpty()) {
+          int i = queue.poll();
+          int x = i % bw;
+          int y = i / bw;
+          if (x > 0) {
+            reach(mask, box, outside, queue, x - 1, y, z, bw);
+          }
+          if (x < bw - 1) {
+            reach(mask, box, outside, queue, x + 1, y, z, bw);
+          }
+          if (y > 0) {
+            reach(mask, box, outside, queue, x, y - 1, z, bw);
+          }
+          if (y < bh - 1) {
+            reach(mask, box, outside, queue, x, y + 1, z, bw);
+          }
         }
-        if (y < bh - 1) {
-          reach(mask, box, outside, queue, x, y + 1, z, bw);
-        }
+      } finally {
+        queue.free();
       }
       for (int y = 0; y < bh; y++) {
         for (int x = 0; x < bw; x++) {
@@ -498,30 +505,34 @@ public final class VoxelFlood {
     int sx = within.sizeX();
     int sy = within.sizeY();
     VoxelBits seen = new VoxelBits(sx, sy, within.sizeZ());
-    IntQueue queue = new IntQueue(1 << 12, budget);
     if (!inside(within, start.x, start.y, start.z)) {
       return null;
     }
-    seen.set(start.x, start.y, start.z);
-    queue.add(start.x + sx * (start.y + sy * start.z));
-    while (!queue.isEmpty()) {
-      int i = queue.poll();
-      int x = i % sx;
-      int y = (i / sx) % sy;
-      int z = i / sx / sy;
-      if (target.get(x, y, z)) {
-        return new Vector3i(x, y, z);
-      }
-      for (int[] n : NEIGHBOURS) {
-        int nx = x + n[0];
-        int ny = y + n[1];
-        int nz = z + n[2];
-        if (inside(within, nx, ny, nz) && within.get(nx, ny, nz) && seen.testAndSet(nx, ny, nz)) {
-          queue.add(nx + sx * (ny + sy * nz));
+    IntQueue queue = new IntQueue(1 << 12, budget);
+    try {
+      seen.set(start.x, start.y, start.z);
+      queue.add(start.x + sx * (start.y + sy * start.z));
+      while (!queue.isEmpty()) {
+        int i = queue.poll();
+        int x = i % sx;
+        int y = (i / sx) % sy;
+        int z = i / sx / sy;
+        if (target.get(x, y, z)) {
+          return new Vector3i(x, y, z);
+        }
+        for (int[] n : NEIGHBOURS) {
+          int nx = x + n[0];
+          int ny = y + n[1];
+          int nz = z + n[2];
+          if (inside(within, nx, ny, nz) && within.get(nx, ny, nz) && seen.testAndSet(nx, ny, nz)) {
+            queue.add(nx + sx * (ny + sy * nz));
+          }
         }
       }
+      return null;
+    } finally {
+      queue.free();
     }
-    return null;
   }
 
   /** 6-connected flood of the set voxels of {@code mask} from {@code start} into {@code marks}. */
@@ -530,21 +541,25 @@ public final class VoxelFlood {
     int sx = mask.sizeX();
     int sy = mask.sizeY();
     IntQueue queue = new IntQueue(1 << 12, budget);
-    marks.set(start.x, start.y, start.z);
-    queue.add(start.x + sx * (start.y + sy * start.z));
-    while (!queue.isEmpty()) {
-      int i = queue.poll();
-      int x = i % sx;
-      int y = (i / sx) % sy;
-      int z = i / sx / sy;
-      for (int[] n : NEIGHBOURS) {
-        int nx = x + n[0];
-        int ny = y + n[1];
-        int nz = z + n[2];
-        if (inside(mask, nx, ny, nz) && mask.get(nx, ny, nz) && marks.testAndSet(nx, ny, nz)) {
-          queue.add(nx + sx * (ny + sy * nz));
+    try {
+      marks.set(start.x, start.y, start.z);
+      queue.add(start.x + sx * (start.y + sy * start.z));
+      while (!queue.isEmpty()) {
+        int i = queue.poll();
+        int x = i % sx;
+        int y = (i / sx) % sy;
+        int z = i / sx / sy;
+        for (int[] n : NEIGHBOURS) {
+          int nx = x + n[0];
+          int ny = y + n[1];
+          int nz = z + n[2];
+          if (inside(mask, nx, ny, nz) && mask.get(nx, ny, nz) && marks.testAndSet(nx, ny, nz)) {
+            queue.add(nx + sx * (ny + sy * nz));
+          }
         }
       }
+    } finally {
+      queue.free();
     }
   }
 
@@ -562,43 +577,49 @@ public final class VoxelFlood {
     VoxelBits reached = new VoxelBits(sx, sy, solid.sizeZ());
     VoxelBits mine = new VoxelBits(sx, sy, solid.sizeZ());
     IntQueue queue = new IntQueue(1 << 16, budget);
-    for (int z = box.z0; z <= box.z1; z++) {
-      if (core.countSlice(z) == 0) {
-        continue;
-      }
-      for (int y = box.y0; y <= box.y1; y++) {
-        for (int x = box.x0; x <= box.x1; x++) {
-          if (core.get(x, y, z)) {
-            reached.set(x, y, z);
-            if (seeded.get(x, y, z)) {
-              mine.set(x, y, z);
-            }
-            if (touchesFree(solid, core, x, y, z)) {
-              queue.add(x + sx * (y + sy * z));
+    try {
+      for (int z = box.z0; z <= box.z1; z++) {
+        if (core.countSlice(z) == 0) {
+          continue;
+        }
+        for (int y = box.y0; y <= box.y1; y++) {
+          for (int x = box.x0; x <= box.x1; x++) {
+            if (core.get(x, y, z)) {
+              reached.set(x, y, z);
+              if (seeded.get(x, y, z)) {
+                mine.set(x, y, z);
+              }
+              if (touchesFree(solid, core, x, y, z)) {
+                queue.add(x + sx * (y + sy * z));
+              }
             }
           }
         }
       }
-    }
-    while (!queue.isEmpty()) {
-      int i = queue.poll();
-      int x = i % sx;
-      int y = (i / sx) % sy;
-      int z = i / sx / sy;
-      boolean own = mine.get(x, y, z);
-      for (int[] n : NEIGHBOURS) {
-        int nx = x + n[0];
-        int ny = y + n[1];
-        int nz = z + n[2];
-        if (inside(solid, nx, ny, nz) && solid.get(nx, ny, nz) && reached.testAndSet(nx, ny, nz)) {
-          if (own) {
-            mine.set(nx, ny, nz);
+      while (!queue.isEmpty()) {
+        int i = queue.poll();
+        int x = i % sx;
+        int y = (i / sx) % sy;
+        int z = i / sx / sy;
+        boolean own = mine.get(x, y, z);
+        for (int[] n : NEIGHBOURS) {
+          int nx = x + n[0];
+          int ny = y + n[1];
+          int nz = z + n[2];
+          if (inside(solid, nx, ny, nz)
+              && solid.get(nx, ny, nz)
+              && reached.testAndSet(nx, ny, nz)) {
+            if (own) {
+              mine.set(nx, ny, nz);
+            }
+            queue.add(nx + sx * (ny + sy * nz));
           }
-          queue.add(nx + sx * (ny + sy * nz));
         }
       }
+      return mine;
+    } finally {
+      queue.free();
     }
-    return mine;
   }
 
   /** Whether a face neighbour of the voxel is in {@code solid} but not in {@code core}. */

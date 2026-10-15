@@ -323,4 +323,41 @@ class VoxelFloodTest {
     assertTrue(r.peakBytes() < bits + (long) (d - 2) * sliceQueue, "no queue per slice retained");
     assertEquals(bits, budget.used(), "every queue was given back");
   }
+
+  @Test
+  void separationReleasesEveryQueueSoABudgetOfItsPeakSuffices() {
+    WorkingMemory generous = new WorkingMemory(256L << 20);
+    Result first =
+        VoxelFlood.grow(SPACE, allKept(), VOLUME, ABOVE_200, gridOf(4, 12, 12), 2, generous)
+            .orElseThrow();
+    assertTrue(first.separated());
+    // Nothing but the bit volumes and the sampler ceiling is still reserved when it is over.
+    assertEquals(VoxelFlood.workingBytes(allKept(), 2), generous.used());
+    // The same selection within a budget of exactly its peak live set fits: no reservation of a
+    // dead queue (holes filling, the core search, the regrow) lingers to push it over.
+    WorkingMemory exact = new WorkingMemory(first.peakBytes());
+    Result again =
+        VoxelFlood.grow(SPACE, allKept(), VOLUME, ABOVE_200, gridOf(4, 12, 12), 2, exact)
+            .orElseThrow();
+    assertEquals(first.voxels(), again.voxels());
+    assertEquals(first.peakBytes(), again.peakBytes());
+    assertTrue(
+        new WorkingMemory(first.peakBytes() - 1).limit() < first.peakBytes()
+            && assertThrowsBudget(first.peakBytes() - 1));
+  }
+
+  private static boolean assertThrowsBudget(long limit) {
+    assertThrows(
+        VoxelFlood.BudgetException.class,
+        () ->
+            VoxelFlood.grow(
+                SPACE,
+                allKept(),
+                VOLUME,
+                ABOVE_200,
+                gridOf(4, 12, 12),
+                2,
+                new WorkingMemory(limit)));
+    return true;
+  }
 }
