@@ -10,8 +10,10 @@
 // Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.vr;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Optional;
@@ -134,5 +136,58 @@ class VoxelFloodTest {
     assertEquals(120 + 0.02 * 380, threshold, 3.0);
     assertEquals(0.0, tf.opacity(0), 1e-6);
     assertEquals(1.0, tf.opacity(1200), 1e-6);
+  }
+
+  @Test
+  void regrowStartsFromTheCoresSurfaceNotItsBulk() {
+    // A solid 10x10x10 cube; its core eroded by one voxel is 8x8x8 = 512 voxels, of which only
+    // the 512 - 6^3 = 296 on the surface touch a free voxel and start the front.
+    VoxelBits solid = new VoxelBits(14, 14, 14);
+    VoxelBits core = new VoxelBits(14, 14, 14);
+    for (int z = 2; z < 12; z++) {
+      for (int y = 2; y < 12; y++) {
+        for (int x = 2; x < 12; x++) {
+          solid.set(x, y, z);
+          if (x > 2 && x < 11 && y > 2 && y < 11 && z > 2 && z < 11) {
+            core.set(x, y, z);
+          }
+        }
+      }
+    }
+    assertEquals(512, core.count());
+    assertEquals(
+        296, VoxelFlood.countRegrowSeeds(solid, core, new VoxelFlood.Box(0, 13, 0, 13, 0, 13)));
+  }
+
+  @Test
+  void workingMemoryIsBudgetedBeforeAnythingIsAllocated() {
+    VoxelBits kept = new VoxelBits(512, 512, 660);
+    long flood = VoxelFlood.workingBytes(kept, 0);
+    long separated = VoxelFlood.workingBytes(kept, 2);
+    // 173M voxels: 21.6 MB per bit volume, 2 for the flood and 8 with the separation.
+    assertEquals(2 * kept.bytes() + (4L << 16), flood);
+    assertEquals(8 * kept.bytes() + (4L << 16), separated);
+    assertTrue(separated < 200L << 20);
+    assertDoesNotThrow(
+        () -> VoxelFlood.checkBudget(separated, separated + VoxelFlood.HEADROOM_BYTES));
+    VoxelFlood.BudgetException e =
+        assertThrows(
+            VoxelFlood.BudgetException.class,
+            () -> VoxelFlood.checkBudget(separated, separated + VoxelFlood.HEADROOM_BYTES - 1));
+    assertEquals(separated, e.neededBytes());
+    assertTrue(e.getMessage().contains("MB"));
+  }
+
+  @Test
+  void aFrontBeyondTheQueueCapIsRefusedNotGrownWithoutBound() {
+    VoxelFlood.IntQueue queue = new VoxelFlood.IntQueue(16);
+    for (int i = 0; i < 1000; i++) {
+      queue.add(i);
+    }
+    for (int i = 0; i < 1000; i++) {
+      assertEquals(i, queue.poll());
+    }
+    assertTrue(queue.isEmpty());
+    assertTrue(VoxelFlood.MAX_QUEUE_ENTRIES * 4L <= 256L << 20);
   }
 }

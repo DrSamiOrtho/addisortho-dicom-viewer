@@ -47,6 +47,37 @@ public final class VoxelFlood {
     }
   }
 
+  /** A selection whose working memory would not fit. */
+  public static final class BudgetException extends RuntimeException {
+    private final long neededBytes;
+    private final long availableBytes;
+
+    BudgetException(long neededBytes, long availableBytes) {
+      super(
+          "The selection needs "
+              + (neededBytes >> 20)
+              + " MB of working memory, "
+              + (availableBytes >> 20)
+              + " MB are free");
+      this.neededBytes = neededBytes;
+      this.availableBytes = availableBytes;
+    }
+
+    public long neededBytes() {
+      return neededBytes;
+    }
+
+    public long availableBytes() {
+      return availableBytes;
+    }
+  }
+
+  /** Most voxels a flood front may hold at once (256 MB); a selection beyond it is refused. */
+  public static final int MAX_QUEUE_ENTRIES = 1 << 26;
+
+  /** Heap left untouched by the working memory of a selection. */
+  public static final long HEADROOM_BYTES = 64L << 20;
+
   private static final int[][] NEIGHBOURS = {
     {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
   };
@@ -66,6 +97,8 @@ public final class VoxelFlood {
    *     voxels is taken when it is below
    * @param separation erosion depth of the separation, 0 for none
    * @return empty when no voxel near the seed is above the threshold
+   * @throws BudgetException when the working memory would not fit in the heap, before anything
+   *     large is allocated, or when a flood front outgrows {@link #MAX_QUEUE_ENTRIES}
    */
   public static Optional<Result> grow(
       VolumeSpace space,
@@ -75,6 +108,7 @@ public final class VoxelFlood {
       Vector3i seed,
       int separation) {
     long start = System.nanoTime();
+    checkBudget(workingBytes(kept, separation), availableBytes());
     Vector3i s = findSeed(space, kept, sampler, threshold, seed);
     if (s == null) {
       return Optional.empty();
@@ -93,6 +127,32 @@ public final class VoxelFlood {
     }
     return Optional.of(
         new Result(region, region.count(), separated, (System.nanoTime() - start) / 1_000_000));
+  }
+
+  /**
+   * Working memory of a selection on the grid of {@code kept}: the bit volumes of the flood (2) and
+   * of the separation (6: holes filled, two erosion buffers, seeded core, reached, mine), plus the
+   * first queue.
+   */
+  public static long workingBytes(VoxelBits kept, int separation) {
+    long bits = kept.bytes();
+    return bits * (separation > 0 ? 8 : 2) + 4L * (1 << 16);
+  }
+
+  /** Heap that a selection may still take: the maximum minus what is in use. */
+  public static long availableBytes() {
+    Runtime rt = Runtime.getRuntime();
+    return rt.maxMemory() - (rt.totalMemory() - rt.freeMemory());
+  }
+
+  /**
+   * @throws BudgetException when {@code needed} plus the {@link #HEADROOM_BYTES} exceed {@code
+   *     available}
+   */
+  public static void checkBudget(long needed, long available) {
+    if (needed + HEADROOM_BYTES > available) {
+      throw new BudgetException(needed, available);
+    }
   }
 
   /** The diff removing every shown voxel outside the region. */
@@ -240,9 +300,15 @@ public final class VoxelFlood {
     }
     box = box.grow(1, grown);
     VoxelBits solid = fillHoles(grown, box);
+    // Two buffers take turns over the erosion steps, whatever the depth.
     VoxelBits core = solid;
+    VoxelBits spare = null;
     for (int i = 0; i < depth; i++) {
-      core = erode(core, box);
+      VoxelBits target =
+          spare != null ? spare : new VoxelBits(grown.sizeX(), grown.sizeY(), grown.sizeZ());
+      erode(core, target, box);
+      spare = core == solid ? null : core;
+      core = target;
     }
     Vector3i start = core.get(seed.x, seed.y, seed.z) ? seed : nearestInside(solid, core, seed);
     if (start == null) {
@@ -309,9 +375,9 @@ public final class VoxelFlood {
     }
   }
 
-  /** One step of 6-connected erosion inside the box; beyond the box counts as empty. */
-  static VoxelBits erode(VoxelBits mask, Box box) {
-    VoxelBits out = new VoxelBits(mask.sizeX(), mask.sizeY(), mask.sizeZ());
+  /** One step of 6-connected erosion inside the box into {@code out}; beyond the box is empty. */
+  static VoxelBits erode(VoxelBits mask, VoxelBits out, Box box) {
+    out.fill(false);
     for (int z = box.z0; z <= box.z1; z++) {
       if (mask.countSlice(z) == 0) {
         continue;
@@ -396,6 +462,9 @@ public final class VoxelFlood {
   /**
    * Grows every core back inside {@code solid} at the same pace, breadth first from all of them; a
    * voxel belongs to the first core that reaches it. Returns the share of {@code seeded}.
+   *
+   * <p>Only the core voxels that touch a free voxel start the front, so the queue holds the cores'
+   * surface, not their bulk: the inside of a core has nothing to grow into.
    */
   private static VoxelBits regrow(VoxelBits solid, VoxelBits core, VoxelBits seeded, Box box) {
     int sx = solid.sizeX();
@@ -414,7 +483,9 @@ public final class VoxelFlood {
             if (seeded.get(x, y, z)) {
               mine.set(x, y, z);
             }
-            queue.add(x + sx * (y + sy * z));
+            if (touchesFree(solid, core, x, y, z)) {
+              queue.add(x + sx * (y + sy * z));
+            }
           }
         }
       }
@@ -440,7 +511,35 @@ public final class VoxelFlood {
     return mine;
   }
 
-  /** A growable first-in first-out queue of ints. */
+  /** Whether a face neighbour of the voxel is in {@code solid} but not in {@code core}. */
+  private static boolean touchesFree(VoxelBits solid, VoxelBits core, int x, int y, int z) {
+    for (int[] n : NEIGHBOURS) {
+      int nx = x + n[0];
+      int ny = y + n[1];
+      int nz = z + n[2];
+      if (inside(solid, nx, ny, nz) && solid.get(nx, ny, nz) && !core.get(nx, ny, nz)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** How many core voxels start the regrow front: those on the cores' surface. */
+  static long countRegrowSeeds(VoxelBits solid, VoxelBits core, Box box) {
+    long n = 0;
+    for (int z = box.z0; z <= box.z1; z++) {
+      for (int y = box.y0; y <= box.y1; y++) {
+        for (int x = box.x0; x <= box.x1; x++) {
+          if (core.get(x, y, z) && touchesFree(solid, core, x, y, z)) {
+            n++;
+          }
+        }
+      }
+    }
+    return n;
+  }
+
+  /** A growable first-in first-out queue of ints, refused beyond {@link #MAX_QUEUE_ENTRIES}. */
   static final class IntQueue {
     private int[] items;
     private int head;
@@ -456,7 +555,10 @@ public final class VoxelFlood {
 
     void add(int value) {
       if (size == items.length) {
-        int[] grown = new int[Math.toIntExact(Math.min(Integer.MAX_VALUE - 8L, 2L * items.length))];
+        if (items.length >= MAX_QUEUE_ENTRIES) {
+          throw new BudgetException(8L * items.length, availableBytes());
+        }
+        int[] grown = new int[Math.toIntExact(Math.min(MAX_QUEUE_ENTRIES, 2L * items.length))];
         int tail = items.length - head;
         System.arraycopy(items, head, grown, 0, tail);
         System.arraycopy(items, 0, grown, tail, head);

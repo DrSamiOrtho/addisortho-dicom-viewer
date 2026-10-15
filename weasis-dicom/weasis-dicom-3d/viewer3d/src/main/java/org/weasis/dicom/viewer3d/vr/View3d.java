@@ -1992,30 +1992,48 @@ public class View3d extends VolumeCanvas
     CUT_EXECUTOR.execute(
         () -> {
           MaskDiff diff = null;
+          String failure = null;
           try {
             diff = work.get();
-          } catch (RuntimeException e) {
+          } catch (VoxelFlood.BudgetException e) {
+            LOGGER.warn("3D cut refused: {}", e.getMessage());
+            failure =
+                String.format(
+                    Messages.getString("cut.memory"),
+                    e.neededBytes() >> 20,
+                    e.availableBytes() >> 20);
+          } catch (Throwable e) { // NOSONAR an OutOfMemoryError must not leave the view locked
             LOGGER.error("3D cut", e);
+            failure = Messages.getString("cut.failed");
+          } finally {
+            MaskDiff result = diff;
+            String why = failure;
+            GuiExecutor.execute(() -> finishCut(mask, result, why, after));
           }
-          MaskDiff result = diff;
-          GuiExecutor.execute(
-              () -> {
-                cutRunning = false;
-                statusMessage = null;
-                setCursor(null);
-                if (result != null && keptMask == mask) {
-                  mask.apply(result);
-                  after.run();
-                  showStatus(
-                      result.isEmpty()
-                          ? Messages.getString("cut.nothing")
-                          : String.format(Messages.getString("cut.removed"), result.voxels(), 0));
-                } else if (keptMask == mask) {
-                  showStatus(Messages.getString("cut.nothing"));
-                }
-                cutChanged();
-              });
         });
+  }
+
+  /** EDT part of {@link #runCut}: always clears the running state, then applies the result. */
+  private void finishCut(KeptMask mask, MaskDiff result, String failure, Runnable after) {
+    cutRunning = false;
+    statusMessage = null;
+    setCursor(null);
+    try {
+      if (failure != null) {
+        showStatus(failure);
+      } else if (result != null && keptMask == mask) {
+        mask.apply(result);
+        after.run();
+        showStatus(
+            result.isEmpty()
+                ? Messages.getString("cut.nothing")
+                : String.format(Messages.getString("cut.removed"), result.voxels()));
+      } else if (keptMask == mask) {
+        showStatus(Messages.getString("cut.nothing"));
+      }
+    } finally {
+      cutChanged();
+    }
   }
 
   private void cutChanged() {
