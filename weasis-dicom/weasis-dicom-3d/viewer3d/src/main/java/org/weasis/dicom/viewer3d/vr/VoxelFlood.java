@@ -245,7 +245,13 @@ public final class VoxelFlood {
     return x >= 0 && y >= 0 && z >= 0 && x < v.sizeX() && y < v.sizeY() && z < v.sizeZ();
   }
 
-  /** Breadth-first flood over the qualifying voxels; each voxel is sampled at most once. */
+  /**
+   * Flood over the qualifying voxels; each voxel is sampled at most once. The front is kept slice
+   * by slice and swept up and down the volume rather than taken in distance order: the field is
+   * made on demand slice by slice (see {@link TextureField}), and a distance front crossing a wide
+   * structure would touch hundreds of slices at once, while a sweep touches a slice and its two
+   * neighbours. The region grown is the same connected component whatever the order.
+   */
   private static void flood(
       VolumeSpace space,
       VoxelBits kept,
@@ -256,27 +262,44 @@ public final class VoxelFlood {
       VoxelBits grown) {
     int sx = kept.sizeX();
     int sy = kept.sizeY();
-    IntQueue queue = new IntQueue(1 << 16);
+    int sz = kept.sizeZ();
+    IntQueue[] pending = new IntQueue[sz];
     tested.set(seed.x, seed.y, seed.z);
     grown.set(seed.x, seed.y, seed.z);
-    queue.add(seed.x + sx * (seed.y + sy * seed.z));
-    while (!queue.isEmpty()) {
-      int i = queue.poll();
-      int x = i % sx;
-      int rest = i / sx;
-      int y = rest % sy;
-      int z = rest / sy;
-      for (int[] n : NEIGHBOURS) {
-        int nx = x + n[0];
-        int ny = y + n[1];
-        int nz = z + n[2];
-        if (inside(kept, nx, ny, nz)
-            && tested.testAndSet(nx, ny, nz)
-            && qualifies(space, kept, sampler, visible, nx, ny, nz)) {
-          grown.set(nx, ny, nz);
-          queue.add(nx + sx * (ny + sy * nz));
+    pending[seed.z] = new IntQueue(1 << 12);
+    pending[seed.z].add(seed.x + sx * seed.y);
+    long left = 1;
+    boolean upwards = true;
+    while (left > 0) {
+      for (int step = 0; step < sz; step++) {
+        int z = upwards ? step : sz - 1 - step;
+        IntQueue queue = pending[z];
+        if (queue == null || queue.isEmpty()) {
+          continue;
+        }
+        while (!queue.isEmpty()) {
+          int i = queue.poll();
+          left--;
+          int x = i % sx;
+          int y = i / sx;
+          for (int[] n : NEIGHBOURS) {
+            int nx = x + n[0];
+            int ny = y + n[1];
+            int nz = z + n[2];
+            if (inside(kept, nx, ny, nz)
+                && tested.testAndSet(nx, ny, nz)
+                && qualifies(space, kept, sampler, visible, nx, ny, nz)) {
+              grown.set(nx, ny, nz);
+              if (pending[nz] == null) {
+                pending[nz] = new IntQueue(1 << 12);
+              }
+              pending[nz].add(nx + sx * ny);
+              left++;
+            }
+          }
         }
       }
+      upwards = !upwards;
     }
   }
 
