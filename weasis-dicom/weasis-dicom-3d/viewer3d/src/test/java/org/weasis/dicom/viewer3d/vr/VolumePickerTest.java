@@ -118,4 +118,34 @@ class VolumePickerTest {
     assertTrue(hit.isPresent());
     assertEquals(3.0, hit.get().depth(), VOXEL);
   }
+
+  @Test
+  void aCoarserMaskGridLeavesThePickUnchanged() {
+    // The same ray through the same texture, with the mask grid halved on each axis: the march
+    // and the opacity correction follow the texture, so the hit is identical, not half a voxel
+    // coarser. A translucent sphere makes the accumulation depend on the step.
+    byte[] lut = new byte[2000 * 4];
+    for (int i = 0; i < 2000; i++) {
+      lut[i * 4 + 3] = (byte) (i >= 500 ? 77 : 0); // alpha 0.3 above 500
+    }
+    TransferFunction translucent = new TransferFunction(lut, 2000, 1000, 1.0);
+    VolumeSpace halved = SPACE.withGrid(new Vector3i(N / 2, N / 2, N / 2));
+    Vector3d origin = new Vector3d(0.1, -0.2, -3);
+    Vector3d dir = new Vector3d(0, 0, 1);
+    Hit full =
+        new VolumePicker(SPACE, SPHERE, translucent, t -> false)
+            .pickRay(origin, dir, FULL_MIN, FULL_MAX)
+            .orElseThrow();
+    Hit coarse =
+        new VolumePicker(halved, SPHERE, translucent, t -> false)
+            .pickRay(origin, dir, FULL_MIN, FULL_MAX)
+            .orElseThrow();
+    assertEquals(full.depth(), coarse.depth(), 0.0);
+    assertEquals(full.texCoord(), coarse.texCoord());
+    // A translucent surface is entered before the ray is half opaque: the hit lies past it.
+    double surface = 3 - Math.sqrt(RADIUS * RADIUS - 0.1 * 0.1 - 0.2 * 0.2);
+    assertTrue(full.depth() > surface + VOXEL, "ray accumulates through the translucent shell");
+    // The mask grid still decides what is cut away: a coarse voxel cut hides a texture voxel.
+    assertEquals(new Vector3i(N / 2 - 1, N / 2 - 1, N / 2 - 1).x, coarse.grid().x, N / 4);
+  }
 }

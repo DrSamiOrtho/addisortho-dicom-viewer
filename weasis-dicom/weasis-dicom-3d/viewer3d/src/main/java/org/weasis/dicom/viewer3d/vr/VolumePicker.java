@@ -95,7 +95,8 @@ public final class VolumePicker {
     if (tmax < tmin) {
       return Optional.empty();
     }
-    Vector3d voxel = space.gridVoxelWorldSize(new Vector3d());
+    // The ray walks the texture, whatever the resolution of the kept mask laid over it.
+    Vector3d voxel = space.textureVoxelWorldSize(new Vector3d());
     double step = 0.5 * Math.min(voxel.x, Math.min(voxel.y, voxel.z));
     Vector3d world = new Vector3d();
     Vector3d tex = new Vector3d();
@@ -117,7 +118,8 @@ public final class VolumePicker {
       }
       double alpha = transfer.opacity(value);
       if (alpha > 0.0) {
-        // One in-plane voxel is the unit the preset opacities are given for, as in the shaders.
+        // One in-plane texture voxel is the unit the preset opacities are given for, as in the
+        // shaders' correctedOpacity(); the mask grid plays no part in it.
         double steps = (t - previous) / voxel.x;
         double corrected = 1.0 - Math.pow(1.0 - Math.min(alpha, 0.9999), steps);
         accumulated += (1.0 - accumulated) * corrected;
