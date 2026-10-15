@@ -244,6 +244,26 @@ public class View3d extends VolumeCanvas
   private volatile boolean cutRunning;
   private volatile String statusMessage;
   private Timer statusTimer;
+
+  /** The texture field of the shown volume, kept while its texture and smoothing stay the same. */
+  private TextureField sharedField;
+
+  private FieldKey sharedFieldKey;
+
+  /** Picks run here, one at a time, off the event dispatch thread. */
+  private static final ExecutorService PICK_EXECUTOR =
+      Executors.newSingleThreadExecutor(
+          r -> {
+            Thread t = new Thread(r, "3D picking"); // NON-NLS
+            t.setDaemon(true);
+            return t;
+          });
+
+  /** The pick waiting to start, if any; a newer request replaces it (drag coalescing). */
+  private final java.util.concurrent.atomic.AtomicReference<PickRequest> queuedPick =
+      new java.util.concurrent.atomic.AtomicReference<>();
+
+  private volatile PickRequest runningPick;
   private Timer movieTimer;
   private boolean lightSeparation;
 
@@ -404,6 +424,7 @@ public class View3d extends VolumeCanvas
       keptMaskTexture.destroy(gl);
     }
     stopMovie();
+    cancelPicks();
     super.disposeView();
   }
 
@@ -437,6 +458,9 @@ public class View3d extends VolumeCanvas
       // The cuts and the annotations belong to the volume they were made on.
       keptMask = null;
       keptMaskTexture.invalidate();
+      sharedField = null;
+      sharedFieldKey = null;
+      cancelPicks();
       lasso.clear();
       annotations.clear();
       lengthStart = null;
@@ -1735,21 +1759,29 @@ public class View3d extends VolumeCanvas
    * The field the renderer samples, texture voxel by texture voxel: the volume as uploaded, scaled
    * and smoothed as the texture is. A new instance per operation; its slices are made on demand.
    */
-  public VoxelSampler voxelSampler() {
+  public synchronized VoxelSampler voxelSampler() {
     DicomVolTexture tex = volTexture;
     Volume<?, ?> volume = tex == null ? null : tex.getVolume();
     if (volume == null) {
       return (x, y, z) -> Double.NaN;
     }
-    Vector3d texel = tex.getTexelSize();
-    VolumeSmoother smoother =
-        TextureField.smootherOf(
-            isUploadSmoothed(tex), tex.getWidth(), tex.getHeight(), texel.x, texel.z);
-    return new TextureField(
-        new VolumeSliceSource(volume),
-        new Vector3i(tex.getWidth(), tex.getHeight(), tex.getDepth()),
-        smoother);
+    FieldKey key =
+        new FieldKey(
+            tex,
+            isUploadSmoothed(tex),
+            new Vector3i(tex.getWidth(), tex.getHeight(), tex.getDepth()));
+    if (sharedField == null || !key.equals(sharedFieldKey)) {
+      Vector3d texel = tex.getTexelSize();
+      VolumeSmoother smoother =
+          TextureField.smootherOf(key.smoothed(), key.size().x, key.size().y, texel.x, texel.z);
+      sharedField = new TextureField(new VolumeSliceSource(volume), key.size(), smoother);
+      sharedFieldKey = key;
+    }
+    return sharedField;
   }
+
+  /** What the shared texture field was built for; a change means a new field. */
+  private record FieldKey(DicomVolTexture texture, boolean smoothed, Vector3i size) {}
 
   /** Whether VolumeBuilder smooths this texture: a smoothed, single-channel, 16-bit volume. */
   private static boolean isUploadSmoothed(DicomVolTexture tex) {
@@ -1937,28 +1969,189 @@ public class View3d extends VolumeCanvas
   }
 
   /**
-   * The first visible point of the volume under a view point: the renderer's own ray marched on the
-   * CPU until it is half opaque. Empty when the ray meets nothing.
+   * Everything a pick reads, taken on the event dispatch thread when the pick is asked for, so the
+   * worker never looks at a view that moved on; the key tells whether the view still matches when
+   * the result comes back.
    */
-  public Optional<Hit> pick(Point p) {
+  private record PickSnapshot(
+      PickStateKey key,
+      VolumeSpace space,
+      VoxelSampler sampler,
+      TransferFunction transfer,
+      java.util.function.Predicate<Vector3d> cutAway,
+      VolumePicker.SegMode segMode,
+      SegmentField segments,
+      Matrix4d viewInverse,
+      Matrix4d projectionInverse,
+      Vector3d cropMin,
+      Vector3d cropMax,
+      int width,
+      int height) {}
+
+  /** The state a pick depends on; a result for another state is stale. */
+  private record PickStateKey(
+      Matrix4d view,
+      Matrix4d projection,
+      int maskGeneration,
+      Type segType,
+      boolean segSmooth,
+      boolean cropEnabled,
+      CropBox cropBox,
+      Preset preset,
+      int windowWidth,
+      int windowCenter,
+      double opacity,
+      int lutShape,
+      CrosshairCutMode cutMode,
+      Vector3d crosshairPos) {}
+
+  private PickStateKey pickStateKey() {
+    KeptMask mask = keptMask;
+    Vector3d pos = mprCrossHairPosition;
+    return new PickStateKey(
+        camera.getViewMatrix(),
+        camera.getProjectionMatrix(),
+        mask == null ? -1 : mask.generation(),
+        segType,
+        isSegSmoothReady(),
+        cropEnabled,
+        cropBox,
+        volumePreset,
+        renderingLayer.getWindowWidth(),
+        renderingLayer.getWindowCenter(),
+        renderingLayer.getOpacity(),
+        renderingLayer.getLutShapeId(),
+        getCrossHairCutMode(),
+        pos == null ? null : new Vector3d(pos));
+  }
+
+  /** The snapshot of the current view for a pick, or {@code null} when nothing can be picked. */
+  private PickSnapshot pickSnapshot() {
     VolumeSpace space = volumeSpace();
     if (space == null || !hasValidContent() || getWidth() <= 0 || getHeight() <= 0) {
-      return Optional.empty();
+      return null;
     }
     if (pickUnavailableReason() != null) {
-      return Optional.empty();
+      return null;
     }
-    VolumePicker picker =
-        new VolumePicker(
-            space, voxelSampler(), transferFunction(), this::isCutAway, segMode(), segmentField());
     CropBox box = getEffectiveCropBox();
-    return picker.pick(
+    // The cut-away test reads the mask's bits, which only the event dispatch thread changes; the
+    // crosshair cut is frozen in the key and read through the same method.
+    return new PickSnapshot(
+        pickStateKey(),
+        space,
+        voxelSampler(),
+        transferFunction(),
+        this::isCutAway,
+        segMode(),
+        segmentField(),
         camera.getViewMatrix().invert(),
         camera.getProjectionMatrix().invert(),
-        p.getX() * 2.0 / getWidth() - 1.0,
-        1.0 - 2.0 * p.getY() / getHeight(),
         new Vector3d(box.minX(), box.minY(), box.minZ()),
-        new Vector3d(box.maxX(), box.maxY(), box.maxZ()));
+        new Vector3d(box.maxX(), box.maxY(), box.maxZ()),
+        getWidth(),
+        getHeight());
+  }
+
+  private static Optional<Hit> pick(PickSnapshot s, Point p, PickRequest request) {
+    VolumePicker picker =
+        new VolumePicker(
+                s.space(), s.sampler(), s.transfer(), s.cutAway(), s.segMode(), s.segments())
+            .withCancel(() -> request != null && request.cancelled);
+    return picker.pick(
+        s.viewInverse(),
+        s.projectionInverse(),
+        p.getX() * 2.0 / s.width() - 1.0,
+        1.0 - 2.0 * p.getY() / s.height(),
+        s.cropMin(),
+        s.cropMax());
+  }
+
+  /**
+   * The first visible point of the volume under a view point: the renderer's own ray marched on the
+   * CPU until it is half opaque. Empty when the ray meets nothing. Blocks the caller; the tools use
+   * {@link #pickAsync} instead.
+   */
+  public Optional<Hit> pick(Point p) {
+    PickSnapshot snapshot = pickSnapshot();
+    return snapshot == null ? Optional.empty() : pick(snapshot, p, null);
+  }
+
+  /** A pick asked for by a tool, run on the pick worker. */
+  private static final class PickRequest {
+    final PickSnapshot snapshot;
+    final Point point;
+    final java.util.function.Consumer<Optional<Hit>> onResult;
+    volatile boolean cancelled;
+
+    PickRequest(
+        PickSnapshot snapshot, Point point, java.util.function.Consumer<Optional<Hit>> onResult) {
+      this.snapshot = snapshot;
+      this.point = point;
+      this.onResult = onResult;
+    }
+  }
+
+  /**
+   * Picks under a view point on the pick worker and hands the result to {@code onResult} on the
+   * event dispatch thread, unless the view changed meanwhile (the result is then dropped) or a
+   * newer pick replaced this one before it started (a drag's requests coalesce).
+   */
+  public void pickAsync(Point p, java.util.function.Consumer<Optional<Hit>> onResult) {
+    PickSnapshot snapshot = pickSnapshot();
+    if (snapshot == null) {
+      onResult.accept(Optional.empty());
+      return;
+    }
+    PickRequest request = new PickRequest(snapshot, new Point(p), onResult);
+    PickRequest replaced = queuedPick.getAndSet(request);
+    if (replaced != null) {
+      replaced.cancelled = true;
+    }
+    PickRequest running = runningPick;
+    if (running != null) {
+      running.cancelled = true;
+    }
+    PICK_EXECUTOR.execute(
+        () -> {
+          PickRequest mine = queuedPick.getAndSet(null);
+          if (mine == null) {
+            return; // taken by a later submission
+          }
+          runningPick = mine;
+          Optional<Hit> hit;
+          try {
+            hit = mine.cancelled ? Optional.empty() : pick(mine.snapshot, mine.point, mine);
+          } catch (RuntimeException e) {
+            LOGGER.error("3D pick", e);
+            hit = Optional.empty();
+          } finally {
+            runningPick = null;
+          }
+          Optional<Hit> result = hit;
+          GuiExecutor.execute(
+              () -> {
+                if (mine.cancelled) {
+                  return;
+                }
+                if (volTexture == null || !mine.snapshot.key().equals(pickStateKey())) {
+                  LOGGER.debug("3D pick dropped: the view changed");
+                  return;
+                }
+                mine.onResult.accept(result);
+              });
+        });
+  }
+
+  private void cancelPicks() {
+    PickRequest queued = queuedPick.getAndSet(null);
+    if (queued != null) {
+      queued.cancelled = true;
+    }
+    PickRequest running = runningPick;
+    if (running != null) {
+      running.cancelled = true;
+    }
   }
 
   /** Patient position (LPS, mm) of a picked point, when the volume knows its geometry. */
@@ -2109,7 +2302,13 @@ public class View3d extends VolumeCanvas
       showStatus(unavailable);
       return;
     }
-    Optional<Hit> hit = pick(p);
+    pickAsync(p, hit -> growAndCut(hit, keep));
+  }
+
+  private void growAndCut(Optional<Hit> hit, boolean keep) {
+    if (cutRunning) {
+      return;
+    }
     KeptMask mask = hit.isPresent() ? getOrCreateKeptMask() : null;
     if (mask == null) {
       showStatus(Messages.getString("cut.nothing"));
@@ -2293,7 +2492,10 @@ public class View3d extends VolumeCanvas
       showStatus(unavailable);
       return;
     }
-    Optional<Hit> hit = pick(p);
+    pickAsync(p, this::lengthPicked);
+  }
+
+  private void lengthPicked(Optional<Hit> hit) {
     if (hit.isEmpty()) {
       showStatus(Messages.getString("cut.nothing"));
       return;
@@ -2319,15 +2521,19 @@ public class View3d extends VolumeCanvas
       arrowStartTex = null;
       return;
     }
-    Optional<Hit> hit = pick(p);
-    if (hit.isEmpty()) {
-      arrowStartTex = null;
-      return;
-    }
-    arrowStartTex = hit.get().texCoord();
-    arrowStartDepth = hit.get().depth();
     arrowDragPoint = p;
-    repaint();
+    pickAsync(
+        p,
+        hit -> {
+          if (hit.isEmpty()) {
+            arrowStartTex = null;
+            arrowDragPoint = null;
+            return;
+          }
+          arrowStartTex = hit.get().texCoord();
+          arrowStartDepth = hit.get().depth();
+          repaint();
+        });
   }
 
   public void arrowDrag(Point p) {
@@ -2339,16 +2545,26 @@ public class View3d extends VolumeCanvas
 
   /** Ends the arrow on the surface under the point, or at the depth of its tail when it misses. */
   public void arrowEnd(Point p) {
-    if (arrowStartTex == null) {
+    Vector3d tail = arrowStartTex;
+    double tailDepth = arrowStartDepth;
+    if (tail == null) {
       return;
     }
-    Vector3d end = pick(p).map(Hit::texCoord).orElseGet(() -> texCoordAtDepth(p, arrowStartDepth));
-    if (end != null && !end.equals(arrowStartTex)) {
-      annotations.add(new Item(Kind.ARROW, arrowStartTex, end, ""));
-    }
-    arrowStartTex = null;
-    arrowDragPoint = null;
-    repaint();
+    arrowDragPoint = p;
+    pickAsync(
+        p,
+        hit -> {
+          if (arrowStartTex != tail) {
+            return; // the arrow was cancelled or restarted meanwhile
+          }
+          Vector3d end = hit.map(Hit::texCoord).orElseGet(() -> texCoordAtDepth(p, tailDepth));
+          if (end != null && !end.equals(tail)) {
+            annotations.add(new Item(Kind.ARROW, tail, end, ""));
+          }
+          arrowStartTex = null;
+          arrowDragPoint = null;
+          repaint();
+        });
   }
 
   /** Drops the first point of a length being measured, if any. */

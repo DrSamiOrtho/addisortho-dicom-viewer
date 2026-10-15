@@ -269,4 +269,31 @@ class VolumePickerTest {
             .pickRay(new Vector3d(0, 0, -3), new Vector3d(0, 0, 1), FULL_MIN, FULL_MAX)
             .isEmpty());
   }
+
+  @Test
+  void aCancelledPickGivesUpBetweenSamples() {
+    int[] samples = {0};
+    VoxelSampler counting =
+        (x, y, z) -> {
+          samples[0]++;
+          return SOLID.valueAt(x, y, z);
+        };
+    boolean[] cancel = {false};
+    VolumePicker picker =
+        new VolumePicker(SPACE, counting, OPAQUE_ABOVE_500, t -> false)
+            .withCancel(() -> cancel[0] || samples[0] > 0);
+    // The first sample flips the flag: the march stops at the next check without a hit.
+    assertTrue(
+        picker
+            .pickRay(new Vector3d(0.9, 0.9, -3), new Vector3d(0, 0, 1), FULL_MIN, FULL_MAX)
+            .isEmpty());
+    assertTrue(samples[0] <= 8, "stopped after the first sample's lookups: " + samples[0]);
+    cancel[0] = false;
+    samples[0] = 0;
+    assertTrue(
+        new VolumePicker(SPACE, SOLID, OPAQUE_ABOVE_500, t -> false)
+            .withCancel(() -> false)
+            .pickRay(new Vector3d(0, 0, -3), new Vector3d(0, 0, 1), FULL_MIN, FULL_MAX)
+            .isPresent());
+  }
 }

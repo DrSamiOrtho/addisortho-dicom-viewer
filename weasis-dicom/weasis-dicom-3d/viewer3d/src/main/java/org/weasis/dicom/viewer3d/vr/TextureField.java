@@ -24,8 +24,9 @@ import org.joml.Vector3i;
  * that the smoothing makes transparent included.
  *
  * <p>Slices are made on demand and kept in small caches, so a pick costs a few slices and a region
- * grow costs the slices of its structure, not a copy of the volume. Not thread-safe: one instance
- * per operation.
+ * grow costs the slices of its structure, not a copy of the volume. One instance serves a view as
+ * long as its texture and smoothing stay the same; the pick and cut workers share it, one at a
+ * time.
  */
 public final class TextureField implements VoxelSampler {
 
@@ -84,7 +85,7 @@ public final class TextureField implements VoxelSampler {
   }
 
   /** Texture slices materialised so far, for the logs. */
-  public long slicesMade() {
+  public synchronized long slicesMade() {
     return slicesMade;
   }
 
@@ -96,15 +97,20 @@ public final class TextureField implements VoxelSampler {
   }
 
   @Override
-  public double valueAt(int x, int y, int z) {
+  public synchronized double valueAt(int x, int y, int z) {
     if (x < 0 || y < 0 || z < 0 || x >= texture.x || y >= texture.y || z >= texture.z) {
       return Double.NaN;
     }
     return textureSlice(z)[y * texture.x + x];
   }
 
+  @Override
+  public synchronized double interpolate(double x, double y, double z) {
+    return VoxelSampler.super.interpolate(x, y, z);
+  }
+
   /** The values of texture slice {@code z}, as uploaded. */
-  public float[] textureSlice(int z) {
+  public synchronized float[] textureSlice(int z) {
     float[] cached = textureSlices.get(z);
     if (cached != null) {
       return cached;

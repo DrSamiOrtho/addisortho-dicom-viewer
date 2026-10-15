@@ -73,6 +73,7 @@ public final class VolumePicker {
   private final Predicate<Vector3d> cutAway;
   private final SegMode segMode;
   private final SegmentField segments;
+  private java.util.function.BooleanSupplier cancelled = () -> false;
 
   /**
    * A picker of the anatomy alone.
@@ -133,7 +134,13 @@ public final class VolumePicker {
     return pickRay(origin, direction, cropMin, cropMax);
   }
 
-  /** Picks along a ray given in world units. */
+  /** A pick on a worker checks this between samples and gives up when it says so. */
+  public VolumePicker withCancel(java.util.function.BooleanSupplier cancelled) {
+    this.cancelled = cancelled;
+    return this;
+  }
+
+  /** Picks along a ray given in world units; empty when the pick was cancelled. */
   public Optional<Hit> pickRay(
       Vector3d origin, Vector3d direction, Vector3d cropMin, Vector3d cropMax) {
     Vector3d boxMin = space.worldOfTexCoord(cropMin, new Vector3d());
@@ -171,6 +178,9 @@ public final class VolumePicker {
     Hit segmentEntry = null;
     double previous = tmin;
     for (double t = tmin + step * 0.5; t <= tmax; t += step) {
+      if (cancelled.getAsBoolean()) {
+        return Optional.empty();
+      }
       world.set(direction).mul(t).add(origin);
       space.texCoordOfWorld(world, tex);
       if (outsideUnitCube(tex) || cutAway.test(tex)) {
