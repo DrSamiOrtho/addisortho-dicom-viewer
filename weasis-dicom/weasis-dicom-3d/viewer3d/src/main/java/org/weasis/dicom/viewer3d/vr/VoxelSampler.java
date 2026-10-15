@@ -19,8 +19,19 @@ public interface VoxelSampler {
   /** Value of the texture voxel {@code (x, y, z)}, {@link Double#NaN} outside the texture. */
   double valueAt(int x, int y, int z);
 
-  /** Most memory the sampler's caches may hold, for the budget of a selection. */
+  /**
+   * Most memory the sampler may take during a selection: its caches at their ceiling and the
+   * temporaries of reconstructing a slice, for the budget of a selection.
+   */
   default long workingBytes() {
+    return 0;
+  }
+
+  /**
+   * Bytes of {@link #workingBytes()} already held in the sampler's caches, which a selection need
+   * not allocate again. Never more than {@link #workingBytes()}.
+   */
+  default long residentBytes() {
     return 0;
   }
 

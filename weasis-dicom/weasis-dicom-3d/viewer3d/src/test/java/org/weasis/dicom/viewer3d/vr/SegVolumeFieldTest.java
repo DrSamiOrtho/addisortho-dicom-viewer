@@ -116,4 +116,15 @@ class SegVolumeFieldTest {
     // Beyond the volume the occupancy is the texture's zero border.
     assertEquals(0.0, smooth.occupancy(new Vector3d(1.2, 0.5, 0.5)), 0.0);
   }
+
+  @Test
+  void theBudgetCoversTheSliceCachesAndTheEncodingScratch() {
+    SegVolumeField field = new SegVolumeField(LABELS, lut(255), true);
+    long n = (long) N * N;
+    long scratch = SegVolumeField.encodeScratchBytes(N, N);
+    // The inside mask, the encoded slice, two float grids and the row buffers of the transform.
+    assertEquals(2 * n + 8 * n + (N + 1L) * 16, scratch);
+    assertEquals(32 * 5 * n + scratch, field.workingBytes());
+    assertEquals(0, SegmentField.NONE.workingBytes());
+  }
 }

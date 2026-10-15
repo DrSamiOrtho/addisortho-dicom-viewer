@@ -360,4 +360,56 @@ class VoxelFloodTest {
                 new WorkingMemory(limit)));
     return true;
   }
+
+  @Test
+  void theReservationAddsTheSamplersUnresidentCachesAndTheVisibilitysFields() {
+    VoxelSampler cached =
+        new VoxelSampler() {
+          @Override
+          public double valueAt(int x, int y, int z) {
+            return VOLUME.valueAt(x, y, z);
+          }
+
+          @Override
+          public long workingBytes() {
+            return 1000;
+          }
+
+          @Override
+          public long residentBytes() {
+            return 400;
+          }
+        };
+    VoxelFlood.Visibility withSegments =
+        new VoxelFlood.Visibility() {
+          @Override
+          public boolean visible(int x, int y, int z, double v) {
+            return ABOVE_200.visible(x, y, z, v);
+          }
+
+          @Override
+          public long workingBytes() {
+            return 300;
+          }
+        };
+    long base = VoxelFlood.workingBytes(allKept(), 0);
+    assertEquals(base + 600 + 300, VoxelFlood.reservationBytes(allKept(), 0, cached, withSegments));
+    assertEquals(base, VoxelFlood.reservationBytes(allKept(), 0, VOLUME, ABOVE_200));
+    // A budget short of the reservation by one byte refuses before anything is allocated.
+    assertThrows(
+        VoxelFlood.BudgetException.class,
+        () ->
+            VoxelFlood.grow(
+                SPACE,
+                allKept(),
+                cached,
+                withSegments,
+                gridOf(4, 12, 12),
+                0,
+                new WorkingMemory(base + 899)));
+    WorkingMemory enough = new WorkingMemory(4L << 20);
+    VoxelFlood.grow(SPACE, allKept(), cached, withSegments, gridOf(4, 12, 12), 0, enough)
+        .orElseThrow();
+    assertEquals(base + 900, enough.used(), "the up-front reservation stays; the queues went");
+  }
 }

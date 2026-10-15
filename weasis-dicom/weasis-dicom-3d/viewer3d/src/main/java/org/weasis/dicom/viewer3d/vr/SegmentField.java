@@ -26,6 +26,11 @@ public interface SegmentField {
    */
   double opacity(Vector3d texCoord);
 
+  /** Most memory the field may take during a selection: its caches and its scratch. */
+  default long workingBytes() {
+    return 0;
+  }
+
   /** Whether the texture coordinate lies in a segment the user has visible. */
   default boolean insideVisible(Vector3d texCoord) {
     return opacity(texCoord) > 0;

@@ -193,4 +193,30 @@ class TextureFieldTest {
     assertEquals(spikeDepth, onRaw.get().depth(), voxel, "the raw field stops at the spike");
     assertEquals(wallDepth, onSmoothed.get().depth(), voxel, "the uploaded field reaches the wall");
   }
+
+  @Test
+  void theBudgetCountsReconstructionTemporariesAndWhatIsAlreadyResident() {
+    Slices source = randomVolume(16, 12, 10, 7);
+    Vector3i size = new Vector3i(16, 12, 14);
+    TextureField raw = new TextureField(source, size, null);
+    TextureField smoothed = new TextureField(source, size, new VolumeSmoother(16, 12, 0.8, 0.7));
+    long sliceBytes = 4L * 16 * 12;
+    // The smoothed field makes an unsigned copy and the combined taps on the way to a slice.
+    assertEquals(0, raw.reconstructionBytes());
+    assertEquals(2L * 2 * 16 * 12, smoothed.reconstructionBytes());
+    assertEquals(raw.workingBytes() + smoothed.reconstructionBytes(), smoothed.workingBytes());
+    // Nothing is resident before the first read; the caches then count what they hold, and the
+    // scaled slice, shared with its source here, is not counted twice.
+    assertEquals(0, smoothed.residentBytes());
+    smoothed.textureSlice(5);
+    long resident = smoothed.residentBytes();
+    assertTrue(resident >= sliceBytes * 3, "a texture slice, its filtered taps and sources");
+    assertEquals(0, resident % sliceBytes);
+    for (int z = 0; z < size.z; z++) {
+      smoothed.textureSlice(z);
+    }
+    assertTrue(smoothed.residentBytes() > resident);
+    assertTrue(
+        smoothed.residentBytes() + smoothed.reconstructionBytes() <= smoothed.workingBytes());
+  }
 }

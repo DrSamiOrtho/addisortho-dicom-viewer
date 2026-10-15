@@ -97,6 +97,11 @@ public final class VoxelFlood {
   public interface Visibility {
     boolean visible(int x, int y, int z, double value);
 
+    /** Most memory the predicate's own fields may take during the selection. */
+    default long workingBytes() {
+      return 0;
+    }
+
     /** Visibility from the renderer's opacity alone. */
     static Visibility ofOpacity(TransferFunction transfer, double minOpacity) {
       return (x, y, z, value) -> transfer.opacity(value) >= minOpacity;
@@ -141,7 +146,7 @@ public final class VoxelFlood {
       int separation,
       WorkingMemory budget) {
     long start = System.nanoTime();
-    budget.reserve(workingBytes(kept, separation) + sampler.workingBytes());
+    budget.reserve(reservationBytes(kept, separation, sampler, visible));
     Vector3i s = findSeed(space, kept, sampler, visible, seed);
     if (s == null) {
       return Optional.empty();
@@ -174,6 +179,17 @@ public final class VoxelFlood {
    */
   public static long workingBytes(VoxelBits kept, int separation) {
     return kept.bytes() * (separation > 0 ? 8 : 2);
+  }
+
+  /**
+   * What a selection reserves up front: the bit volumes, what the sampler may still allocate beyond
+   * its resident caches, and the caches and scratch of the visibility's own fields. Queues are
+   * reserved as they grow.
+   */
+  public static long reservationBytes(
+      VoxelBits kept, int separation, VoxelSampler sampler, Visibility visible) {
+    long samplerBytes = Math.max(0, sampler.workingBytes() - sampler.residentBytes());
+    return workingBytes(kept, separation) + samplerBytes + visible.workingBytes();
   }
 
   /** Heap that a selection may still take: the maximum minus what is in use. */

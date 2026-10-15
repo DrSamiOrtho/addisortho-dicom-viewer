@@ -89,11 +89,33 @@ public final class TextureField implements VoxelSampler {
     return slicesMade;
   }
 
+  /**
+   * The caches at their ceiling plus the temporaries of making one texture slice: the unsigned copy
+   * filtered in plane and the combined taps, two shorts per texture voxel.
+   */
   @Override
   public long workingBytes() {
     long slice = 4L * texture.x * texture.y;
     long sourceSlice = 4L * source.width() * source.height();
-    return slice * (TEXTURE_CACHE + FILTERED_CACHE + SOURCE_CACHE) + sourceSlice * SOURCE_CACHE;
+    return slice * (TEXTURE_CACHE + FILTERED_CACHE + SOURCE_CACHE)
+        + sourceSlice * SOURCE_CACHE
+        + reconstructionBytes();
+  }
+
+  /** The temporaries of reconstructing one texture slice, freed once it is cached. */
+  public long reconstructionBytes() {
+    return smoother == null ? 0 : 2L * Short.BYTES * texture.x * texture.y;
+  }
+
+  /** The bytes the caches hold now; a scaled slice shared with its source is counted once. */
+  @Override
+  public synchronized long residentBytes() {
+    long slice = 4L * texture.x * texture.y;
+    long sourceSlice = 4L * source.width() * source.height();
+    boolean scaledShared = source.width() == texture.x && source.height() == texture.y;
+    return slice * (textureSlices.size() + filteredSlices.size())
+        + (scaledShared ? 0 : slice * scaledSlices.size())
+        + sourceSlice * sourceSlices.size();
   }
 
   @Override

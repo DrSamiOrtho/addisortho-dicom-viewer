@@ -97,6 +97,27 @@ public final class SegVolumeField implements SegmentField {
     return smooth;
   }
 
+  /**
+   * The label and occupancy slice caches at their ceiling plus the scratch of encoding one
+   * occupancy slice: the inside mask, the two squared-distance grids and the row buffers.
+   */
+  @Override
+  public long workingBytes() {
+    long n = (long) labels.sizeX() * labels.sizeY();
+    long caches = SLICE_CACHE * (Integer.BYTES + 1) * n;
+    return caches + encodeScratchBytes(labels.sizeX(), labels.sizeY());
+  }
+
+  /** The scratch of {@link SegOccupancy#encodeSlice}, as it allocates for one slice. */
+  static long encodeScratchBytes(int width, int height) {
+    long n = (long) width * height;
+    long rows = Math.max(width, height) + 1L;
+    return n /* inside */
+        + n /* out */
+        + 2L * Float.BYTES * n /* two squared-distance grids */
+        + rows * (3L * Float.BYTES + Integer.BYTES);
+  }
+
   @Override
   public double opacity(Vector3d t) {
     int sx = labels.sizeX();

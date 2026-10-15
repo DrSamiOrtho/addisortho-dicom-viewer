@@ -2354,12 +2354,20 @@ public class View3d extends VolumeCanvas
     }
     SegmentField segments = segmentField();
     VolumeSpace space = volumeSpace();
-    return (x, y, z, value) -> {
-      if (!opaque.visible(x, y, z, value)) {
-        return false;
+    return new VoxelFlood.Visibility() {
+      @Override
+      public boolean visible(int x, int y, int z, double value) {
+        if (!opaque.visible(x, y, z, value)) {
+          return false;
+        }
+        Vector3d t = space.texCoordOfTextureVoxel(x, y, z, new Vector3d());
+        return !mode.masksAnatomy(segments.insideVisible(t));
       }
-      Vector3d t = space.texCoordOfTextureVoxel(x, y, z, new Vector3d());
-      return !mode.masksAnatomy(segments.insideVisible(t));
+
+      @Override
+      public long workingBytes() {
+        return segments.workingBytes();
+      }
     };
   }
 
