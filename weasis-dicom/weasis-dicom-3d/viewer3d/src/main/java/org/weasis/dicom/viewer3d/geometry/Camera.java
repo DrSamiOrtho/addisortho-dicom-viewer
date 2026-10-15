@@ -53,6 +53,9 @@ public class Camera {
   /** Shift of the image on screen, in units of the view half height (y up). */
   private final Vector2d pan = new Vector2d();
 
+  /** Extra view-space depth of the pivot, from pivot moves that kept the image where it was. */
+  private double depthOffset;
+
   private final Vector3d prevMousePos = new Vector3d();
   // Perspective
   private double zNear = NEAR_PLANE;
@@ -181,7 +184,8 @@ public class Camera {
       double hh = viewHalfHeight();
       viewMatrix =
           new Matrix4d()
-              .setTranslation(new Vector3d(pan.x * hh, pan.y * hh, internalZoomFactor))
+              .setTranslation(
+                  new Vector3d(pan.x * hh, pan.y * hh, internalZoomFactor + depthOffset))
               .rotate(rotation)
               .translate(new Vector3d(position).sub(pivot));
     }
@@ -193,7 +197,7 @@ public class Camera {
     if (orthographicProjection) {
       return 2.0 / zoomFactor;
     }
-    return CameraFraming.viewHalfHeight(abs(internalZoomFactor), fov);
+    return CameraFraming.viewHalfHeight(abs(internalZoomFactor + depthOffset), fov);
   }
 
   public Vector3d getPivot() {
@@ -204,21 +208,35 @@ public class Camera {
     return new Vector2d(pan);
   }
 
+  public double getDepthOffset() {
+    return depthOffset;
+  }
+
   public void setPan(Vector2d value) {
+    setPan(value, depthOffset);
+  }
+
+  /** Sets the pan and the depth offset together, as a snapshot restores them. */
+  public void setPan(Vector2d value, double depth) {
     pan.set(value);
+    depthOffset = depth;
     updateCameraTransform();
   }
 
   /**
-   * Moves the point the rotation and the zoom centre on. The image does not move: the pan is
-   * adjusted so that the volume stays where it is on screen.
+   * Moves the point the rotation and the zoom centre on. The image does not move at all: the
+   * rotated move is folded into the pan and into the depth offset, so every point keeps its view
+   * position and its perspective size.
    */
   public void setPivot(Vector3d worldPivot) {
     Vector3d delta = new Vector3d(worldPivot).sub(pivot);
     if (delta.lengthSquared() == 0.0) {
       return;
     }
-    pan.add(CameraFraming.panForPivotChange(rotation, delta, viewHalfHeight()));
+    CameraFraming.PivotRebase rebase =
+        CameraFraming.rebasePivot(rotation, delta, pan, abs(internalZoomFactor), depthOffset, fov);
+    pan.set(rebase.pan());
+    depthOffset = rebase.depthOffset();
     pivot.set(worldPivot);
     updateCameraTransform();
   }
@@ -226,6 +244,7 @@ public class Camera {
   /** Centres the view on the pivot and zooms so that the box {@code [min, max]} fills it. */
   public void fit(Vector3d min, Vector3d max) {
     pan.set(0, 0);
+    depthOffset = 0;
     setZoomFactor(CameraFraming.fitZoom(min, max, rotation, fov, renderer.getAspectRatio()));
   }
 
@@ -368,17 +387,20 @@ public class Camera {
   public void resetPan() {
     position.set(getDefaultOrientation().position());
     pan.set(0, 0);
+    depthOffset = 0;
     updateCameraTransform();
   }
 
   /** Clears the pan without a repaint, for a reset that sets the rest of the view afterwards. */
   public void clearPan() {
     pan.set(0, 0);
+    depthOffset = 0;
     resetTransformation();
   }
 
   public void resetAll() {
     pan.set(0, 0);
+    depthOffset = 0;
     setCameraView(getDefaultOrientation());
   }
 

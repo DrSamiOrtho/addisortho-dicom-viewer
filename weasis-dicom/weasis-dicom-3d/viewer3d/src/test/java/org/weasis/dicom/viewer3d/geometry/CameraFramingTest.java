@@ -29,10 +29,15 @@ class CameraFramingTest {
 
   /** The camera's view matrix: pan in view space, rotation, then the pivot brought to the axis. */
   private static Matrix4d view(Quaterniond rotation, Vector3d pivot, Vector2d pan, double zoom) {
+    return view(rotation, pivot, pan, 0.0, zoom);
+  }
+
+  private static Matrix4d view(
+      Quaterniond rotation, Vector3d pivot, Vector2d pan, double depthOffset, double zoom) {
     double distance = CameraFraming.CAMERA_DISTANCE_AT_ZOOM_ONE / zoom;
-    double hh = CameraFraming.viewHalfHeight(distance, FOV);
+    double hh = CameraFraming.viewHalfHeight(Math.abs(-distance + depthOffset), FOV);
     return new Matrix4d()
-        .setTranslation(new Vector3d(pan.x * hh, pan.y * hh, -distance))
+        .setTranslation(new Vector3d(pan.x * hh, pan.y * hh, -distance + depthOffset))
         .rotate(rotation)
         .translate(new Vector3d(pivot).negate());
   }
@@ -75,29 +80,43 @@ class CameraFramingTest {
   }
 
   @Test
-  void panCompensationKeepsTheImageStillWhenThePivotMoves() {
+  void pivotRebaseKeepsEveryPointWhereItIsIncludingItsDepth() {
     Quaterniond rotation = new Quaterniond().rotationXYZ(-1.2, 0.4, 0.3);
     double zoom = 1.7;
     double distance = CameraFraming.CAMERA_DISTANCE_AT_ZOOM_ONE / zoom;
-    Vector3d oldPivot = new Vector3d(0, 0, 0);
-    Vector3d newPivot = new Vector3d(0.3, -0.2, 0.25);
+    Vector3d oldPivot = new Vector3d(0.1, -0.05, 0.2);
+    // A move with a large component along the view axis (camera-space z), which is where only
+    // compensating x and y would change the perspective size.
+    Vector3d delta = new Vector3d(0.3, -0.2, 0.5);
+    Vector3d newPivot = new Vector3d(oldPivot).add(delta);
     Vector2d pan = new Vector2d(0.1, -0.05);
-    Vector2d compensated =
-        new Vector2d(pan)
-            .add(
-                CameraFraming.panForPivotChange(
-                    rotation,
-                    new Vector3d(newPivot).sub(oldPivot),
-                    CameraFraming.viewHalfHeight(distance, FOV)));
-    Matrix4d before = view(rotation, oldPivot, pan, zoom);
-    Matrix4d after = view(rotation, newPivot, compensated, zoom);
-    // Points at the depth of the pivot keep their place exactly; others move only by the
-    // perspective of the small depth change, which the compensation leaves alone.
-    Vector3d p = new Vector3d(newPivot).add(0.2, 0.1, 0);
-    Vector4d vb = before.transform(new Vector4d(p, 1));
-    Vector4d va = after.transform(new Vector4d(p, 1));
-    assertEquals(vb.x, va.x, 1e-9);
-    assertEquals(vb.y, va.y, 1e-9);
+    double depth0 = -0.15;
+    CameraFraming.PivotRebase rebase =
+        CameraFraming.rebasePivot(rotation, delta, pan, distance, depth0, FOV);
+    Matrix4d before = view(rotation, oldPivot, pan, depth0, zoom);
+    Matrix4d after = view(rotation, newPivot, rebase.pan(), rebase.depthOffset(), zoom);
+    Vector3d viewDelta = rotation.transform(new Vector3d(delta));
+    assertTrue(Math.abs(viewDelta.z) > 0.1, "the move has a camera-space depth component");
+    Random random = new Random(3);
+    for (int i = 0; i < 20; i++) {
+      Vector3d p =
+          new Vector3d(
+              random.nextDouble() * 2 - 1,
+              random.nextDouble() * 2 - 1,
+              random.nextDouble() * 2 - 1);
+      Vector4d vb = before.transform(new Vector4d(p, 1));
+      Vector4d va = after.transform(new Vector4d(p, 1));
+      assertEquals(vb.x, va.x, 1e-9);
+      assertEquals(vb.y, va.y, 1e-9);
+      assertEquals(vb.z, va.z, 1e-9, "depth, hence the perspective size, is unchanged");
+      Vector2d nb = ndc(before, p);
+      Vector2d na = ndc(after, p);
+      assertEquals(nb.x, na.x, 1e-9);
+      assertEquals(nb.y, na.y, 1e-9);
+    }
+    // The pivot itself now sits at the new depth and on the view axis offset by the pan.
+    Vector4d pivotView = after.transform(new Vector4d(newPivot, 1));
+    assertEquals(-distance + rebase.depthOffset(), pivotView.z, 1e-9);
   }
 
   @Test

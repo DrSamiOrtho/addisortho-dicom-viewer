@@ -61,14 +61,36 @@ public final class CameraFraming {
     return Math.clamp(CAMERA_DISTANCE_AT_ZOOM_ONE / distance, Camera.SCALE_MIN, Camera.SCALE_MAX);
   }
 
+  /** The pan and the view-space depth offset that leave the image untouched after a pivot move. */
+  public record PivotRebase(Vector2d pan, double depthOffset) {}
+
   /**
-   * The change of pan, in units of the view half height, that keeps the image where it is when the
-   * pivot moves by {@code pivotDelta} in world units.
+   * The pan and depth offset that keep every point of the volume exactly where it is, in all three
+   * view coordinates, when the pivot moves by {@code pivotDelta} in world units. The view transform
+   * is T(pan * halfHeight, -distance + depthOffset) R T(-pivot): the rotated delta is folded into
+   * the pan on x and y and into the depth offset on z, and the pan is rescaled to the half height
+   * at the new depth.
+   *
+   * @param cameraDistance distance from the camera to the pivot before the move, the zoom's
+   * @param depthOffset extra view-space depth before the move
    */
-  public static Vector2d panForPivotChange(
-      Quaterniond rotation, Vector3d pivotDelta, double viewHalfHeight) {
+  public static PivotRebase rebasePivot(
+      Quaterniond rotation,
+      Vector3d pivotDelta,
+      Vector2d pan,
+      double cameraDistance,
+      double depthOffset,
+      double fovDegrees) {
     Vector3d d = rotation.transform(new Vector3d(pivotDelta));
-    return new Vector2d(d.x / viewHalfHeight, d.y / viewHalfHeight);
+    double z0 = -cameraDistance + depthOffset;
+    double z1 = z0 + d.z;
+    double hh0 = viewHalfHeight(Math.abs(z0), fovDegrees);
+    double hh1 = viewHalfHeight(Math.abs(z1), fovDegrees);
+    if (hh1 <= 0) {
+      return new PivotRebase(new Vector2d(pan), depthOffset + d.z);
+    }
+    return new PivotRebase(
+        new Vector2d((pan.x * hh0 + d.x) / hh1, (pan.y * hh0 + d.y) / hh1), depthOffset + d.z);
   }
 
   /** Half height of the view at the pivot, in world units. */

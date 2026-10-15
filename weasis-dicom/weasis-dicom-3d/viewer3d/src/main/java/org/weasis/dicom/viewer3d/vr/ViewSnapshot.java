@@ -27,6 +27,7 @@ public record ViewSnapshot(
     Vector3d position,
     Vector3d pivot,
     Vector2d pan,
+    double depthOffset,
     double zoom,
     Preset preset,
     int windowWidth,
@@ -44,6 +45,7 @@ public record ViewSnapshot(
         new Vector3d(c.getPosition()),
         c.getPivot(),
         c.getPan(),
+        c.getDepthOffset(),
         c.getZoomFactor(),
         view.getVolumePreset(),
         layer.getWindowWidth(),
@@ -71,7 +73,7 @@ public record ViewSnapshot(
     view.setCropBox(cropEnabled, cropBox, false);
     Camera c = view.getCamera();
     c.setPivot(pivot);
-    c.setPan(pan);
+    c.setPan(pan, depthOffset);
     c.set(position, rotation, zoom, false);
     view.getEventManager().getAction(ActionW.ZOOM).ifPresent(a -> a.setRealValue(zoom, false));
     c.updateCameraTransform();
