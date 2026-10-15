@@ -65,6 +65,22 @@ public final class CameraFraming {
   public record PivotRebase(Vector2d pan, double depthOffset) {}
 
   /**
+   * As {@link #rebasePivot} for the orthographic projection, whose half height does not depend on
+   * the depth: the rotated move goes into the pan at the fixed half height, and into the depth
+   * offset, which the projection does not see.
+   */
+  public static PivotRebase rebasePivotOrthographic(
+      Quaterniond rotation,
+      Vector3d pivotDelta,
+      Vector2d pan,
+      double halfHeight,
+      double depthOffset) {
+    Vector3d d = rotation.transform(new Vector3d(pivotDelta));
+    return new PivotRebase(
+        new Vector2d(pan.x + d.x / halfHeight, pan.y + d.y / halfHeight), depthOffset + d.z);
+  }
+
+  /**
    * The pan and depth offset that keep every point of the volume exactly where it is, in all three
    * view coordinates, when the pivot moves by {@code pivotDelta} in world units. The view transform
    * is T(pan * halfHeight, -distance + depthOffset) R T(-pivot): the rotated delta is folded into

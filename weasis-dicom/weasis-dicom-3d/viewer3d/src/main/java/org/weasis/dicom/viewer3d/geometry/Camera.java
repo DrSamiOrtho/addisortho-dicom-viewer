@@ -233,8 +233,14 @@ public class Camera {
     if (delta.lengthSquared() == 0.0) {
       return;
     }
+    // The active projection decides the half height the pan is measured in: distance-dependent in
+    // perspective, 2 / zoom in orthographic.
     CameraFraming.PivotRebase rebase =
-        CameraFraming.rebasePivot(rotation, delta, pan, abs(internalZoomFactor), depthOffset, fov);
+        orthographicProjection
+            ? CameraFraming.rebasePivotOrthographic(
+                rotation, delta, pan, viewHalfHeight(), depthOffset)
+            : CameraFraming.rebasePivot(
+                rotation, delta, pan, abs(internalZoomFactor), depthOffset, fov);
     pan.set(rebase.pan());
     depthOffset = rebase.depthOffset();
     pivot.set(worldPivot);

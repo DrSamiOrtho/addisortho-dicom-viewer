@@ -144,4 +144,53 @@ class CameraFramingTest {
     assertEquals(n1.x, n2.x, 1e-9);
     assertEquals(n1.y, n2.y, 1e-9);
   }
+
+  /** The orthographic view matrix of the camera: pan at the fixed half height 2 / zoom. */
+  private static Matrix4d orthoView(
+      Quaterniond rotation, Vector3d pivot, Vector2d pan, double depthOffset, double zoom) {
+    double distance = CameraFraming.CAMERA_DISTANCE_AT_ZOOM_ONE / (zoom / 3.5);
+    double hh = 2.0 / zoom;
+    return new Matrix4d()
+        .setTranslation(new Vector3d(pan.x * hh, pan.y * hh, -distance + depthOffset))
+        .rotate(rotation)
+        .translate(new Vector3d(pivot).negate());
+  }
+
+  @Test
+  void orthographicPivotRebaseUsesTheProjectionsOwnHalfHeight() {
+    Quaterniond rotation = new Quaterniond().rotationXYZ(-1.1, 0.3, 0.2);
+    double zoom = 1.0;
+    Vector3d oldPivot = new Vector3d();
+    Vector3d delta = new Vector3d(0.5, -0.2, 0.3);
+    Vector2d pan = new Vector2d(0.05, 0.1);
+    double hh = 2.0 / zoom;
+    CameraFraming.PivotRebase ortho =
+        CameraFraming.rebasePivotOrthographic(rotation, delta, pan, hh, 0.0);
+    Matrix4d before = orthoView(rotation, oldPivot, pan, 0.0, zoom);
+    Matrix4d after =
+        orthoView(rotation, new Vector3d(delta), ortho.pan(), ortho.depthOffset(), zoom);
+    Random random = new Random(5);
+    for (int i = 0; i < 20; i++) {
+      Vector3d p =
+          new Vector3d(
+              random.nextDouble() * 2 - 1,
+              random.nextDouble() * 2 - 1,
+              random.nextDouble() * 2 - 1);
+      Vector4d vb = before.transform(new Vector4d(p, 1));
+      Vector4d va = after.transform(new Vector4d(p, 1));
+      assertEquals(vb.x, va.x, 1e-9);
+      assertEquals(vb.y, va.y, 1e-9);
+      assertEquals(vb.z, va.z, 1e-9);
+    }
+    // The perspective rebase at the same zoom would shift the image in this projection: it scales
+    // the move by a half height that the orthographic view does not have.
+    CameraFraming.PivotRebase persp =
+        CameraFraming.rebasePivot(
+            rotation, delta, pan, CameraFraming.CAMERA_DISTANCE_AT_ZOOM_ONE, 0.0, FOV);
+    Matrix4d wrong =
+        orthoView(rotation, new Vector3d(delta), persp.pan(), persp.depthOffset(), zoom);
+    Vector4d vb = before.transform(new Vector4d(0.2, 0.1, -0.3, 1));
+    Vector4d vw = wrong.transform(new Vector4d(0.2, 0.1, -0.3, 1));
+    assertTrue(Math.abs(vb.x - vw.x) > 0.05, "the perspective formula is not right here");
+  }
 }
