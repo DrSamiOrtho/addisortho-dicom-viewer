@@ -282,48 +282,69 @@ public final class VoxelFlood {
       VoxelBits grown,
       WorkingMemory budget) {
     int sx = kept.sizeX();
-    int sy = kept.sizeY();
     int sz = kept.sizeZ();
     IntQueue[] pending = new IntQueue[sz];
     tested.set(seed.x, seed.y, seed.z);
     grown.set(seed.x, seed.y, seed.z);
     pending[seed.z] = new IntQueue(1 << 12, budget);
     pending[seed.z].add(seed.x + sx * seed.y);
-    long left = 1;
     boolean upwards = true;
-    while (left > 0) {
+    while (anyPending(pending)) {
       for (int step = 0; step < sz; step++) {
         int z = upwards ? step : sz - 1 - step;
-        IntQueue queue = pending[z];
-        if (queue == null) {
-          continue;
+        // Each queue of this slice is drained and freed; the voxels it adds within the slice go
+        // to a new queue, drained in turn, so a slice is finished before the sweep moves on.
+        IntQueue queue;
+        while ((queue = pending[z]) != null) {
+          pending[z] = null;
+          drain(queue, z, space, kept, sampler, visible, tested, grown, pending, budget);
+          queue.free();
         }
-        // Drained below; its memory goes back to the budget before the next slice fills up.
-        pending[z] = null;
-        while (!queue.isEmpty()) {
-          int i = queue.poll();
-          left--;
-          int x = i % sx;
-          int y = i / sx;
-          for (int[] n : NEIGHBOURS) {
-            int nx = x + n[0];
-            int ny = y + n[1];
-            int nz = z + n[2];
-            if (inside(kept, nx, ny, nz)
-                && tested.testAndSet(nx, ny, nz)
-                && qualifies(space, kept, sampler, visible, nx, ny, nz)) {
-              grown.set(nx, ny, nz);
-              if (pending[nz] == null) {
-                pending[nz] = new IntQueue(1 << 12, budget);
-              }
-              pending[nz].add(nx + sx * ny);
-              left++;
-            }
-          }
-        }
-        queue.free();
       }
       upwards = !upwards;
+    }
+  }
+
+  private static boolean anyPending(IntQueue[] pending) {
+    for (IntQueue q : pending) {
+      if (q != null) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Drains one slice queue, adding the shown neighbours of its voxels to their slices' queues. */
+  private static void drain(
+      IntQueue queue,
+      int z,
+      VolumeSpace space,
+      VoxelBits kept,
+      VoxelSampler sampler,
+      Visibility visible,
+      VoxelBits tested,
+      VoxelBits grown,
+      IntQueue[] pending,
+      WorkingMemory budget) {
+    int sx = kept.sizeX();
+    while (!queue.isEmpty()) {
+      int i = queue.poll();
+      int x = i % sx;
+      int y = i / sx;
+      for (int[] n : NEIGHBOURS) {
+        int nx = x + n[0];
+        int ny = y + n[1];
+        int nz = z + n[2];
+        if (inside(kept, nx, ny, nz)
+            && tested.testAndSet(nx, ny, nz)
+            && qualifies(space, kept, sampler, visible, nx, ny, nz)) {
+          grown.set(nx, ny, nz);
+          if (pending[nz] == null) {
+            pending[nz] = new IntQueue(1 << 12, budget);
+          }
+          pending[nz].add(nx + sx * ny);
+        }
+      }
     }
   }
 

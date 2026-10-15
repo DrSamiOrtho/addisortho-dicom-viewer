@@ -317,9 +317,10 @@ class VoxelFloodTest {
     assertEquals((long) w * h * d, r.voxels());
     long sliceQueue = 4L * w * h; // one int per voxel of a slice
     long bits = 2 * kept.bytes();
-    // Two full slice queues, one of them caught mid-growth (old plus new array), is the ceiling.
-    assertTrue(r.peakBytes() <= bits + 3 * sliceQueue + (4L << 12), "peak " + r.peakBytes());
-    assertTrue(r.peakBytes() < bits + (long) d * sliceQueue / 2, "no queue per slice retained");
+    // The slice being drained, the queue its own neighbours go to, the next slice's queue and
+    // one growth copy: four slice queues is the ceiling, whatever the depth.
+    assertTrue(r.peakBytes() <= bits + 4 * sliceQueue + (4L << 12), "peak " + r.peakBytes());
+    assertTrue(r.peakBytes() < bits + (long) (d - 2) * sliceQueue, "no queue per slice retained");
     assertEquals(bits, budget.used(), "every queue was given back");
   }
 }
