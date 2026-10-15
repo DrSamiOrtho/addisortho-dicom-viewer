@@ -193,9 +193,12 @@ public final class VolumePicker {
         if (segmentEntry == null) {
           segmentEntry = hitAt(tex, t);
         }
-        // SEG_OPACITY_REF_DIST: the LUT alpha is the opacity over 0.1 of the texture.
+        // SEG_OPACITY_REF_DIST: the LUT alpha is the opacity over 0.1 of the texture. The shader
+        // takes the alpha as it is, so alpha 1 is fully opaque over any sampled thickness.
         double segA =
-            1.0 - Math.pow(1.0 - Math.min(segAlpha, 0.9999), (t - previous) * texPerWorld / 0.1);
+            segAlpha >= 1.0
+                ? 1.0
+                : 1.0 - Math.pow(1.0 - segAlpha, (t - previous) * texPerWorld / 0.1);
         segAccumulated += (1.0 - segAccumulated) * segA;
         if (segAccumulated >= HIT_OPACITY) {
           segmentHit = hitAt(tex, t);

@@ -296,4 +296,29 @@ class VolumePickerTest {
             .pickRay(new Vector3d(0, 0, -3), new Vector3d(0, 0, 1), FULL_MIN, FULL_MAX)
             .isPresent());
   }
+
+  @Test
+  void aThinFullyOpaqueSegmentCoversTheAnatomyAsItDoesOnScreen() {
+    // One texture slice of alpha 1 behind opaque anatomy: the shader's accumulation reaches full
+    // opacity in that slice, so the overlay covers the anatomy and the pick lands on the segment.
+    SegmentField oneSlice = t -> t.z >= 0.5 && t.z < 0.5 + 1.0 / N ? 1.0 : 0.0;
+    double depth =
+        depthOf(
+            new VolumePicker(
+                SPACE,
+                SOLID,
+                OPAQUE_ABOVE_500,
+                t -> false,
+                VolumePicker.SegMode.OVERLAY,
+                oneSlice));
+    assertEquals(3.0, depth, VOXEL);
+    // Alpha just below one over the same thin slice does not cover: the anatomy is picked.
+    SegmentField nearly = t -> t.z >= 0.5 && t.z < 0.5 + 1.0 / N ? 0.9 : 0.0;
+    assertEquals(
+        2.0,
+        depthOf(
+            new VolumePicker(
+                SPACE, SOLID, OPAQUE_ABOVE_500, t -> false, VolumePicker.SegMode.OVERLAY, nearly)),
+        VOXEL);
+  }
 }
