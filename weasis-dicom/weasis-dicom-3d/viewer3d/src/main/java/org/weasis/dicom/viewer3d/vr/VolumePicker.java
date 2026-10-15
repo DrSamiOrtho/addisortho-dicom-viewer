@@ -53,7 +53,7 @@ public final class VolumePicker {
       return this == MASK_INCLUDE ? !insideSegment : this == MASK_EXCLUDE && insideSegment;
     }
 
-    /** Whether a visible segment is itself an opaque surface in this mode. */
+    /** Whether the segments are composited over the anatomy as their own layer in this mode. */
     public boolean segmentIsSurface() {
       return this == OVERLAY || this == SEG_ONLY;
     }
@@ -150,10 +150,25 @@ public final class VolumePicker {
     // The ray walks the texture, whatever the resolution of the kept mask laid over it.
     Vector3d voxel = space.textureVoxelWorldSize(new Vector3d());
     double step = 0.5 * Math.min(voxel.x, Math.min(voxel.y, voxel.z));
+    // Texture-space distance per world unit along the ray, the unit of the segment opacities.
+    Vector3d texel = space.texelSize();
+    double texPerWorld =
+        Math.sqrt(
+            sq(direction.x / (2 * texel.x))
+                + sq(direction.y / (2 * texel.y))
+                + sq(direction.z / (2 * texel.z)));
+    boolean composited = segMode.segmentIsSurface();
     Vector3d world = new Vector3d();
     Vector3d tex = new Vector3d();
     Vector3d texVoxel = new Vector3d();
     double accumulated = 0.0;
+    Hit anatomyHit = null;
+    // The segments are accumulated on their own along the whole ray and composited over the
+    // anatomy, as accumulateSegOverlay() is in the shaders: where they end up half opaque they
+    // are what the eye lands on, wherever the anatomy was.
+    double segAccumulated = 0.0;
+    Hit segmentHit = null;
+    Hit segmentEntry = null;
     double previous = tmin;
     for (double t = tmin + step * 0.5; t <= tmax; t += step) {
       world.set(direction).mul(t).add(origin);
@@ -162,16 +177,26 @@ public final class VolumePicker {
         previous = t;
         continue;
       }
-      boolean inSegment = segMode != SegMode.NONE && segments.insideVisible(tex);
+      double segAlpha = segMode == SegMode.NONE ? 0.0 : segments.opacity(tex);
+      boolean inSegment = segAlpha > 0;
+      if (composited && inSegment && segmentHit == null) {
+        if (segmentEntry == null) {
+          segmentEntry = hitAt(tex, t);
+        }
+        // SEG_OPACITY_REF_DIST: the LUT alpha is the opacity over 0.1 of the texture.
+        double segA =
+            1.0 - Math.pow(1.0 - Math.min(segAlpha, 0.9999), (t - previous) * texPerWorld / 0.1);
+        segAccumulated += (1.0 - segAccumulated) * segA;
+        if (segAccumulated >= HIT_OPACITY) {
+          segmentHit = hitAt(tex, t);
+        }
+      }
       double alpha = 0.0;
-      if (segMode.rendersAnatomy() && !segMode.masksAnatomy(inSegment)) {
+      if (anatomyHit == null && segMode.rendersAnatomy() && !segMode.masksAnatomy(inSegment)) {
         // The texture's own voxels, trilinearly as the sampler of the shaders.
         space.textureVoxelOfTexCoord(tex, texVoxel);
         double value = sampler.interpolate(texVoxel.x, texVoxel.y, texVoxel.z);
         alpha = Double.isNaN(value) ? 0.0 : transfer.opacity(value);
-      }
-      if (inSegment && segMode.segmentIsSurface()) {
-        alpha = 1.0; // the segment's own surface, what the overlay shows first
       }
       if (alpha > 0.0) {
         // One in-plane texture voxel is the unit the preset opacities are given for, as in the
@@ -180,14 +205,39 @@ public final class VolumePicker {
         double corrected = 1.0 - Math.pow(1.0 - Math.min(alpha, 0.9999), steps);
         accumulated += (1.0 - accumulated) * corrected;
         if (accumulated >= HIT_OPACITY) {
-          Vector3i grid = space.gridOfTexCoord(tex, new Vector3i());
-          Vector3d vol = space.volumeOfTexCoord(tex, new Vector3d());
-          return Optional.of(new Hit(new Vector3d(tex), grid, vol, t));
+          anatomyHit = hitAt(tex, t);
+          if (!composited) {
+            return Optional.of(anatomyHit);
+          }
         }
       }
       previous = t;
+      if (composited && segmentHit != null && (anatomyHit != null || !segMode.rendersAnatomy())) {
+        break; // both layers are settled
+      }
     }
-    return Optional.empty();
+    if (!composited) {
+      return Optional.empty();
+    }
+    // The overlay is drawn only where the anatomy ray produced something (pxColor.a > 0).
+    boolean overlayShown = !segMode.rendersAnatomy() || accumulated > 0.0;
+    if (overlayShown && segmentHit != null) {
+      return Optional.of(segmentHit);
+    }
+    if (anatomyHit != null) {
+      return Optional.of(anatomyHit);
+    }
+    return Optional.ofNullable(overlayShown ? segmentEntry : null);
+  }
+
+  private Hit hitAt(Vector3d tex, double t) {
+    Vector3i grid = space.gridOfTexCoord(tex, new Vector3i());
+    Vector3d vol = space.volumeOfTexCoord(tex, new Vector3d());
+    return new Hit(new Vector3d(tex), grid, vol, t);
+  }
+
+  private static double sq(double v) {
+    return v * v;
   }
 
   private static boolean outsideUnitCube(Vector3d t) {

@@ -215,20 +215,53 @@ class VolumePickerTest {
             new VolumePicker(
                 SPACE, SOLID, OPAQUE_ABOVE_500, t -> false, VolumePicker.SegMode.SEG_ONLY, BACK)),
         VOXEL);
-    // Overlay: transparent anatomy, the segment drawn over it is what the click lands on.
+    // Overlay with transparent anatomy: the shader draws the overlay only where the anatomy ray
+    // produced something (pxColor.a > 0), so with air alone nothing is shown and nothing picked.
+    assertTrue(
+        new VolumePicker(
+                SPACE, AIR, OPAQUE_ABOVE_500, t -> false, VolumePicker.SegMode.OVERLAY, BACK)
+            .pickRay(new Vector3d(0, 0, -3), new Vector3d(0, 0, 1), FULL_MIN, FULL_MAX)
+            .isEmpty());
+    // Overlay with opaque anatomy in front of an opaque segment behind it: the shader composites
+    // the segment layer over the anatomy, so the eye lands on the segment.
     assertEquals(
         3.0,
         depthOf(
             new VolumePicker(
-                SPACE, AIR, OPAQUE_ABOVE_500, t -> false, VolumePicker.SegMode.OVERLAY, BACK)),
+                SPACE, SOLID, OPAQUE_ABOVE_500, t -> false, VolumePicker.SegMode.OVERLAY, BACK)),
         VOXEL);
-    // Overlay with opaque anatomy in front of the segment: the anatomy comes first.
+    // A faint, thin segment behind the anatomy does not cover it: its accumulated opacity over
+    // 0.1 of the texture stays well below one half, so the anatomy is picked.
+    SegmentField faintThin = t -> t.z >= 0.5 && t.z < 0.55 ? 0.05 : 0.0;
     assertEquals(
         2.0,
         depthOf(
             new VolumePicker(
-                SPACE, SOLID, OPAQUE_ABOVE_500, t -> false, VolumePicker.SegMode.OVERLAY, BACK)),
+                SPACE,
+                SOLID,
+                OPAQUE_ABOVE_500,
+                t -> false,
+                VolumePicker.SegMode.OVERLAY,
+                faintThin)),
         VOXEL);
+    // A translucent but thick segment does cover: alpha 0.3 over half the texture accumulates to
+    // 1 - 0.7^5 = 0.83, crossing one half about 0.19 texture units (0.39 world) past its front.
+    SegmentField translucentThick = t -> t.z >= 0.5 ? 0.3 : 0.0;
+    double expected = 3.0 + 2 * 0.1 * Math.log(0.5) / Math.log(0.7);
+    assertEquals(
+        expected,
+        depthOf(
+            new VolumePicker(
+                SPACE,
+                SOLID,
+                OPAQUE_ABOVE_500,
+                t -> false,
+                VolumePicker.SegMode.OVERLAY,
+                translucentThick)),
+        VOXEL);
+    // The overlay is drawn only where the anatomy ray produced something: air and a segment
+    // behind it with transparent anatomy shows the segment (checked above), but in mask modes
+    // nothing changes.
     // Nothing visible at all: no hit.
     assertTrue(
         new VolumePicker(
