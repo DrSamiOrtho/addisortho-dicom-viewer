@@ -20,7 +20,10 @@ class VolumeSpaceTest {
 
   private static final VolumeSpace SPACE =
       new VolumeSpace(
-          new Vector3i(256, 256, 330), new Vector3i(512, 512, 660), new Vector3d(1, 1, 0.9));
+          new Vector3i(256, 256, 330),
+          new Vector3i(512, 512, 660),
+          new Vector3i(512, 512, 660),
+          new Vector3d(1, 1, 0.9));
 
   @Test
   void textureAndWorldAreInverse() {
@@ -68,5 +71,68 @@ class VolumeSpaceTest {
   void gridForHalvesAVolumeAboveTheBudget() {
     assertEquals(new Vector3i(512, 512, 660), KeptMask.gridFor(new Vector3i(512, 512, 660)));
     assertEquals(new Vector3i(512, 512, 1024), KeptMask.gridFor(new Vector3i(1024, 1024, 2048)));
+  }
+
+  /**
+   * VolumeBuilder's loop: slice i = floor(i * volumeDepth / textureDepth) uploaded at depth-1-i.
+   */
+  private static int[] uploadOrder(int textureDepth, int volumeDepth) {
+    double step = (double) volumeDepth / textureDepth;
+    int[] sourceOfTexZ = new int[textureDepth];
+    for (int i = textureDepth - 1; i >= 0; i--) {
+      sourceOfTexZ[textureDepth - 1 - i] = (int) Math.floor(i * step);
+    }
+    return sourceOfTexZ;
+  }
+
+  @Test
+  void sliceMappingMatchesTheUploadForFullAndReducedDepths() {
+    int[][] cases = {{659, 659}, {330, 660}, {64, 100}, {3, 7}, {1, 5}};
+    for (int[] c : cases) {
+      int textureDepth = c[0];
+      int volumeDepth = c[1];
+      int[] uploaded = uploadOrder(textureDepth, volumeDepth);
+      VolumeSpace space =
+          new VolumeSpace(
+              new Vector3i(4, 4, textureDepth),
+              new Vector3i(4, 4, textureDepth),
+              new Vector3i(4, 4, volumeDepth),
+              new Vector3d(1, 1, 1));
+      for (int texZ = 0; texZ < textureDepth; texZ++) {
+        assertEquals(
+            uploaded[texZ],
+            VolumeSpace.sourceSliceOfTextureSlice(texZ, textureDepth, volumeDepth),
+            "texture slice " + texZ + " of " + textureDepth + "/" + volumeDepth);
+        // The centre of the texture slice is exactly its source slice.
+        Vector3d centre = space.texCoordOfTextureVoxel(0, 0, texZ, new Vector3d());
+        Vector3d v = space.volumeOfTexCoord(centre, new Vector3d());
+        assertEquals(uploaded[texZ], v.z, 1e-9);
+        assertEquals(
+            texZ, VolumeSpace.textureSliceOfSourceSlice(uploaded[texZ], textureDepth, volumeDepth));
+      }
+    }
+    // The reviewer's case: 660 slices in a 330-slice texture, texture slice 100 holds source 458.
+    assertEquals(458, VolumeSpace.sourceSliceOfTextureSlice(100, 330, 660));
+    Vector3d v =
+        new VolumeSpace(
+                new Vector3i(4, 4, 330),
+                new Vector3i(4, 4, 330),
+                new Vector3i(4, 4, 660),
+                new Vector3d(1, 1, 1))
+            .volumeOfTexCoord(new Vector3d(0.5, 0.5, 100.5 / 330), new Vector3d());
+    assertEquals(458.0, v.z, 1e-9);
+  }
+
+  @Test
+  void textureAndGridVoxelSizesAreDistinct() {
+    Vector3d texVoxel = SPACE.textureVoxelWorldSize(new Vector3d());
+    Vector3d gridVoxel = SPACE.gridVoxelWorldSize(new Vector3d());
+    assertEquals(2.0 / 512, texVoxel.x, 1e-12);
+    assertEquals(2.0 / 256, gridVoxel.x, 1e-12);
+    Vector3i t = SPACE.textureVoxelOf(new Vector3d(0.999, 0.5, 0.001), new Vector3i());
+    assertEquals(new Vector3i(511, 256, 0), t);
+    Vector3d f = SPACE.textureVoxelOfTexCoord(new Vector3d(0.5, 0.5, 0.5), new Vector3d());
+    assertEquals(255.5, f.x, 1e-9);
+    assertEquals(329.5, f.z, 1e-9);
   }
 }

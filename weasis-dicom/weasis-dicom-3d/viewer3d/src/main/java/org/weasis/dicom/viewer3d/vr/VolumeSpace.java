@@ -21,32 +21,69 @@ import org.joml.Vector3i;
  *       the last axial slice (z = 0) to the first one, see {@code VolumeBuilder}.
  *   <li><b>world</b>: the shaders' ray space, {@code [-texelSize, texelSize]} on each axis where
  *       {@code texelSize} is the normalised texel size of the volume texture.
+ *   <li><b>texture voxels</b>: the voxels of the volume texture, what the ray marches and the
+ *       opacity is corrected by; a slice of the texture is one source slice, chosen by {@link
+ *       #sourceSliceOfTextureSlice}, scaled in plane to the texture's width and height.
  *   <li><b>grid</b>: a voxel grid laid over the texture, the one of the kept mask, which may be
- *       coarser than the texture.
+ *       coarser than the texture; used for the mask alone.
  *   <li><b>volume</b>: the voxel indices of the CPU {@code Volume}, fractional, where the slices
- *       are resampled to the texture by a centre-aligned scale.
+ *       are resampled to the texture by a centre-aligned scale in plane and by {@link
+ *       #sourceSliceOfTextureSlice} across slices.
  * </ul>
  *
- * @param grid size of the voxel grid
+ * @param grid size of the mask grid
+ * @param texture size of the volume texture
  * @param volume size of the CPU volume
  * @param texelSize normalised texel size of the texture, as the {@code texelSize} uniform
  */
-public record VolumeSpace(Vector3i grid, Vector3i volume, Vector3d texelSize) {
+public record VolumeSpace(Vector3i grid, Vector3i texture, Vector3i volume, Vector3d texelSize) {
 
   public VolumeSpace {
     grid = new Vector3i(grid);
+    texture = new Vector3i(texture);
     volume = new Vector3i(volume);
     texelSize = new Vector3d(texelSize);
     if (grid.x <= 0 || grid.y <= 0 || grid.z <= 0) {
       throw new IllegalArgumentException("Empty grid " + grid);
+    }
+    if (texture.x <= 0 || texture.y <= 0 || texture.z <= 0) {
+      throw new IllegalArgumentException("Empty texture " + texture);
     }
     if (volume.x <= 0 || volume.y <= 0 || volume.z <= 0) {
       throw new IllegalArgumentException("Empty volume " + volume);
     }
   }
 
-  /** A space whose grid is the volume itself and whose texture is the volume scaled to a cube. */
+  /**
+   * The source slice held by a texture slice, the one convention of the upload (VolumeBuilder), of
+   * the conversions here and of the picking: texture slice 0 holds the last source slice, and a
+   * texture shallower than the volume takes every {@code volumeDepth / textureDepth}-th slice.
+   */
+  public static int sourceSliceOfTextureSlice(int texZ, int textureDepth, int volumeDepth) {
+    double step = volumeDepth / (double) textureDepth;
+    int i = textureDepth - 1 - Math.clamp(texZ, 0, textureDepth - 1);
+    return Math.clamp((int) Math.floor(i * step), 0, volumeDepth - 1);
+  }
+
+  /**
+   * The texture slice holding the source slice {@code vz}, the exact inverse of the convention
+   * above for every uploaded slice (the texture is never deeper than the volume, so {@code ceil(vz
+   * / step)} is the one index whose slice starts at or after {@code vz}); a skipped source slice
+   * maps to the texture slice holding the next uploaded one.
+   */
+  public static int textureSliceOfSourceSlice(int vz, int textureDepth, int volumeDepth) {
+    double step = volumeDepth / (double) textureDepth;
+    int i = (int) Math.ceil(Math.clamp(vz, 0, volumeDepth - 1) / step);
+    return Math.clamp(textureDepth - 1 - i, 0, textureDepth - 1);
+  }
+
+  /** A space whose texture and grid are the volume itself, scaled to a cube by its spacing. */
   public static VolumeSpace ofVolume(Vector3i size, Vector3d spacing) {
+    return ofVolume(size, size, spacing);
+  }
+
+  /** A space whose grid is the texture, for a volume scaled to a cube by its spacing. */
+  public static VolumeSpace ofVolume(Vector3i texture, Vector3i size, Vector3d spacing) {
     double maxExtent =
         Math.max(size.x * spacing.x, Math.max(size.y * spacing.y, size.z * spacing.z));
     Vector3d texel =
@@ -54,7 +91,12 @@ public record VolumeSpace(Vector3i grid, Vector3i volume, Vector3d texelSize) {
             size.x * spacing.x / maxExtent,
             size.y * spacing.y / maxExtent,
             size.z * spacing.z / maxExtent);
-    return new VolumeSpace(size, size, texel);
+    return new VolumeSpace(texture, texture, size, texel);
+  }
+
+  /** A copy with another mask grid. */
+  public VolumeSpace withGrid(Vector3i newGrid) {
+    return new VolumeSpace(newGrid, texture, volume, texelSize);
   }
 
   public long gridVoxels() {
@@ -74,20 +116,54 @@ public record VolumeSpace(Vector3i grid, Vector3i volume, Vector3d texelSize) {
         Math.clamp((int) Math.floor(t.z * grid.z), 0, grid.z - 1));
   }
 
-  /** Fractional volume voxel of a texture coordinate; a voxel centre is at an integer value. */
+  /**
+   * Fractional volume voxel of a texture coordinate; a voxel centre is at an integer value. In
+   * plane this is the centre-aligned scale of the upload; across slices the centre of a texture
+   * slice is exactly its source slice ({@link #sourceSliceOfTextureSlice}) and the coordinate runs
+   * linearly between the centres.
+   */
   public Vector3d volumeOfTexCoord(Vector3d t, Vector3d dst) {
-    return dst.set(t.x * volume.x - 0.5, t.y * volume.y - 0.5, (1.0 - t.z) * volume.z - 0.5);
+    double tz = t.z * texture.z;
+    int texZ = Math.clamp((int) Math.floor(tz), 0, texture.z - 1);
+    double step = volume.z / (double) texture.z;
+    double vz = sourceSliceOfTextureSlice(texZ, texture.z, volume.z) + (texZ + 0.5 - tz) * step;
+    return dst.set(t.x * volume.x - 0.5, t.y * volume.y - 0.5, vz);
   }
 
-  /** Texture coordinate of a fractional volume voxel. */
+  /**
+   * Texture coordinate of a fractional volume voxel: a source slice maps to the centre of the
+   * texture slice holding it, and the coordinate runs linearly between source slices.
+   */
   public Vector3d texCoordOfVolume(double vx, double vy, double vz, Vector3d dst) {
-    return dst.set((vx + 0.5) / volume.x, (vy + 0.5) / volume.y, 1.0 - (vz + 0.5) / volume.z);
+    double step = volume.z / (double) texture.z;
+    int nearest = Math.clamp((int) Math.round(vz), 0, volume.z - 1);
+    int texZ = textureSliceOfSourceSlice(nearest, texture.z, volume.z);
+    double tz = texZ + 0.5 - (vz - nearest) / step;
+    return dst.set((vx + 0.5) / volume.x, (vy + 0.5) / volume.y, tz / texture.z);
   }
 
   /** Grid voxel nearest to a volume voxel, clamped to the grid. */
   public Vector3i gridOfVolume(int vx, int vy, int vz, Vector3i dst) {
     Vector3d t = texCoordOfVolume(vx, vy, vz, new Vector3d());
     return gridOfTexCoord(t, dst);
+  }
+
+  /** Fractional texture voxel of a texture coordinate; a voxel centre is at an integer value. */
+  public Vector3d textureVoxelOfTexCoord(Vector3d t, Vector3d dst) {
+    return dst.set(t.x * texture.x - 0.5, t.y * texture.y - 0.5, t.z * texture.z - 0.5);
+  }
+
+  /** Texture coordinate of the centre of a texture voxel. */
+  public Vector3d texCoordOfTextureVoxel(int x, int y, int z, Vector3d dst) {
+    return dst.set((x + 0.5) / texture.x, (y + 0.5) / texture.y, (z + 0.5) / texture.z);
+  }
+
+  /** Texture voxel holding a texture coordinate, clamped to the texture. */
+  public Vector3i textureVoxelOf(Vector3d t, Vector3i dst) {
+    return dst.set(
+        Math.clamp((int) Math.floor(t.x * texture.x), 0, texture.x - 1),
+        Math.clamp((int) Math.floor(t.y * texture.y), 0, texture.y - 1),
+        Math.clamp((int) Math.floor(t.z * texture.z), 0, texture.z - 1));
   }
 
   public Vector3d worldOfTexCoord(Vector3d t, Vector3d dst) {
@@ -113,5 +189,13 @@ public record VolumeSpace(Vector3i grid, Vector3i volume, Vector3d texelSize) {
   public Vector3d gridVoxelWorldSize(Vector3d dst) {
     return dst.set(
         2.0 * texelSize.x / grid.x, 2.0 * texelSize.y / grid.y, 2.0 * texelSize.z / grid.z);
+  }
+
+  /** Size of one texture voxel in world units, the unit of the ray step and opacity correction. */
+  public Vector3d textureVoxelWorldSize(Vector3d dst) {
+    return dst.set(
+        2.0 * texelSize.x / texture.x,
+        2.0 * texelSize.y / texture.y,
+        2.0 * texelSize.z / texture.z);
   }
 }

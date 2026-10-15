@@ -1696,11 +1696,9 @@ public class View3d extends VolumeCanvas
       return null;
     }
     KeptMask mask = keptMask;
-    Vector3i grid =
-        mask != null
-            ? mask.space().grid()
-            : KeptMask.gridFor(new Vector3i(tex.getWidth(), tex.getHeight(), tex.getDepth()));
-    return new VolumeSpace(grid, tex.getVolume().getSize(), tex.getNormalizedTexelSize());
+    Vector3i texture = new Vector3i(tex.getWidth(), tex.getHeight(), tex.getDepth());
+    Vector3i grid = mask != null ? mask.space().grid() : KeptMask.gridFor(texture);
+    return new VolumeSpace(grid, texture, tex.getVolume().getSize(), tex.getNormalizedTexelSize());
   }
 
   private KeptMask getOrCreateKeptMask() {

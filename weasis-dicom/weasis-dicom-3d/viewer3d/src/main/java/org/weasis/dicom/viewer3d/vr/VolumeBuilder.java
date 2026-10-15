@@ -326,13 +326,15 @@ public final class VolumeBuilder {
 
       Volume<?, ?> v = volTexture.getVolume();
       Vector3i vSize = v.getSize();
-      double step = (double) vSize.z / volTexture.depth;
       for (int i = volTexture.depth - 1; i >= 0; i--) {
         if (isInterrupted()) {
           return;
         }
         Instant start = Instant.now();
-        int index = (int) Math.floor(i * step);
+        // Slice i is uploaded at texture depth - 1 - i; VolumeSpace shares this convention.
+        int index =
+            VolumeSpace.sourceSliceOfTextureSlice(
+                volTexture.depth - 1 - i, volTexture.depth, vSize.z);
         PlanarImage imageMLUT = volTexture.getScaledImage(v.getAxialSlice(index));
         LOGGER.debug(
             "Time preparation of {}: {} ms", i, Duration.between(start, Instant.now()).toMillis());
