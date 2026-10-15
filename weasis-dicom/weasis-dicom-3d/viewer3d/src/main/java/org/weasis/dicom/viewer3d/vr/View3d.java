@@ -1721,13 +1721,14 @@ public class View3d extends VolumeCanvas
     return mask;
   }
 
-  /** The renderer's opacity of a voxel value, from the preset and the window/level. */
+  /** The renderer's opacity of a voxel value: preset, window/level and LUT shape. */
   public TransferFunction transferFunction() {
     return new TransferFunction(
         volumePreset.getColors(),
         renderingLayer.getWindowWidth(),
         renderingLayer.getWindowCenter(),
-        renderingLayer.getOpacity());
+        renderingLayer.getOpacity(),
+        isSegMode() ? TransferFunction.LINEAR : renderingLayer.getLutShapeId());
   }
 
   /**
@@ -2053,7 +2054,8 @@ public class View3d extends VolumeCanvas
       showStatus(Messages.getString("cut.nothing"));
       return;
     }
-    double threshold = transferFunction().visibleThreshold(VISIBLE_OPACITY);
+    VoxelFlood.Visibility visible =
+        VoxelFlood.Visibility.ofOpacity(transferFunction(), VISIBLE_OPACITY);
     VoxelSampler sampler = voxelSampler();
     Vector3i seed = hit.get().grid();
     int separation = lightSeparation ? SEPARATION_VOXELS : 0;
@@ -2062,16 +2064,15 @@ public class View3d extends VolumeCanvas
         Messages.getString("cut.selecting"),
         () -> {
           Optional<VoxelFlood.Result> region =
-              VoxelFlood.grow(mask.space(), mask.bits(), sampler, threshold, seed, separation);
+              VoxelFlood.grow(mask.space(), mask.bits(), sampler, visible, seed, separation);
           if (region.isEmpty()) {
             return null;
           }
           VoxelFlood.Result r = region.get();
           LOGGER.info(
-              "{} structure of {} voxels (threshold {}, separated {}) in {} ms",
+              "{} structure of {} voxels (separated {}) in {} ms",
               keep ? "Keep" : "Remove",
               r.voxels(),
-              threshold,
               r.separated(),
               r.millis());
           return keep

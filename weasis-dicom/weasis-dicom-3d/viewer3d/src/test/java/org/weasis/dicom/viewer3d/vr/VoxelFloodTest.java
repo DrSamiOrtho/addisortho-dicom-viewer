@@ -52,6 +52,9 @@ class VoxelFloodTest {
         return solid(x, y, z) ? 800 : -200;
       };
 
+  /** Shown from 200 up, as a bone preset with a linear window. */
+  private static final VoxelFlood.Visibility ABOVE_200 = (x, y, z, v) -> v >= 200;
+
   private static VoxelBits allKept() {
     VoxelBits kept = new VoxelBits(N, N, N);
     kept.fill(true);
@@ -60,7 +63,7 @@ class VoxelFloodTest {
 
   @Test
   void withoutSeparationTheWholeConnectedStructureIsSelected() {
-    Optional<Result> r = VoxelFlood.grow(SPACE, allKept(), VOLUME, 200, gridOf(4, 12, 12), 0);
+    Optional<Result> r = VoxelFlood.grow(SPACE, allKept(), VOLUME, ABOVE_200, gridOf(4, 12, 12), 0);
     assertTrue(r.isPresent());
     assertEquals(2 * 512 + 8, r.get().voxels());
     assertFalse(r.get().separated());
@@ -68,7 +71,7 @@ class VoxelFloodTest {
 
   @Test
   void lightSeparationKeepsOnlyTheClickedCube() {
-    Optional<Result> r = VoxelFlood.grow(SPACE, allKept(), VOLUME, 200, gridOf(4, 12, 12), 1);
+    Optional<Result> r = VoxelFlood.grow(SPACE, allKept(), VOLUME, ABOVE_200, gridOf(4, 12, 12), 1);
     assertTrue(r.isPresent());
     assertTrue(r.get().separated());
     long voxels = r.get().voxels();
@@ -83,7 +86,7 @@ class VoxelFloodTest {
   @Test
   void keepOnlyAndRemoveBuildComplementaryCuts() {
     VoxelBits kept = allKept();
-    Result r = VoxelFlood.grow(SPACE, kept, VOLUME, 200, gridOf(20, 12, 12), 1).orElseThrow();
+    Result r = VoxelFlood.grow(SPACE, kept, VOLUME, ABOVE_200, gridOf(20, 12, 12), 1).orElseThrow();
     MaskDiff keep = VoxelFlood.keepOnly(kept, r.region());
     MaskDiff remove = VoxelFlood.remove(kept, r.region());
     assertEquals((long) N * N * N, keep.voxels() + remove.voxels());
@@ -101,14 +104,14 @@ class VoxelFloodTest {
   @Test
   void aClickBesideTheStructureSnapsToIt() {
     // Two voxels away from cube A, in air.
-    Optional<Result> r = VoxelFlood.grow(SPACE, allKept(), VOLUME, 200, gridOf(0, 12, 12), 0);
+    Optional<Result> r = VoxelFlood.grow(SPACE, allKept(), VOLUME, ABOVE_200, gridOf(0, 12, 12), 0);
     assertTrue(r.isPresent());
     assertTrue(r.get().voxels() >= 512);
   }
 
   @Test
   void nothingNearTheClickSelectsNothing() {
-    Optional<Result> r = VoxelFlood.grow(SPACE, allKept(), VOLUME, 200, gridOf(28, 2, 2), 0);
+    Optional<Result> r = VoxelFlood.grow(SPACE, allKept(), VOLUME, ABOVE_200, gridOf(28, 2, 2), 0);
     assertTrue(r.isEmpty());
   }
 
@@ -118,7 +121,7 @@ class VoxelFloodTest {
     // The bridge is already cut away: the two cubes are separate without any separation.
     Vector3i bridge = gridOf(13, 13, 13);
     kept.clear(bridge.x, bridge.y, bridge.z);
-    Result r = VoxelFlood.grow(SPACE, kept, VOLUME, 200, gridOf(4, 12, 12), 0).orElseThrow();
+    Result r = VoxelFlood.grow(SPACE, kept, VOLUME, ABOVE_200, gridOf(4, 12, 12), 0).orElseThrow();
     assertEquals(512 + 3, r.voxels());
   }
 
@@ -190,5 +193,59 @@ class VoxelFloodTest {
     }
     assertTrue(queue.isEmpty());
     assertTrue(VoxelFlood.MAX_QUEUE_ENTRIES * 4L <= 256L << 20);
+  }
+
+  @Test
+  void anInvisibleBandOfHigherValuesDoesNotJoinTwoStructures() {
+    // Two cubes at 300 joined by a bridge at 900, with a preset opaque from 200 to 600 only (as
+    // the Fat preset is opaque in a band): the bridge is shown nowhere, so the structures stay
+    // apart even though its values are above any lower bound that shows the cubes.
+    VoxelSampler banded =
+        (x, y, z) -> {
+          if (x < 0 || y < 0 || z < 0 || x >= N || y >= N || z >= N) {
+            return Double.NaN;
+          }
+          boolean bridge = x >= 10 && x <= 17 && y == 13 && z == 13;
+          return bridge ? 900 : solid(x, y, z) ? 300 : -200;
+        };
+    byte[] lut = new byte[2000 * 4];
+    for (int i = 0; i < 2000; i++) {
+      lut[i * 4 + 3] = (byte) (i >= 200 && i <= 600 ? 0xFF : 0);
+    }
+    TransferFunction band = new TransferFunction(lut, 2000, 1000, 1.0);
+    VoxelFlood.Visibility shown = VoxelFlood.Visibility.ofOpacity(band, 0.02);
+    Result r = VoxelFlood.grow(SPACE, allKept(), banded, shown, gridOf(4, 12, 12), 0).orElseThrow();
+    assertEquals(512, r.voxels(), "cube A alone, the bridge is invisible");
+    // A lower bound at the cubes' value would have taken the bridge and cube B along.
+    Result bound =
+        VoxelFlood.grow(SPACE, allKept(), banded, ABOVE_200, gridOf(4, 12, 12), 0).orElseThrow();
+    assertEquals(2 * 512 + 8, bound.voxels());
+  }
+
+  @Test
+  void lutShapesFollowTheShader() {
+    byte[] lut = new byte[1000 * 4];
+    for (int i = 0; i < 1000; i++) {
+      lut[i * 4 + 3] = (byte) 0xFF;
+    }
+    double ww = 400;
+    double wc = 100;
+    TransferFunction sigmoid = new TransferFunction(lut, ww, wc, 1.0, TransferFunction.SIGMOID);
+    // sigmoidLUT with nFactor -20: outRange / (1 + exp(-4 (v - wc) / ww)); half the range at wc.
+    assertEquals(500, sigmoid.windowed(wc), 1e-9);
+    assertEquals(1000 / (1 + Math.exp(-4 * 0.5)), sigmoid.windowed(wc + ww / 2), 1e-9);
+    TransferFunction norm = new TransferFunction(lut, ww, wc, 1.0, TransferFunction.SIGMOID_NORM);
+    assertEquals(0, norm.windowed(wc - ww / 2), 1e-9);
+    assertEquals(1000, norm.windowed(wc + ww / 2), 1e-9);
+    TransferFunction log = new TransferFunction(lut, ww, wc, 1.0, TransferFunction.LOG);
+    assertEquals(0, log.windowed(wc - ww / 2), 1e-9);
+    assertEquals(1000, log.windowed(wc + ww / 2), 1e-9);
+    assertEquals(0, log.windowed(wc - 10 * ww), 0.0, "an undefined log shows nothing");
+    TransferFunction inv = new TransferFunction(lut, ww, wc, 1.0, TransferFunction.LOG_INV);
+    assertEquals(0, inv.windowed(wc - ww / 2), 1e-9);
+    assertEquals(1000, inv.windowed(wc + ww / 2), 1e-9);
+    TransferFunction linear = new TransferFunction(lut, ww, wc, 1.0);
+    assertEquals(500, linear.windowed(wc), 1e-9);
+    assertEquals(TransferFunction.LINEAR, linear.lutShape());
   }
 }

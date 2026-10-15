@@ -15,9 +15,10 @@ import org.joml.Vector3d;
 import org.joml.Vector3i;
 
 /**
- * The structure under a picked voxel: a 6-connected region grown over the shown voxels whose value
- * reaches the renderer's visible threshold, so that one click selects what one sees. The same
- * algorithm as the bone select of the Addis Ortho bones bundle, on the kept mask's grid.
+ * The structure under a picked voxel: a 6-connected region grown over the voxels the renderer
+ * shows, judged by their opacity through the preset and the window, so that one click selects what
+ * one sees and an invisible band of values never joins two structures. The same algorithm as the
+ * bone select of the Addis Ortho bones bundle, on the kept mask's grid.
  *
  * <p>With a separation depth {@code k}, a neighbour joined to the structure by thin bridges is
  * split off: the region, holes filled slice by slice, is eroded by {@code k} voxels, which cuts the
@@ -82,8 +83,24 @@ public final class VoxelFlood {
     {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
   };
 
-  /** How far from the clicked voxel a voxel above the threshold is looked for. */
+  /** How far from the clicked voxel a shown voxel is looked for. */
   private static final int SEED_SEARCH = 3;
+
+  /**
+   * Whether a texture voxel is shown by the renderer: the opacity of its value through the preset
+   * and the window, in the LUT's shape, and whatever else the renderer applies to it (the
+   * segmentation masks). A lower bound on the value would not do: the Fat preset, for one, is
+   * opaque in a band and transparent above it.
+   */
+  @FunctionalInterface
+  public interface Visibility {
+    boolean visible(int x, int y, int z, double value);
+
+    /** Visibility from the renderer's opacity alone. */
+    static Visibility ofOpacity(TransferFunction transfer, double minOpacity) {
+      return (x, y, z, value) -> transfer.opacity(value) >= minOpacity;
+    }
+  }
 
   private VoxelFlood() {}
 
@@ -92,11 +109,11 @@ public final class VoxelFlood {
    *
    * @param kept the voxels shown; the region stays inside them
    * @param sampler the texture's values, see {@link TextureField}
-   * @param threshold lowest value taken into the region
-   * @param seed the picked grid voxel; the nearest shown voxel above the threshold within a few
-   *     voxels is taken when it is below
+   * @param visible which texture voxels the renderer shows, given their value
+   * @param seed the picked grid voxel; the nearest shown voxel within a few voxels is taken when it
+   *     is not shown itself
    * @param separation erosion depth of the separation, 0 for none
-   * @return empty when no voxel near the seed is above the threshold
+   * @return empty when no voxel near the seed is shown
    * @throws BudgetException when the working memory would not fit in the heap, before anything
    *     large is allocated, or when a flood front outgrows {@link #MAX_QUEUE_ENTRIES}
    */
@@ -104,18 +121,18 @@ public final class VoxelFlood {
       VolumeSpace space,
       VoxelBits kept,
       VoxelSampler sampler,
-      double threshold,
+      Visibility visible,
       Vector3i seed,
       int separation) {
     long start = System.nanoTime();
     checkBudget(workingBytes(kept, separation), availableBytes());
-    Vector3i s = findSeed(space, kept, sampler, threshold, seed);
+    Vector3i s = findSeed(space, kept, sampler, visible, seed);
     if (s == null) {
       return Optional.empty();
     }
     VoxelBits tested = new VoxelBits(kept.sizeX(), kept.sizeY(), kept.sizeZ());
     VoxelBits grown = new VoxelBits(kept.sizeX(), kept.sizeY(), kept.sizeZ());
-    flood(space, kept, sampler, threshold, s, tested, grown);
+    flood(space, kept, sampler, visible, s, tested, grown);
     boolean separated = false;
     VoxelBits region = grown;
     if (separation > 0) {
@@ -179,28 +196,28 @@ public final class VoxelFlood {
     return b.build();
   }
 
-  /** The value of the texture voxel at the centre of a grid voxel. */
-  private static double valueOfGrid(VolumeSpace space, VoxelSampler sampler, int x, int y, int z) {
-    Vector3d t = space.texCoordOfGrid(x, y, z, new Vector3d());
-    Vector3i v = space.textureVoxelOf(t, new Vector3i());
-    return sampler.valueAt(v.x, v.y, v.z);
-  }
-
+  /** Whether the grid voxel is shown: kept, and its texture voxel visible to the renderer. */
   private static boolean qualifies(
       VolumeSpace space,
       VoxelBits kept,
       VoxelSampler sampler,
-      double threshold,
+      Visibility visible,
       int x,
       int y,
       int z) {
-    return kept.get(x, y, z) && valueOfGrid(space, sampler, x, y, z) >= threshold;
+    if (!kept.get(x, y, z)) {
+      return false;
+    }
+    Vector3d t = space.texCoordOfGrid(x, y, z, new Vector3d());
+    Vector3i v = space.textureVoxelOf(t, new Vector3i());
+    double value = sampler.valueAt(v.x, v.y, v.z);
+    return !Double.isNaN(value) && visible.visible(v.x, v.y, v.z, value);
   }
 
   private static Vector3i findSeed(
-      VolumeSpace space, VoxelBits kept, VoxelSampler sampler, double threshold, Vector3i seed) {
+      VolumeSpace space, VoxelBits kept, VoxelSampler sampler, Visibility visible, Vector3i seed) {
     if (inside(kept, seed.x, seed.y, seed.z)
-        && qualifies(space, kept, sampler, threshold, seed.x, seed.y, seed.z)) {
+        && qualifies(space, kept, sampler, visible, seed.x, seed.y, seed.z)) {
       return new Vector3i(seed);
     }
     Vector3i best = null;
@@ -214,7 +231,7 @@ public final class VoxelFlood {
           int z = seed.z + dz;
           if (d < bestDistance
               && inside(kept, x, y, z)
-              && qualifies(space, kept, sampler, threshold, x, y, z)) {
+              && qualifies(space, kept, sampler, visible, x, y, z)) {
             best = new Vector3i(x, y, z);
             bestDistance = d;
           }
@@ -233,7 +250,7 @@ public final class VoxelFlood {
       VolumeSpace space,
       VoxelBits kept,
       VoxelSampler sampler,
-      double threshold,
+      Visibility visible,
       Vector3i seed,
       VoxelBits tested,
       VoxelBits grown) {
@@ -255,7 +272,7 @@ public final class VoxelFlood {
         int nz = z + n[2];
         if (inside(kept, nx, ny, nz)
             && tested.testAndSet(nx, ny, nz)
-            && qualifies(space, kept, sampler, threshold, nx, ny, nz)) {
+            && qualifies(space, kept, sampler, visible, nx, ny, nz)) {
           grown.set(nx, ny, nz);
           queue.add(nx + sx * (ny + sy * nz));
         }
