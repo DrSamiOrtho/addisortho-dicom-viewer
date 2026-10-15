@@ -120,26 +120,57 @@ public record VolumeSpace(Vector3i grid, Vector3i texture, Vector3i volume, Vect
    * Fractional volume voxel of a texture coordinate; a voxel centre is at an integer value. In
    * plane this is the centre-aligned scale of the upload; across slices the centre of a texture
    * slice is exactly its source slice ({@link #sourceSliceOfTextureSlice}) and the coordinate runs
-   * linearly between the centres.
+   * linearly between the source slices of adjacent texture slice centres, see {@link
+   * #sourceOfTextureZ}.
    */
   public Vector3d volumeOfTexCoord(Vector3d t, Vector3d dst) {
-    double tz = t.z * texture.z;
-    int texZ = Math.clamp((int) Math.floor(tz), 0, texture.z - 1);
-    double step = volume.z / (double) texture.z;
-    double vz = sourceSliceOfTextureSlice(texZ, texture.z, volume.z) + (texZ + 0.5 - tz) * step;
-    return dst.set(t.x * volume.x - 0.5, t.y * volume.y - 0.5, vz);
+    return dst.set(t.x * volume.x - 0.5, t.y * volume.y - 0.5, sourceOfTextureZ(t.z * texture.z));
   }
 
   /**
-   * Texture coordinate of a fractional volume voxel: a source slice maps to the centre of the
-   * texture slice holding it, and the coordinate runs linearly between source slices.
+   * The fractional source slice of a fractional texture slice coordinate ({@code z + 0.5} is the
+   * centre of texture slice {@code z}): piecewise linear between the actual source slices of
+   * adjacent texture slice centres, continuous across slice boundaries, extrapolated past the ends
+   * with the end intervals' slopes. Exactly inverted by {@link #textureZOfSource}.
    */
+  public double sourceOfTextureZ(double tz) {
+    int depth = texture.z;
+    if (depth == 1) {
+      return sourceSliceOfTextureSlice(0, depth, volume.z) - (tz - 0.5) * volume.z;
+    }
+    double a = tz - 0.5;
+    int i0 = Math.clamp((int) Math.floor(a), 0, depth - 2);
+    double s0 = sourceSliceOfTextureSlice(i0, depth, volume.z);
+    double s1 = sourceSliceOfTextureSlice(i0 + 1, depth, volume.z);
+    return s0 + (a - i0) * (s1 - s0);
+  }
+
+  /** The fractional texture slice coordinate of a fractional source slice, inverse of the above. */
+  public double textureZOfSource(double vz) {
+    int depth = texture.z;
+    if (depth == 1) {
+      return 0.5 + (sourceSliceOfTextureSlice(0, depth, volume.z) - vz) / volume.z;
+    }
+    // Source slices decrease with the texture slice: find the interval [i0, i0 + 1] holding vz.
+    int lo = 0;
+    int hi = depth - 2;
+    while (lo < hi) {
+      int mid = (lo + hi + 1) >>> 1;
+      if (sourceSliceOfTextureSlice(mid, depth, volume.z) >= vz) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    int i0 = lo;
+    double s0 = sourceSliceOfTextureSlice(i0, depth, volume.z);
+    double s1 = sourceSliceOfTextureSlice(i0 + 1, depth, volume.z);
+    return i0 + 0.5 + (s0 - vz) / (s0 - s1);
+  }
+
+  /** Texture coordinate of a fractional volume voxel, the inverse of {@link #volumeOfTexCoord}. */
   public Vector3d texCoordOfVolume(double vx, double vy, double vz, Vector3d dst) {
-    double step = volume.z / (double) texture.z;
-    int nearest = Math.clamp((int) Math.round(vz), 0, volume.z - 1);
-    int texZ = textureSliceOfSourceSlice(nearest, texture.z, volume.z);
-    double tz = texZ + 0.5 - (vz - nearest) / step;
-    return dst.set((vx + 0.5) / volume.x, (vy + 0.5) / volume.y, tz / texture.z);
+    return dst.set((vx + 0.5) / volume.x, (vy + 0.5) / volume.y, textureZOfSource(vz) / texture.z);
   }
 
   /** Grid voxel nearest to a volume voxel, clamped to the grid. */

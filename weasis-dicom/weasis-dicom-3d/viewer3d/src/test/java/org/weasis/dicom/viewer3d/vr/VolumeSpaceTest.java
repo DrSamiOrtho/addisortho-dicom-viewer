@@ -11,6 +11,7 @@
 package org.weasis.dicom.viewer3d.vr;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.joml.Vector3d;
 import org.joml.Vector3i;
@@ -134,5 +135,56 @@ class VolumeSpaceTest {
     Vector3d f = SPACE.textureVoxelOfTexCoord(new Vector3d(0.5, 0.5, 0.5), new Vector3d());
     assertEquals(255.5, f.x, 1e-9);
     assertEquals(329.5, f.z, 1e-9);
+  }
+
+  @Test
+  void fractionalZIsContinuousAndExactlyInvertibleForNonIntegerRatios() {
+    int[][] cases = {{64, 100}, {3, 7}, {330, 660}, {12, 12}};
+    for (int[] c : cases) {
+      int textureDepth = c[0];
+      int volumeDepth = c[1];
+      VolumeSpace space =
+          new VolumeSpace(
+              new Vector3i(4, 4, textureDepth),
+              new Vector3i(4, 4, textureDepth),
+              new Vector3i(4, 4, volumeDepth),
+              new Vector3d(1, 1, 1));
+      // Exact at every centre, continuous across every boundary, monotone in between.
+      double previous = Double.POSITIVE_INFINITY;
+      for (int texZ = 0; texZ < textureDepth; texZ++) {
+        assertEquals(
+            VolumeSpace.sourceSliceOfTextureSlice(texZ, textureDepth, volumeDepth),
+            space.sourceOfTextureZ(texZ + 0.5),
+            1e-9);
+        double below = space.sourceOfTextureZ(texZ - 1e-9);
+        double above = space.sourceOfTextureZ(texZ + 1e-9);
+        assertEquals(
+            below, above, 1e-6, "boundary " + texZ + " of " + textureDepth + "/" + volumeDepth);
+        for (double f = 0; f < 1; f += 0.125) {
+          double v = space.sourceOfTextureZ(texZ + f);
+          assertTrue(v <= previous + 1e-9, "decreasing");
+          previous = v;
+          // Round trip of the fractional position.
+          assertEquals(texZ + f, space.textureZOfSource(v), 1e-9);
+        }
+      }
+      // The reviewer's boundary, 100 slices in 64: no jump at tz = 1.
+      if (textureDepth == 64) {
+        assertEquals(space.sourceOfTextureZ(1 - 1e-12), space.sourceOfTextureZ(1 + 1e-12), 1e-9);
+      }
+    }
+    // And the full conversions agree with each other.
+    VolumeSpace space =
+        new VolumeSpace(
+            new Vector3i(8, 8, 64),
+            new Vector3i(8, 8, 64),
+            new Vector3i(16, 16, 100),
+            new Vector3d(1, 1, 1));
+    Vector3d t = new Vector3d(0.3, 0.6, 0.137);
+    Vector3d v = space.volumeOfTexCoord(t, new Vector3d());
+    Vector3d back = space.texCoordOfVolume(v.x, v.y, v.z, new Vector3d());
+    assertEquals(t.x, back.x, 1e-12);
+    assertEquals(t.y, back.y, 1e-12);
+    assertEquals(t.z, back.z, 1e-12);
   }
 }
