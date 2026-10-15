@@ -89,6 +89,13 @@ public final class TextureField implements VoxelSampler {
   }
 
   @Override
+  public long workingBytes() {
+    long slice = 4L * texture.x * texture.y;
+    long sourceSlice = 4L * source.width() * source.height();
+    return slice * (TEXTURE_CACHE + FILTERED_CACHE + SOURCE_CACHE) + sourceSlice * SOURCE_CACHE;
+  }
+
+  @Override
   public double valueAt(int x, int y, int z) {
     if (x < 0 || y < 0 || z < 0 || x >= texture.x || y >= texture.y || z >= texture.z) {
       return Double.NaN;

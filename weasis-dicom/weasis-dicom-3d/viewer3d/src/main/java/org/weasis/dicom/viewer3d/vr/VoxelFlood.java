@@ -33,7 +33,8 @@ public final class VoxelFlood {
    * @param separated whether the separation applied (it is skipped when erosion leaves no core)
    * @param millis time taken
    */
-  public record Result(VoxelBits region, long voxels, boolean separated, long millis) {}
+  public record Result(
+      VoxelBits region, long voxels, boolean separated, long millis, long peakBytes) {}
 
   /** Box of the grid, bounds included. */
   record Box(int x0, int x1, int y0, int y1, int z0, int z1) {
@@ -124,26 +125,46 @@ public final class VoxelFlood {
       Visibility visible,
       Vector3i seed,
       int separation) {
+    return grow(space, kept, sampler, visible, seed, separation, WorkingMemory.ofFreeHeap());
+  }
+
+  /**
+   * As {@link #grow(VolumeSpace, VoxelBits, VoxelSampler, Visibility, Vector3i, int)} within one
+   * budget covering the bit volumes, every queue with its growth and the sampler's slice cache.
+   */
+  public static Optional<Result> grow(
+      VolumeSpace space,
+      VoxelBits kept,
+      VoxelSampler sampler,
+      Visibility visible,
+      Vector3i seed,
+      int separation,
+      WorkingMemory budget) {
     long start = System.nanoTime();
-    checkBudget(workingBytes(kept, separation), availableBytes());
+    budget.reserve(workingBytes(kept, separation) + sampler.workingBytes());
     Vector3i s = findSeed(space, kept, sampler, visible, seed);
     if (s == null) {
       return Optional.empty();
     }
     VoxelBits tested = new VoxelBits(kept.sizeX(), kept.sizeY(), kept.sizeZ());
     VoxelBits grown = new VoxelBits(kept.sizeX(), kept.sizeY(), kept.sizeZ());
-    flood(space, kept, sampler, visible, s, tested, grown);
+    flood(space, kept, sampler, visible, s, tested, grown, budget);
     boolean separated = false;
     VoxelBits region = grown;
     if (separation > 0) {
-      VoxelBits split = separate(grown, s, separation);
+      VoxelBits split = separate(grown, s, separation, budget);
       if (split != null) {
         region = split;
         separated = true;
       }
     }
     return Optional.of(
-        new Result(region, region.count(), separated, (System.nanoTime() - start) / 1_000_000));
+        new Result(
+            region,
+            region.count(),
+            separated,
+            (System.nanoTime() - start) / 1_000_000,
+            budget.peak()));
   }
 
   /**
@@ -152,8 +173,7 @@ public final class VoxelFlood {
    * first queue.
    */
   public static long workingBytes(VoxelBits kept, int separation) {
-    long bits = kept.bytes();
-    return bits * (separation > 0 ? 8 : 2) + 4L * (1 << 16);
+    return kept.bytes() * (separation > 0 ? 8 : 2);
   }
 
   /** Heap that a selection may still take: the maximum minus what is in use. */
@@ -259,14 +279,15 @@ public final class VoxelFlood {
       Visibility visible,
       Vector3i seed,
       VoxelBits tested,
-      VoxelBits grown) {
+      VoxelBits grown,
+      WorkingMemory budget) {
     int sx = kept.sizeX();
     int sy = kept.sizeY();
     int sz = kept.sizeZ();
     IntQueue[] pending = new IntQueue[sz];
     tested.set(seed.x, seed.y, seed.z);
     grown.set(seed.x, seed.y, seed.z);
-    pending[seed.z] = new IntQueue(1 << 12);
+    pending[seed.z] = new IntQueue(1 << 12, budget);
     pending[seed.z].add(seed.x + sx * seed.y);
     long left = 1;
     boolean upwards = true;
@@ -274,9 +295,11 @@ public final class VoxelFlood {
       for (int step = 0; step < sz; step++) {
         int z = upwards ? step : sz - 1 - step;
         IntQueue queue = pending[z];
-        if (queue == null || queue.isEmpty()) {
+        if (queue == null) {
           continue;
         }
+        // Drained below; its memory goes back to the budget before the next slice fills up.
+        pending[z] = null;
         while (!queue.isEmpty()) {
           int i = queue.poll();
           left--;
@@ -291,13 +314,14 @@ public final class VoxelFlood {
                 && qualifies(space, kept, sampler, visible, nx, ny, nz)) {
               grown.set(nx, ny, nz);
               if (pending[nz] == null) {
-                pending[nz] = new IntQueue(1 << 12);
+                pending[nz] = new IntQueue(1 << 12, budget);
               }
               pending[nz].add(nx + sx * ny);
               left++;
             }
           }
         }
+        queue.free();
       }
       upwards = !upwards;
     }
@@ -334,13 +358,13 @@ public final class VoxelFlood {
   /**
    * The seeded part of {@code grown}, or {@code null} when erosion leaves nothing near the seed.
    */
-  static VoxelBits separate(VoxelBits grown, Vector3i seed, int depth) {
+  static VoxelBits separate(VoxelBits grown, Vector3i seed, int depth, WorkingMemory budget) {
     Box box = bounds(grown);
     if (box == null) {
       return null;
     }
     box = box.grow(1, grown);
-    VoxelBits solid = fillHoles(grown, box);
+    VoxelBits solid = fillHoles(grown, box, budget);
     // Two buffers take turns over the erosion steps, whatever the depth.
     VoxelBits core = solid;
     VoxelBits spare = null;
@@ -351,17 +375,18 @@ public final class VoxelFlood {
       spare = core == solid ? null : core;
       core = target;
     }
-    Vector3i start = core.get(seed.x, seed.y, seed.z) ? seed : nearestInside(solid, core, seed);
+    Vector3i start =
+        core.get(seed.x, seed.y, seed.z) ? seed : nearestInside(solid, core, seed, budget);
     if (start == null) {
       return null;
     }
     VoxelBits seeded = new VoxelBits(grown.sizeX(), grown.sizeY(), grown.sizeZ());
-    floodBits(core, start, seeded);
-    return regrow(solid, core, seeded, box);
+    floodBits(core, start, seeded, budget);
+    return regrow(solid, core, seeded, box, budget);
   }
 
   /** Sets every voxel of a slice that is not connected to the box edge outside the mask. */
-  static VoxelBits fillHoles(VoxelBits mask, Box box) {
+  static VoxelBits fillHoles(VoxelBits mask, Box box, WorkingMemory budget) {
     VoxelBits filled = new VoxelBits(mask.sizeX(), mask.sizeY(), mask.sizeZ());
     int bw = box.x1 - box.x0 + 1;
     int bh = box.y1 - box.y0 + 1;
@@ -370,7 +395,7 @@ public final class VoxelFlood {
         continue;
       }
       boolean[] outside = new boolean[bw * bh];
-      IntQueue queue = new IntQueue(2 * (bw + bh));
+      IntQueue queue = new IntQueue(2 * (bw + bh), budget);
       for (int x = 0; x < bw; x++) {
         reach(mask, box, outside, queue, x, 0, z, bw);
         reach(mask, box, outside, queue, x, bh - 1, z, bw);
@@ -447,11 +472,12 @@ public final class VoxelFlood {
   }
 
   /** First voxel of {@code target} met by a flood through {@code within} from {@code start}. */
-  private static Vector3i nearestInside(VoxelBits within, VoxelBits target, Vector3i start) {
+  private static Vector3i nearestInside(
+      VoxelBits within, VoxelBits target, Vector3i start, WorkingMemory budget) {
     int sx = within.sizeX();
     int sy = within.sizeY();
     VoxelBits seen = new VoxelBits(sx, sy, within.sizeZ());
-    IntQueue queue = new IntQueue(1 << 12);
+    IntQueue queue = new IntQueue(1 << 12, budget);
     if (!inside(within, start.x, start.y, start.z)) {
       return null;
     }
@@ -478,10 +504,11 @@ public final class VoxelFlood {
   }
 
   /** 6-connected flood of the set voxels of {@code mask} from {@code start} into {@code marks}. */
-  private static void floodBits(VoxelBits mask, Vector3i start, VoxelBits marks) {
+  private static void floodBits(
+      VoxelBits mask, Vector3i start, VoxelBits marks, WorkingMemory budget) {
     int sx = mask.sizeX();
     int sy = mask.sizeY();
-    IntQueue queue = new IntQueue(1 << 12);
+    IntQueue queue = new IntQueue(1 << 12, budget);
     marks.set(start.x, start.y, start.z);
     queue.add(start.x + sx * (start.y + sy * start.z));
     while (!queue.isEmpty()) {
@@ -507,12 +534,13 @@ public final class VoxelFlood {
    * <p>Only the core voxels that touch a free voxel start the front, so the queue holds the cores'
    * surface, not their bulk: the inside of a core has nothing to grow into.
    */
-  private static VoxelBits regrow(VoxelBits solid, VoxelBits core, VoxelBits seeded, Box box) {
+  private static VoxelBits regrow(
+      VoxelBits solid, VoxelBits core, VoxelBits seeded, Box box, WorkingMemory budget) {
     int sx = solid.sizeX();
     int sy = solid.sizeY();
     VoxelBits reached = new VoxelBits(sx, sy, solid.sizeZ());
     VoxelBits mine = new VoxelBits(sx, sy, solid.sizeZ());
-    IntQueue queue = new IntQueue(1 << 16);
+    IntQueue queue = new IntQueue(1 << 16, budget);
     for (int z = box.z0; z <= box.z1; z++) {
       if (core.countSlice(z) == 0) {
         continue;
@@ -580,14 +608,21 @@ public final class VoxelFlood {
     return n;
   }
 
-  /** A growable first-in first-out queue of ints, refused beyond {@link #MAX_QUEUE_ENTRIES}. */
+  /**
+   * A growable first-in first-out queue of ints whose storage, growth peaks included, is taken from
+   * the budget and given back by {@link #free()}; refused beyond {@link #MAX_QUEUE_ENTRIES}.
+   */
   static final class IntQueue {
+    private final WorkingMemory budget;
     private int[] items;
     private int head;
     private int size;
 
-    IntQueue(int capacity) {
-      items = new int[Math.max(16, capacity)];
+    IntQueue(int capacity, WorkingMemory budget) {
+      this.budget = budget;
+      int n = Math.max(16, capacity);
+      budget.reserve(4L * n);
+      items = new int[n];
     }
 
     boolean isEmpty() {
@@ -597,17 +632,31 @@ public final class VoxelFlood {
     void add(int value) {
       if (size == items.length) {
         if (items.length >= MAX_QUEUE_ENTRIES) {
-          throw new BudgetException(8L * items.length, availableBytes());
+          throw new BudgetException(8L * items.length, budget.limit());
         }
-        int[] grown = new int[Math.toIntExact(Math.min(MAX_QUEUE_ENTRIES, 2L * items.length))];
+        int n = Math.toIntExact(Math.min(MAX_QUEUE_ENTRIES, 2L * items.length));
+        // The old and the new array exist together while the entries are copied over.
+        budget.reserve(4L * n);
+        int[] grown = new int[n];
         int tail = items.length - head;
         System.arraycopy(items, head, grown, 0, tail);
         System.arraycopy(items, 0, grown, tail, head);
+        budget.release(4L * items.length);
         items = grown;
         head = 0;
       }
       items[(head + size) % items.length] = value;
       size++;
+    }
+
+    /** Gives the storage back to the budget; the queue must be empty. */
+    void free() {
+      if (items != null) {
+        budget.release(4L * items.length);
+        items = null;
+        size = 0;
+        head = 0;
+      }
     }
 
     int poll() {

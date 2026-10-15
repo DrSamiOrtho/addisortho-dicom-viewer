@@ -169,8 +169,8 @@ class VoxelFloodTest {
     long flood = VoxelFlood.workingBytes(kept, 0);
     long separated = VoxelFlood.workingBytes(kept, 2);
     // 173M voxels: 21.6 MB per bit volume, 2 for the flood and 8 with the separation.
-    assertEquals(2 * kept.bytes() + (4L << 16), flood);
-    assertEquals(8 * kept.bytes() + (4L << 16), separated);
+    assertEquals(2 * kept.bytes(), flood);
+    assertEquals(8 * kept.bytes(), separated);
     assertTrue(separated < 200L << 20);
     assertDoesNotThrow(
         () -> VoxelFlood.checkBudget(separated, separated + VoxelFlood.HEADROOM_BYTES));
@@ -184,7 +184,8 @@ class VoxelFloodTest {
 
   @Test
   void aFrontBeyondTheQueueCapIsRefusedNotGrownWithoutBound() {
-    VoxelFlood.IntQueue queue = new VoxelFlood.IntQueue(16);
+    WorkingMemory budget = new WorkingMemory(1L << 20);
+    VoxelFlood.IntQueue queue = new VoxelFlood.IntQueue(16, budget);
     for (int i = 0; i < 1000; i++) {
       queue.add(i);
     }
@@ -192,6 +193,21 @@ class VoxelFloodTest {
       assertEquals(i, queue.poll());
     }
     assertTrue(queue.isEmpty());
+    // 1024 entries after the growth: 4 KB held, 6 KB at the peak of the last copy.
+    assertEquals(4L * 1024, budget.used());
+    assertEquals(4L * 1024 + 4L * 512, budget.peak());
+    queue.free();
+    assertEquals(0, budget.used());
+    // A queue that would overrun the budget is refused as it grows, not after.
+    WorkingMemory tiny = new WorkingMemory(4L * 64);
+    VoxelFlood.IntQueue small = new VoxelFlood.IntQueue(16, tiny);
+    assertThrows(
+        VoxelFlood.BudgetException.class,
+        () -> {
+          for (int i = 0; i < 100; i++) {
+            small.add(i);
+          }
+        });
     assertTrue(VoxelFlood.MAX_QUEUE_ENTRIES * 4L <= 256L << 20);
   }
 
@@ -279,5 +295,31 @@ class VoxelFloodTest {
     Result b =
         VoxelFlood.grow(SPACE, allKept(), VOLUME, excluded, gridOf(20, 12, 12), 0).orElseThrow();
     assertEquals(512 + 8, b.voxels());
+  }
+
+  @Test
+  void aDenseSelectionHoldsTwoSliceQueuesAtMostNotOnePerSlice() {
+    // A 512x512 grid, 8 slices, every voxel shown: the sweep fills the next slice's queue while
+    // it drains the current one and frees the drained one, so the queues peak at two slices
+    // (plus the growth copy), far from the one-queue-per-slice of a retained front.
+    int w = 512;
+    int h = 512;
+    int d = 8;
+    VoxelBits kept = new VoxelBits(w, h, d);
+    kept.fill(true);
+    VolumeSpace space = VolumeSpace.ofVolume(new Vector3i(w, h, d), new Vector3d(1, 1, 1));
+    VoxelSampler dense = (x, y, z) -> 1000;
+    WorkingMemory budget = new WorkingMemory(64L << 20);
+    Result r =
+        VoxelFlood.grow(
+                space, kept, dense, (x, y, z, v) -> true, new Vector3i(256, 256, 3), 0, budget)
+            .orElseThrow();
+    assertEquals((long) w * h * d, r.voxels());
+    long sliceQueue = 4L * w * h; // one int per voxel of a slice
+    long bits = 2 * kept.bytes();
+    // Two full slice queues, one of them caught mid-growth (old plus new array), is the ceiling.
+    assertTrue(r.peakBytes() <= bits + 3 * sliceQueue + (4L << 12), "peak " + r.peakBytes());
+    assertTrue(r.peakBytes() < bits + (long) d * sliceQueue / 2, "no queue per slice retained");
+    assertEquals(bits, budget.used(), "every queue was given back");
   }
 }

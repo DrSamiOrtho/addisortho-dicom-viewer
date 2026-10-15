@@ -19,6 +19,11 @@ public interface VoxelSampler {
   /** Value of the texture voxel {@code (x, y, z)}, {@link Double#NaN} outside the texture. */
   double valueAt(int x, int y, int z);
 
+  /** Most memory the sampler's caches may hold, for the budget of a selection. */
+  default long workingBytes() {
+    return 0;
+  }
+
   /** Trilinear value at a fractional texture voxel, as GL_LINEAR, {@link Double#NaN} outside. */
   default double interpolate(double x, double y, double z) {
     int x0 = (int) Math.floor(x);
