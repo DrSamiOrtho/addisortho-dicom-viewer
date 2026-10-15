@@ -248,4 +248,36 @@ class VoxelFloodTest {
     assertEquals(500, linear.windowed(wc), 1e-9);
     assertEquals(TransferFunction.LINEAR, linear.lutShape());
   }
+
+  @Test
+  void aSegmentationMaskBoundsTheSelectionAsItBoundsTheRendering() {
+    // Mask include with a segment over cube A only: cube B and the bridge are not shown, so the
+    // selection from A stops at the segment's edge even though the bridge joins the cubes.
+    VolumeSpace space = SPACE;
+    SegmentField overA = t -> t.x * N < 10;
+    VoxelFlood.Visibility shown =
+        (x, y, z, v) -> {
+          if (v < 200) {
+            return false;
+          }
+          Vector3d t = space.texCoordOfTextureVoxel(x, y, z, new Vector3d());
+          return !VolumePicker.SegMode.MASK_INCLUDE.masksAnatomy(overA.insideVisible(t));
+        };
+    Result r = VoxelFlood.grow(SPACE, allKept(), VOLUME, shown, gridOf(4, 12, 12), 0).orElseThrow();
+    assertEquals(512, r.voxels());
+    // Mask exclude with the same segment: a click on cube A finds nothing shown near it.
+    VoxelFlood.Visibility excluded =
+        (x, y, z, v) -> {
+          if (v < 200) {
+            return false;
+          }
+          Vector3d t = space.texCoordOfTextureVoxel(x, y, z, new Vector3d());
+          return !VolumePicker.SegMode.MASK_EXCLUDE.masksAnatomy(overA.insideVisible(t));
+        };
+    assertTrue(VoxelFlood.grow(SPACE, allKept(), VOLUME, excluded, gridOf(4, 12, 12), 0).isEmpty());
+    // From cube B the exclude mode grows B and the bridge up to the segment's edge.
+    Result b =
+        VoxelFlood.grow(SPACE, allKept(), VOLUME, excluded, gridOf(20, 12, 12), 0).orElseThrow();
+    assertEquals(512 + 8, b.voxels());
+  }
 }

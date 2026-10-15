@@ -13,7 +13,6 @@ package org.weasis.dicom.viewer3d;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import javax.swing.AbstractButton;
 import javax.swing.ButtonGroup;
 import javax.swing.Icon;
 import javax.swing.JButton;
@@ -48,6 +47,7 @@ public class Volume3dToolBar extends WtoolBar {
 
   private final EventManager eventManager;
   private final Map<String, JToggleButton> toolButtons = new LinkedHashMap<>();
+  private final Map<String, String> toolTips = new LinkedHashMap<>();
   private final ButtonGroup toolGroup = new ButtonGroup();
   private JButton undoButton;
   private JButton redoButton;
@@ -178,6 +178,7 @@ public class Volume3dToolBar extends WtoolBar {
     button.addActionListener(_ -> eventManager.changeLeftMouseAction(action.cmd()));
     toolGroup.add(button);
     toolButtons.put(action.cmd(), button);
+    toolTips.put(action.cmd(), tip);
     add(button);
   }
 
@@ -226,8 +227,25 @@ public class Volume3dToolBar extends WtoolBar {
         idle && view.map(v -> v.getKeptMask() != null && v.getKeptMask().canRedo()).orElse(false));
     restoreButton.setEnabled(
         idle && view.map(v -> v.getKeptMask() != null && !v.getKeptMask().isFull()).orElse(false));
-    for (AbstractButton b : toolButtons.values()) {
-      b.setEnabled(view.isPresent());
+    for (Map.Entry<String, JToggleButton> e : toolButtons.entrySet()) {
+      e.getValue().setEnabled(view.isPresent());
+      e.getValue().setToolTipText(toolTips.get(e.getKey()));
+    }
+    // The tools that pick a point of the volume wait for the segmentation they must honour, and
+    // keep/remove have no anatomy to act on in the segmentation-only mode.
+    String pick = view.map(View3d::pickUnavailableReason).orElse(null);
+    String keepRemove = view.map(View3d::keepRemoveUnavailableReason).orElse(null);
+    disableWithReason(ActionVol.LENGTH.cmd(), pick);
+    disableWithReason(ActionVol.ARROW.cmd(), pick);
+    disableWithReason(ActionVol.KEEP_THIS.cmd(), keepRemove);
+    disableWithReason(ActionVol.REMOVE_THIS.cmd(), keepRemove);
+  }
+
+  private void disableWithReason(String cmd, String reason) {
+    JToggleButton button = toolButtons.get(cmd);
+    if (button != null && reason != null) {
+      button.setEnabled(false);
+      button.setToolTipText(reason);
     }
   }
 }

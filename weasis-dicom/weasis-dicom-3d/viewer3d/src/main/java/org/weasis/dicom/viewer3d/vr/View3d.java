@@ -1840,6 +1840,56 @@ public class View3d extends VolumeCanvas
     }
   }
 
+  /** The segmentation's part in the rendering, as the shaders' uniforms get it. */
+  private VolumePicker.SegMode segMode() {
+    if (!isSegTextureActive()) {
+      return VolumePicker.SegMode.NONE;
+    }
+    return switch (segType) {
+      case SEG_ONLY -> VolumePicker.SegMode.SEG_ONLY;
+      case SEG_OVERLAY -> VolumePicker.SegMode.OVERLAY;
+      case SEG_MASK_INCLUDE -> VolumePicker.SegMode.MASK_INCLUDE;
+      case SEG_MASK_EXCLUDE -> VolumePicker.SegMode.MASK_EXCLUDE;
+      default -> VolumePicker.SegMode.NONE;
+    };
+  }
+
+  /** The visible segments as rendered; one instance per operation. */
+  private SegmentField segmentField() {
+    SegVolumeTexture svt = segVolumeTexture;
+    if (svt == null || !isSegTextureActive() || svt.getSegVolume().isDisposed()) {
+      return SegmentField.NONE;
+    }
+    return new SegVolumeField(svt.getSegVolume(), svt.getVisibleIds());
+  }
+
+  /**
+   * Why a point of the volume cannot be picked now, or {@code null} when it can: the rendering
+   * shows a segmentation that is still being built, so the CPU cannot tell what is on screen.
+   */
+  public String pickUnavailableReason() {
+    if (!segType.requiresSegTexture()) {
+      return null;
+    }
+    SegVolumeTexture svt = segVolumeTexture;
+    if (segBuildRunning || svt == null || !svt.isReady() || svt.getSegVolume().isDisposed()) {
+      return Messages.getString("pick.unavailable.loading");
+    }
+    return null;
+  }
+
+  /**
+   * Why keep only this and remove this cannot act now, or {@code null}: as {@link
+   * #pickUnavailableReason()}, and the segmentation-only mode, which shows no anatomy to cut.
+   */
+  public String keepRemoveUnavailableReason() {
+    String reason = pickUnavailableReason();
+    if (reason != null) {
+      return reason;
+    }
+    return isSegOnly() ? Messages.getString("pick.unavailable.segonly") : null;
+  }
+
   /** Whether a texture coordinate is removed by the cuts or the MPR crosshair cut. */
   private boolean isCutAway(Vector3d t) {
     KeptMask mask = keptMask;
@@ -1893,8 +1943,12 @@ public class View3d extends VolumeCanvas
     if (space == null || !hasValidContent() || getWidth() <= 0 || getHeight() <= 0) {
       return Optional.empty();
     }
+    if (pickUnavailableReason() != null) {
+      return Optional.empty();
+    }
     VolumePicker picker =
-        new VolumePicker(space, voxelSampler(), transferFunction(), this::isCutAway);
+        new VolumePicker(
+            space, voxelSampler(), transferFunction(), this::isCutAway, segMode(), segmentField());
     CropBox box = getEffectiveCropBox();
     return picker.pick(
         camera.getViewMatrix().invert(),
@@ -2048,14 +2102,18 @@ public class View3d extends VolumeCanvas
     if (cutRunning) {
       return;
     }
+    String unavailable = keepRemoveUnavailableReason();
+    if (unavailable != null) {
+      showStatus(unavailable);
+      return;
+    }
     Optional<Hit> hit = pick(p);
     KeptMask mask = hit.isPresent() ? getOrCreateKeptMask() : null;
     if (mask == null) {
       showStatus(Messages.getString("cut.nothing"));
       return;
     }
-    VoxelFlood.Visibility visible =
-        VoxelFlood.Visibility.ofOpacity(transferFunction(), VISIBLE_OPACITY);
+    VoxelFlood.Visibility visible = visibilityForSelection();
     VoxelSampler sampler = voxelSampler();
     Vector3i seed = hit.get().grid();
     int separation = lightSeparation ? SEPARATION_VOXELS : 0;
@@ -2080,6 +2138,28 @@ public class View3d extends VolumeCanvas
               : VoxelFlood.remove(mask.bits(), r.region());
         },
         () -> {});
+  }
+
+  /**
+   * What the renderer shows of the anatomy, voxel by voxel: its opacity, and in the mask modes its
+   * place inside or outside the visible segments.
+   */
+  private VoxelFlood.Visibility visibilityForSelection() {
+    VoxelFlood.Visibility opaque =
+        VoxelFlood.Visibility.ofOpacity(transferFunction(), VISIBLE_OPACITY);
+    VolumePicker.SegMode mode = segMode();
+    if (mode != VolumePicker.SegMode.MASK_INCLUDE && mode != VolumePicker.SegMode.MASK_EXCLUDE) {
+      return opaque;
+    }
+    SegmentField segments = segmentField();
+    VolumeSpace space = volumeSpace();
+    return (x, y, z, value) -> {
+      if (!opaque.visible(x, y, z, value)) {
+        return false;
+      }
+      Vector3d t = space.texCoordOfTextureVoxel(x, y, z, new Vector3d());
+      return !mode.masksAnatomy(segments.insideVisible(t));
+    };
   }
 
   /** Computes a cut on the worker thread and applies it on the event dispatch thread. */
@@ -2206,6 +2286,11 @@ public class View3d extends VolumeCanvas
 
   /** First click sets the first end of a length, the second one the other end. */
   public void lengthClick(Point p) {
+    String unavailable = pickUnavailableReason();
+    if (unavailable != null) {
+      showStatus(unavailable);
+      return;
+    }
     Optional<Hit> hit = pick(p);
     if (hit.isEmpty()) {
       showStatus(Messages.getString("cut.nothing"));
@@ -2226,6 +2311,12 @@ public class View3d extends VolumeCanvas
   }
 
   public void arrowStart(Point p) {
+    String unavailable = pickUnavailableReason();
+    if (unavailable != null) {
+      showStatus(unavailable);
+      arrowStartTex = null;
+      return;
+    }
     Optional<Hit> hit = pick(p);
     if (hit.isEmpty()) {
       arrowStartTex = null;

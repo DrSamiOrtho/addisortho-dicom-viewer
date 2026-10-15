@@ -387,6 +387,11 @@ public final class SegVolumeTexture {
     return segTextureId > 0 && !needsUpload;
   }
 
+  /** Visibility by storage ID as the colour LUT the user set has it, for the CPU picking. */
+  public boolean[] getVisibleIds() {
+    return lutVisibleIds.clone();
+  }
+
   /** Returns the scale factors for mapping between segVolume and DicomVolTexture coordinates. */
   public Vector3d getScale() {
     return new Vector3d(scale);

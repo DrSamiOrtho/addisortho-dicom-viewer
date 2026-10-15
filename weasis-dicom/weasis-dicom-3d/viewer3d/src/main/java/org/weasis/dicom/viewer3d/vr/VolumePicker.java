@@ -28,6 +28,37 @@ public final class VolumePicker {
   /** Accumulated opacity at which a ray is taken to have hit the surface. */
   public static final double HIT_OPACITY = 0.5;
 
+  /** How the segmentation takes part in the rendering, as the shaders' seg uniforms do. */
+  public enum SegMode {
+    /** No segmentation: the anatomy alone. */
+    NONE,
+    /** The segments are drawn over the anatomy: a visible segment is a surface too. */
+    OVERLAY,
+    /** Only the segments are drawn: the anatomy is not there to be picked. */
+    SEG_ONLY,
+    /** Mask include: the anatomy is shown inside the visible segments only. */
+    MASK_INCLUDE,
+    /** Mask exclude: the anatomy is shown outside the visible segments only. */
+    MASK_EXCLUDE;
+
+    /** Whether the anatomy's own opacity counts in this mode. */
+    public boolean rendersAnatomy() {
+      return this != SEG_ONLY;
+    }
+
+    /**
+     * Whether a texture coordinate inside (or not) a visible segment is cut away from the anatomy.
+     */
+    public boolean masksAnatomy(boolean insideSegment) {
+      return this == MASK_INCLUDE ? !insideSegment : this == MASK_EXCLUDE && insideSegment;
+    }
+
+    /** Whether a visible segment is itself an opaque surface in this mode. */
+    public boolean segmentIsSurface() {
+      return this == OVERLAY || this == SEG_ONLY;
+    }
+  }
+
   /**
    * @param texCoord where the ray hit, in texture coordinates
    * @param grid the grid voxel holding it
@@ -40,8 +71,12 @@ public final class VolumePicker {
   private final VoxelSampler sampler;
   private final TransferFunction transfer;
   private final Predicate<Vector3d> cutAway;
+  private final SegMode segMode;
+  private final SegmentField segments;
 
   /**
+   * A picker of the anatomy alone.
+   *
    * @param cutAway tells whether a texture coordinate is cut away (kept mask, crosshair cut), so
    *     the ray passes through it
    */
@@ -50,10 +85,27 @@ public final class VolumePicker {
       VoxelSampler sampler,
       TransferFunction transfer,
       Predicate<Vector3d> cutAway) {
+    this(space, sampler, transfer, cutAway, SegMode.NONE, SegmentField.NONE);
+  }
+
+  /**
+   * A picker honouring the segmentation display: the mask modes hide the anatomy inside or outside
+   * the visible segments, and in the overlay and segmentation-only modes a visible segment is a
+   * surface the ray stops on.
+   */
+  public VolumePicker(
+      VolumeSpace space,
+      VoxelSampler sampler,
+      TransferFunction transfer,
+      Predicate<Vector3d> cutAway,
+      SegMode segMode,
+      SegmentField segments) {
     this.space = space;
     this.sampler = sampler;
     this.transfer = transfer;
     this.cutAway = cutAway;
+    this.segMode = segMode;
+    this.segments = segments;
   }
 
   /**
@@ -110,14 +162,17 @@ public final class VolumePicker {
         previous = t;
         continue;
       }
-      // The texture's own voxels, trilinearly as the sampler of the shaders.
-      space.textureVoxelOfTexCoord(tex, texVoxel);
-      double value = sampler.interpolate(texVoxel.x, texVoxel.y, texVoxel.z);
-      if (Double.isNaN(value)) {
-        previous = t;
-        continue;
+      boolean inSegment = segMode != SegMode.NONE && segments.insideVisible(tex);
+      double alpha = 0.0;
+      if (segMode.rendersAnatomy() && !segMode.masksAnatomy(inSegment)) {
+        // The texture's own voxels, trilinearly as the sampler of the shaders.
+        space.textureVoxelOfTexCoord(tex, texVoxel);
+        double value = sampler.interpolate(texVoxel.x, texVoxel.y, texVoxel.z);
+        alpha = Double.isNaN(value) ? 0.0 : transfer.opacity(value);
       }
-      double alpha = transfer.opacity(value);
+      if (inSegment && segMode.segmentIsSurface()) {
+        alpha = 1.0; // the segment's own surface, what the overlay shows first
+      }
       if (alpha > 0.0) {
         // One in-plane texture voxel is the unit the preset opacities are given for, as in the
         // shaders' correctedOpacity(); the mask grid plays no part in it.

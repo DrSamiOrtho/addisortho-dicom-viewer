@@ -148,4 +148,92 @@ class VolumePickerTest {
     // The mask grid still decides what is cut away: a coarse voxel cut hides a texture voxel.
     assertEquals(new Vector3i(N / 2 - 1, N / 2 - 1, N / 2 - 1).x, coarse.grid().x, N / 4);
   }
+
+  /** Anatomy opaque everywhere, so the first sample that is shown is the hit. */
+  private static final VoxelSampler SOLID =
+      (x, y, z) -> x < 0 || y < 0 || z < 0 || x >= N || y >= N || z >= N ? Double.NaN : 1000;
+
+  private static final VoxelSampler AIR =
+      (x, y, z) -> x < 0 || y < 0 || z < 0 || x >= N || y >= N || z >= N ? Double.NaN : 0;
+
+  /** A segment filling the front half of the texture (z < 0.5), another one the back half. */
+  private static final SegmentField FRONT = t -> t.z < 0.5;
+
+  private static final SegmentField BACK = t -> t.z >= 0.5;
+
+  private static double depthOf(VolumePicker picker) {
+    return picker
+        .pickRay(new Vector3d(0, 0, -3), new Vector3d(0, 0, 1), FULL_MIN, FULL_MAX)
+        .orElseThrow()
+        .depth();
+  }
+
+  @Test
+  void segmentationModesHideOrShowWhatTheRendererDoes() {
+    // The ray enters the volume at world z = -1 (depth 2) and reaches its middle at depth 3.
+    assertEquals(2.0, depthOf(new VolumePicker(SPACE, SOLID, OPAQUE_ABOVE_500, t -> false)), VOXEL);
+    // Mask include with the segment in front: the front is shown, picked at its face.
+    assertEquals(
+        2.0,
+        depthOf(
+            new VolumePicker(
+                SPACE,
+                SOLID,
+                OPAQUE_ABOVE_500,
+                t -> false,
+                VolumePicker.SegMode.MASK_INCLUDE,
+                FRONT)),
+        VOXEL);
+    // Mask include with the segment behind: the front half is hidden, the pick lands on the back.
+    assertEquals(
+        3.0,
+        depthOf(
+            new VolumePicker(
+                SPACE,
+                SOLID,
+                OPAQUE_ABOVE_500,
+                t -> false,
+                VolumePicker.SegMode.MASK_INCLUDE,
+                BACK)),
+        VOXEL);
+    // Mask exclude with the segment in front: the front half is cut away, the pick lands behind it.
+    assertEquals(
+        3.0,
+        depthOf(
+            new VolumePicker(
+                SPACE,
+                SOLID,
+                OPAQUE_ABOVE_500,
+                t -> false,
+                VolumePicker.SegMode.MASK_EXCLUDE,
+                FRONT)),
+        VOXEL);
+    // Segmentation only: the anatomy does not count, the visible segment's surface does.
+    assertEquals(
+        3.0,
+        depthOf(
+            new VolumePicker(
+                SPACE, SOLID, OPAQUE_ABOVE_500, t -> false, VolumePicker.SegMode.SEG_ONLY, BACK)),
+        VOXEL);
+    // Overlay: transparent anatomy, the segment drawn over it is what the click lands on.
+    assertEquals(
+        3.0,
+        depthOf(
+            new VolumePicker(
+                SPACE, AIR, OPAQUE_ABOVE_500, t -> false, VolumePicker.SegMode.OVERLAY, BACK)),
+        VOXEL);
+    // Overlay with opaque anatomy in front of the segment: the anatomy comes first.
+    assertEquals(
+        2.0,
+        depthOf(
+            new VolumePicker(
+                SPACE, SOLID, OPAQUE_ABOVE_500, t -> false, VolumePicker.SegMode.OVERLAY, BACK)),
+        VOXEL);
+    // Nothing visible at all: no hit.
+    assertTrue(
+        new VolumePicker(
+                SPACE, AIR, OPAQUE_ABOVE_500, t -> false, VolumePicker.SegMode.MASK_INCLUDE, FRONT)
+            .pickRay(new Vector3d(0, 0, -3), new Vector3d(0, 0, 1), FULL_MIN, FULL_MAX)
+            .isEmpty());
+  }
 }
