@@ -235,11 +235,15 @@ public class ResourceUtil {
   }
 
   public static FlatSVGIcon getIcon(String path) {
-    return new FlatSVGIcon(getResourcePath().resolve(path).toUri());
+    FlatSVGIcon icon = new FlatSVGIcon(getResourcePath().resolve(path).toUri());
+    icon.setDescription(path);
+    return icon;
   }
 
   public static FlatSVGIcon getIcon(ResourceIconPath path) {
-    return new FlatSVGIcon(getResourcePath().resolve(path.getPath()).toUri());
+    FlatSVGIcon icon = new FlatSVGIcon(getResourcePath().resolve(path.getPath()).toUri());
+    icon.setDescription(path.getPath());
+    return icon;
   }
 
   public static FlatSVGIcon getToolBarIcon(ResourceIconPath path) {
@@ -247,7 +251,10 @@ public class ResourceUtil {
   }
 
   public static FlatSVGIcon getIcon(ResourceIconPath path, int width, int height) {
-    return new FlatSVGIcon(getResourcePath().resolve(path.getPath()).toUri()).derive(width, height);
+    FlatSVGIcon icon =
+        new FlatSVGIcon(getResourcePath().resolve(path.getPath()).toUri()).derive(width, height);
+    icon.setDescription(path.getPath());
+    return icon;
   }
 
   public static File getResource(String filename) {

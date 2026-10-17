@@ -9,7 +9,9 @@
  */
 package org.weasis.core.ui.util;
 
+import java.awt.Component;
 import java.awt.Dimension;
+import javax.swing.AbstractButton;
 import javax.swing.Box;
 import javax.swing.JToolBar;
 import org.weasis.core.api.gui.Insertable;
@@ -30,9 +32,17 @@ public class WtoolBar extends JToolBar implements Toolbar {
   }
 
   @Override
+  protected void addImpl(Component comp, Object constraints, int index) {
+    super.addImpl(comp, constraints, index);
+    if (comp instanceof AbstractButton button) {
+      ToolbarLabels.decorate(button);
+    }
+  }
+
+  @Override
   public void addSeparator() {
     add(Box.createRigidArea(new Dimension(5, 0)));
-    add(new JToolBar.Separator(new Dimension(3, ResourceUtil.TOOLBAR_ICON_SIZE)));
+    add(new JToolBar.Separator(new Dimension(3, ResourceUtil.TOOLBAR_ICON_SIZE + 12)));
   }
 
   @Override
