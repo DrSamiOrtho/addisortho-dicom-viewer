@@ -118,10 +118,19 @@
     <?endif?>
 
     <!-- Addis Ortho: brand bitmaps for the installer pages (banner and welcome/finish), from
-         resources/windows/msi; package-weasis.sh sets AO_MSI_UI_DIR. Without it, WiX's own. -->
+         resources/windows/msi. package-weasis.sh sets AO_MSI_UI_DIR; the installer workflow runs
+         jpackage itself on the native package unzipped in native-dist/weasis-native, under the
+         GitHub workspace. Elsewhere WiX keeps its own bitmaps. -->
     <?ifdef env.AO_MSI_UI_DIR ?>
-    <WixVariable Id="WixUIBannerBmp" Value="$(env.AO_MSI_UI_DIR)\ao-banner.bmp"/>
-    <WixVariable Id="WixUIDialogBmp" Value="$(env.AO_MSI_UI_DIR)\ao-dialog.bmp"/>
+      <?define AoMsiUiDir = "$(env.AO_MSI_UI_DIR)" ?>
+    <?else?>
+      <?ifdef env.GITHUB_WORKSPACE ?>
+        <?define AoMsiUiDir = "$(env.GITHUB_WORKSPACE)\native-dist\weasis-native\build\script\resources\windows\msi" ?>
+      <?endif?>
+    <?endif?>
+    <?ifdef AoMsiUiDir ?>
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.AoMsiUiDir)\ao-banner.bmp"/>
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.AoMsiUiDir)\ao-dialog.bmp"/>
     <?endif?>
 
     <UIRef Id="JpUI"/>
