@@ -182,3 +182,13 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
   - **Make 3D bones**: runs the owner's TotalSegmentator pipeline (`planning/make_3d.sh`, free model: hip, shoulder,
     spine) where it is installed, and opens its results in the study.
 - `viewer3d`: Smooth surfaces for segments, a crop box, and "Save 3D picture to the study" / "Copy 3D picture".
+- `viewer3d` 3D tools bar (14 Oct, evening): the mouse tools rotate, roll, pan, zoom, window/level, scalpel, keep only
+  this, remove this, length and arrow; the six anatomical orientations (keys 1 to 6); fit (Ctrl+0) and reset scene
+  (Ctrl+R); shading (Ctrl+S); copy (Ctrl+C), JPEG (Ctrl+E), quick movie (F2) and view-state snapshots (K, [ and ]).
+  The scalpel (S, or Alt + left drag with any tool) draws a closed area; Delete cuts inside it and Enter outside it,
+  through the whole depth, with Ctrl+Z / Ctrl+Y undo and redo and Ctrl+Alt+0 restoring the volume. Keep only this and
+  remove this pick the structure under a click (CPU ray march of the renderer's own transfer function) and grow it over
+  the shown voxels above the visible threshold, with a light separation option. The cuts live in `KeptMask`, one bit
+  per texture voxel on the CPU (`isKeptVolumeVoxel` is the API for the bones bundle) and one byte per voxel on the GPU
+  (unit 7), which every rendering mode and the segment overlays sample. Rotation and zoom centre on the crop box when
+  it is on. Keys of the 3D view are listed in `Shortcuts3d`; T is the roll (M pans), unlike the 2D viewer.

@@ -11,6 +11,7 @@
 package org.weasis.dicom.viewer3d;
 
 import java.awt.Cursor;
+import java.awt.event.KeyEvent;
 import org.weasis.core.api.gui.util.ActionW;
 import org.weasis.core.api.gui.util.Feature;
 import org.weasis.core.api.gui.util.Feature.BasicActionStateValue;
@@ -20,6 +21,7 @@ import org.weasis.core.api.gui.util.Feature.ToggleButtonListenerValue;
 import org.weasis.dicom.viewer3d.dockable.SegmentationTool;
 import org.weasis.dicom.viewer3d.geometry.ArcballMouseListener;
 import org.weasis.dicom.viewer3d.geometry.Axis;
+import org.weasis.dicom.viewer3d.geometry.MouseToolListener;
 import org.weasis.dicom.viewer3d.vr.CrosshairCutMode;
 import org.weasis.dicom.viewer3d.vr.Preset;
 import org.weasis.dicom.viewer3d.vr.RenderingType;
@@ -83,4 +85,60 @@ public class ActionVol {
   public static final ComboItemListenerValue<CrosshairCutMode> CROSSHAIR_CUT_MODE =
       new ComboItemListenerValue<>(
           Messages.getString("crosshair.cut.label"), "crosshair.cut.mode", 0, 0, null); // NON-NLS
+
+  /** A mouse tool of the 3D view, see {@link MouseToolListener}. */
+  public static final class MouseToolValue extends Feature<MouseToolListener> {
+    public MouseToolValue(String title, String command, int keyEvent, int modifier, Cursor cursor) {
+      super(title, command, keyEvent, modifier, cursor);
+    }
+  }
+
+  // The 3D tools below take their keys from Shortcuts3d, which settles the clashes with the 2D
+  // keys of ActionW (T is the pan there), so no key code is declared here.
+  public static final MouseToolValue ROLL =
+      new MouseToolValue(
+          Messages.getString("tool.roll"), "vol.roll", 0, 0, ActionW.ROTATION.getCursor());
+
+  public static final MouseToolValue SCALPEL =
+      new MouseToolValue(
+          Messages.getString("tool.scalpel"),
+          "vol.scalpel",
+          0,
+          0,
+          Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
+
+  public static final MouseToolValue KEEP_THIS =
+      new MouseToolValue(
+          Messages.getString("tool.keep"),
+          "vol.keep",
+          0,
+          0,
+          Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+
+  public static final MouseToolValue REMOVE_THIS =
+      new MouseToolValue(
+          Messages.getString("tool.remove"),
+          "vol.remove",
+          0,
+          0,
+          Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+
+  public static final MouseToolValue LENGTH =
+      new MouseToolValue(
+          Messages.getString("tool.length"),
+          "vol.length",
+          0,
+          0,
+          Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
+
+  public static final MouseToolValue ARROW =
+      new MouseToolValue(
+          Messages.getString("tool.arrow"),
+          "vol.arrow",
+          0,
+          0,
+          Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
+
+  /** Key that the 3D tools' Shortcuts3d uses for the scalpel. */
+  public static final int SCALPEL_KEY = KeyEvent.VK_S;
 }

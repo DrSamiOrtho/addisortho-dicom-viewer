@@ -102,3 +102,7 @@ uniform vec3 cropMax = vec3(1.0);
 // it covers (one in-plane voxel is the unit), so the result no longer depends on the sampling rate.
 uniform bool smoothShading = false;
 uniform bool accurateBlending = false;
+
+// Kept mask (Addis Ortho scalpel): when on, keptTexture holds 255 where the volume is shown and 0
+// where a cut removed it; a removed voxel contributes nothing to any rendering mode.
+uniform bool keptEnabled = false;

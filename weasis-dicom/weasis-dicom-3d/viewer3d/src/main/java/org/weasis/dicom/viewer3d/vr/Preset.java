@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.vr;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -31,6 +32,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import javax.swing.Icon;
 import org.joml.Vector4f;
 import org.slf4j.Logger;
@@ -593,6 +595,18 @@ public class Preset extends TextureData {
 
   public int getColorMin() {
     return colorMin;
+  }
+
+  /** The colour map as uploaded, RGBA bytes from {@link #getColorMin()} on, one per intensity. */
+  public byte[] getColors() {
+    return colors.clone();
+  }
+
+  /** The preset of this name for the modality, or empty. */
+  public static Optional<Preset> findPreset(String name, Modality modality) {
+    return getAllPresets().stream()
+        .filter(p -> p.getModality() == modality && p.getName().equals(name))
+        .findFirst();
   }
 
   public int getColorMax() {

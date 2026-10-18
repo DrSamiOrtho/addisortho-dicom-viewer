@@ -104,3 +104,7 @@ uniform vec3 cropMax;
 // No default initializers in GLSL 3.30: set via Java.
 uniform bool smoothShading;
 uniform bool accurateBlending;
+
+// Kept mask (Addis Ortho scalpel): when on, keptTexture holds 255 where the volume is shown and 0
+// where a cut removed it; a removed voxel contributes nothing to any rendering mode. Set from Java.
+uniform bool keptEnabled;
