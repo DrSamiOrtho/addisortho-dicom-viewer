@@ -17,7 +17,10 @@
   <build>
     <plugins>
       <!-- Addis Ortho: JCodec (pure Java H.264, MP4/MOV) is embedded for the video export, so
-           the installers need no native encoder and no extra bundle. -->
+           the installers need no native encoder and no extra bundle. This Import-Package replaces
+           the parent's: it must keep "org.slf4j;version=!", because the launcher exports org.slf4j
+           without a version and a versioned import leaves the bundle unresolved (no 2D viewer).
+           BundleManifestTest guards it. -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-dependency-plugin</artifactId>
@@ -39,7 +42,7 @@
         <configuration>
           <bnd>
             -includeresource.all: lib/=target/dependency/;lib:=true
-            Import-Package: !org.jcodec.*,*
+            Import-Package: org.slf4j;version=!,!org.jcodec.*,*
             Export-Package:!org.weasis.dicom.viewer2d.internal,org.weasis.dicom.viewer2d.*
           </bnd>
         </configuration>
