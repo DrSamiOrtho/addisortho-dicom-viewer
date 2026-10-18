@@ -75,6 +75,9 @@ public class CropBoxPanel extends JPanel implements SeriesViewerListener {
   private final Map<Side, JLabel> values = new EnumMap<>(Side.class);
   private boolean updating;
 
+  /** The left button's tool before Free-hand put the scalpel there. */
+  private String toolBeforeFreeHand;
+
   public CropBoxPanel(Border outerBorder) {
     super(new GridBagLayout());
     setBorder(
@@ -138,11 +141,7 @@ public class CropBoxPanel extends JPanel implements SeriesViewerListener {
     redo.setToolTipText(Messages.getString("cut.redo"));
     whole.setToolTipText(Messages.getString("cut.restore"));
     fitBone.addActionListener(_ -> withView(View3d::autoCropToBone));
-    freeHand.addActionListener(
-        _ ->
-            EventManager.getInstance()
-                .changeLeftMouseAction(
-                    freeHand.isSelected() ? ActionVol.SCALPEL.cmd() : ActionW.ROTATION.cmd()));
+    freeHand.addActionListener(_ -> toggleFreeHand());
     keepInside.addActionListener(_ -> withView(v -> v.cutLasso(LassoCut.Side.OUTSIDE)));
     removeInside.addActionListener(_ -> withView(v -> v.cutLasso(LassoCut.Side.INSIDE)));
     undo.addActionListener(_ -> withView(View3d::undoEdit));
@@ -180,6 +179,23 @@ public class CropBoxPanel extends JPanel implements SeriesViewerListener {
     if (EVENT.SELECT_VIEW.equals(event.getEventType())
         && event.getSeriesViewer() instanceof ImageViewerPlugin<?> viewer) {
       refresh(viewer.getSelectedViewCanvas() instanceof View3d view3d ? view3d : null);
+    }
+  }
+
+  /** The scalpel on the left button, then back to the tool it replaced. */
+  private void toggleFreeHand() {
+    EventManager manager = EventManager.getInstance();
+    String left = manager.getMouseActions().getAction(MouseActions.T_LEFT);
+    if (freeHand.isSelected()) {
+      if (!ActionVol.SCALPEL.cmd().equals(left)) {
+        toolBeforeFreeHand = left;
+      }
+      manager.changeLeftMouseAction(ActionVol.SCALPEL.cmd());
+    } else {
+      String back = toolBeforeFreeHand;
+      toolBeforeFreeHand = null;
+      manager.changeLeftMouseAction(
+          back == null || ActionVol.SCALPEL.cmd().equals(back) ? ActionW.ROTATION.cmd() : back);
     }
   }
 

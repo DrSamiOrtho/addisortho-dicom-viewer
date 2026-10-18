@@ -107,27 +107,56 @@ public final class View3dSnapshot {
    * view is not showing or has nothing rendered.
    */
   public static Optional<Frame> capture(View3d view) {
-    if (!view.hasValidContent()) {
-      return Optional.empty();
+    try (Reader reader = new Reader()) {
+      return reader.capture(view);
     }
-    AtomicReference<Frame> frame = new AtomicReference<>();
-    view.invoke(
-        true,
-        drawable -> {
-          GL gl = drawable.getGL();
-          int width = drawable.getSurfaceWidth();
-          int height = drawable.getSurfaceHeight();
-          if (width > 0 && height > 0) {
-            ByteBuffer rgba = Buffers.newDirectByteBuffer(width * height * 4);
-            GLPixelStorageModes storageModes = new GLPixelStorageModes();
-            storageModes.setPackAlignment(gl, 1);
-            gl.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, rgba);
-            storageModes.restore(gl);
-            frame.set(new Frame(width, height, toFlippedRgb(rgba, width, height)));
-          }
-          return true;
-        });
-    return Optional.ofNullable(frame.get());
+  }
+
+  /**
+   * Reads frames back from the GPU into buffers kept from one frame to the next, so a video export
+   * allocates them once and not once per frame. Each {@link Frame} it returns shares the reader's
+   * RGB array: convert it ({@link Frame#toImage()}) before the next capture. Not thread-safe.
+   */
+  public static final class Reader implements AutoCloseable {
+    private ByteBuffer rgba;
+    private byte[] rgb;
+
+    public Optional<Frame> capture(View3d view) {
+      if (!view.hasValidContent()) {
+        return Optional.empty();
+      }
+      AtomicReference<Frame> frame = new AtomicReference<>();
+      view.invoke(
+          true,
+          drawable -> {
+            GL gl = drawable.getGL();
+            int width = drawable.getSurfaceWidth();
+            int height = drawable.getSurfaceHeight();
+            if (width > 0 && height > 0) {
+              int bytes = width * height * 4;
+              if (rgba == null || rgba.capacity() != bytes) {
+                rgba = Buffers.newDirectByteBuffer(bytes);
+                rgb = new byte[width * height * 3];
+              }
+              rgba.clear();
+              GLPixelStorageModes storageModes = new GLPixelStorageModes();
+              storageModes.setPackAlignment(gl, 1);
+              gl.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, rgba);
+              storageModes.restore(gl);
+              toFlippedRgb(rgba, width, height, rgb);
+              frame.set(new Frame(width, height, rgb));
+            }
+            return true;
+          });
+      return Optional.ofNullable(frame.get());
+    }
+
+    /** Lets the buffers go. */
+    @Override
+    public void close() {
+      rgba = null;
+      rgb = null;
+    }
   }
 
   /**
@@ -135,7 +164,11 @@ public final class View3dSnapshot {
    * the top row first, dropping the alpha.
    */
   public static byte[] toFlippedRgb(ByteBuffer rgba, int width, int height) {
-    byte[] rgb = new byte[width * height * 3];
+    return toFlippedRgb(rgba, width, height, new byte[width * height * 3]);
+  }
+
+  /** As {@link #toFlippedRgb(ByteBuffer, int, int)}, into {@code rgb}, which it returns. */
+  static byte[] toFlippedRgb(ByteBuffer rgba, int width, int height, byte[] rgb) {
     for (int y = 0; y < height; y++) {
       int src = (height - 1 - y) * width * 4;
       int dst = y * width * 3;

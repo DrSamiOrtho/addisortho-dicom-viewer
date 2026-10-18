@@ -96,7 +96,7 @@ class BoneExtentTest {
         (x, y, z) -> x >= 200 && x < 300 && y >= 150 && y < 260 && z >= 5 && z < 35 ? 800 : -900;
     CropBox b =
         BoneExtent.find(bone, big, new Vector3d(0.5, 0.5, 1), 300, 0, () -> false).orElseThrow();
-    // Stride 4: the box is right to within one sample.
+    // Stride 4: the box is right to within one block.
     assertEquals(200 / 512.0, b.minX(), 4 / 512.0);
     assertEquals(300 / 512.0, b.maxX(), 4 / 512.0);
     assertEquals(150 / 512.0, b.minY(), 4 / 512.0);
@@ -104,18 +104,77 @@ class BoneExtentTest {
   }
 
   @Test
-  void aThickWidePieceIsBoneNotTable() {
+  void tableRuleKeepsThickOrShortPiecesAndDropsSupineAndProneTables() {
     int[] size = {100, 100, 10};
     BoneExtent.Piece pelvis =
         new BoneExtent.Piece(5000, new int[] {10, 50, 0}, new int[] {90, 90, 9});
-    BoneExtent.Piece table =
+    BoneExtent.Piece supineTable =
         new BoneExtent.Piece(2000, new int[] {5, 88, 0}, new int[] {95, 90, 9});
-    BoneExtent.Piece frontPlate =
+    BoneExtent.Piece proneTable =
         new BoneExtent.Piece(2000, new int[] {5, 10, 0}, new int[] {95, 12, 9});
+    BoneExtent.Piece scapula =
+        new BoneExtent.Piece(800, new int[] {20, 80, 2}, new int[] {70, 88, 7});
     assertFalse(BoneExtent.isTable(pelvis, size, MM));
-    assertTrue(BoneExtent.isTable(table, size, MM));
-    assertFalse(BoneExtent.isTable(frontPlate, size, MM), "a thin plate in front is not the table");
-    List<BoneExtent.Piece> kept = BoneExtent.keep(List.of(pelvis, table), size, MM);
-    assertEquals(List.of(pelvis), kept);
+    assertTrue(BoneExtent.isTable(supineTable, size, MM));
+    assertTrue(BoneExtent.isTable(proneTable, size, MM), "a prone patient lies on the table");
+    assertFalse(BoneExtent.isTable(scapula, size, MM), "a thin plate shorter than the scan");
+    List<BoneExtent.Piece> kept = BoneExtent.keep(List.of(pelvis, supineTable, scapula), size, MM);
+    assertEquals(List.of(pelvis, scapula), kept);
+  }
+
+  @Test
+  void aSmallFragmentAwayFromTheBoneStaysInTheBox() {
+    // One bone, and a 4 mm fragment 20 mm beyond it (an avulsion, a sesamoid).
+    VoxelSampler scan =
+        (x, y, z) -> {
+          boolean main = x >= 30 && x < 50 && y >= 30 && y < 50 && z >= 10 && z < 50;
+          boolean fragment = x >= 70 && x < 74 && y >= 40 && y < 44 && z >= 20 && z < 24;
+          return main || fragment ? 700 : -1000;
+        };
+    CropBox b = BoneExtent.find(scan, SIZE, MM, 300, 0, () -> false).orElseThrow();
+    assertEquals(0.30, b.minX(), 1e-9);
+    assertEquals(0.74, b.maxX(), 1e-9, "the fragment is inside the box");
+  }
+
+  @Test
+  void aThinPosteriorPlateLikeAScapulaIsKept() {
+    // Ribs in front, and a 6 mm plate behind them over half the width and part of the length.
+    VoxelSampler scan =
+        (x, y, z) -> {
+          boolean ribs = x >= 20 && x < 80 && y >= 30 && y < 60 && z >= 0 && z < 60;
+          boolean plate = x >= 40 && x < 90 && y >= 80 && y < 86 && z >= 15 && z < 45;
+          return ribs || plate ? 600 : -1000;
+        };
+    CropBox b = BoneExtent.find(scan, SIZE, MM, 300, 0, () -> false).orElseThrow();
+    assertEquals(0.86, b.maxY(), 1e-9, "the plate is inside the box");
+    assertEquals(0.90, b.maxX(), 1e-9);
+  }
+
+  @Test
+  void aProneTableInFrontIsLeftOut() {
+    VoxelSampler scan =
+        (x, y, z) -> {
+          boolean table = y >= 8 && y <= 10 && x >= 5 && x <= 95;
+          boolean bone = x >= 40 && x < 60 && y >= 40 && y < 60 && z >= 10 && z < 50;
+          return table ? 400 : bone ? 700 : -1000;
+        };
+    CropBox b = BoneExtent.find(scan, SIZE, MM, 300, 0, () -> false).orElseThrow();
+    assertEquals(0.40, b.minY(), 1e-9);
+    assertEquals(0.40, b.minX(), 1e-9);
+  }
+
+  @Test
+  void blocksArePooledSoAThinCortexIsNeverMissed() {
+    // Stride 4 on a 512-wide volume: two cortices one voxel thick, off the block centres, joined.
+    Vector3i big = new Vector3i(512, 512, 40);
+    VoxelSampler cortex =
+        (x, y, z) ->
+            (x == 301 || x == 341) && y >= 100 && y < 400 || x > 301 && x < 341 && y == 100
+                ? 900
+                : -900;
+    CropBox b =
+        BoneExtent.find(cortex, big, new Vector3d(0.5, 0.5, 1), 300, 0, () -> false).orElseThrow();
+    assertEquals(300 / 512.0, b.minX(), 1e-9);
+    assertEquals(344 / 512.0, b.maxX(), 1e-9);
   }
 }

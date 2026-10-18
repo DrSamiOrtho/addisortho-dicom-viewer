@@ -19,9 +19,12 @@ import org.joml.Vector3i;
 
 /**
  * Finds the crop box that holds the bone of a CT, for the 3D view to open on the bone alone: the
- * voxels at or above a bone threshold, on a coarse sample of the volume, grouped into connected
- * pieces; the scanner table (a thin, wide plate behind the patient) and specks too small to be bone
- * are left out, and the box of the rest is widened by a margin.
+ * voxels at or above a bone threshold, on a coarse grid of blocks where a block is bone when any of
+ * its voxels is (so a thin cortex or a small fragment is never missed), grouped into connected
+ * pieces. The scanner table (a thin, wide plate running the whole length of the scan, behind the
+ * patient or in front of a prone one) and specks under a fixed size are left out, and the box of
+ * the rest is widened by a margin. Every other piece counts, however small next to the main bone:
+ * an avulsed fragment, a sesamoid or a scapula at the edge of the field stays in the box.
  *
  * <p>Texture axes, as the crop box: x right to left, y front to back, z along the slices. The
  * result is a guess for display only and is always undoable; it changes no voxel.
@@ -43,14 +46,17 @@ public final class BoneExtent {
   /** ... when it also spans this share of the width ... */
   static final double TABLE_WIDTH_SHARE = 0.4;
 
-  /** ... and its centre lies behind this share of the depth (the table is behind the back). */
-  static final double TABLE_BACK_SHARE = 0.5;
+  /** ... and this share of the scan's length (the table runs through every slice). */
+  static final double TABLE_LENGTH_SHARE = 0.9;
 
-  /** Pieces smaller than this share of the largest piece are specks, not bone. */
-  static final double MIN_PIECE_SHARE = 0.02;
+  /** Pieces smaller than this are specks (noise, a calcified vessel), in mm³. */
+  static final double MIN_PIECE_MM3 = 30;
 
-  /** Pieces smaller than this are specks whatever the largest piece, in mm³. */
-  static final double MIN_PIECE_MM3 = 300;
+  /** The values of one texture slice, row by row, as the renderer has them. */
+  @FunctionalInterface
+  public interface SliceSource {
+    float[] slice(int z);
+  }
 
   /** One connected piece of the sample. */
   record Piece(int voxels, int[] min, int[] max) {}
@@ -58,7 +64,8 @@ public final class BoneExtent {
   private BoneExtent() {}
 
   /**
-   * @param sampler CT values of the texture voxels, in HU
+   * @param sampler CT values of the texture voxels, in HU; a {@link TextureField} is read slice by
+   *     slice
    * @param texture size of the texture, in voxels
    * @param texelMm size of a texture voxel, in mm
    * @param thresholdHu bone threshold
@@ -73,23 +80,47 @@ public final class BoneExtent {
       double thresholdHu,
       double marginMm,
       BooleanSupplier cancelled) {
+    SliceSource slices =
+        sampler instanceof TextureField field
+            ? field::textureSlice
+            : z -> {
+              float[] slice = new float[texture.x * texture.y];
+              for (int y = 0, i = 0; y < texture.y; y++) {
+                for (int x = 0; x < texture.x; x++, i++) {
+                  slice[i] = (float) sampler.valueAt(x, y, z);
+                }
+              }
+              return slice;
+            };
+    return find(slices, texture, texelMm, thresholdHu, marginMm, cancelled);
+  }
+
+  /** As above, from whole slices. */
+  public static Optional<CropBox> find(
+      SliceSource slices,
+      Vector3i texture,
+      Vector3d texelMm,
+      double thresholdHu,
+      double marginMm,
+      BooleanSupplier cancelled) {
     int maxSide = Math.max(texture.x, Math.max(texture.y, texture.z));
     int stride = Math.max(1, (int) Math.ceil(maxSide / (double) SAMPLE_SIDE));
     int nx = ceilDiv(texture.x, stride);
     int ny = ceilDiv(texture.y, stride);
     int nz = ceilDiv(texture.z, stride);
     boolean[] bone = new boolean[nx * ny * nz];
-    for (int z = 0; z < nz; z++) {
+    for (int tz = 0; tz < texture.z; tz++) {
       if (cancelled.getAsBoolean()) {
         return Optional.empty();
       }
-      int tz = Math.min(texture.z - 1, z * stride + stride / 2);
-      for (int y = 0; y < ny; y++) {
-        int ty = Math.min(texture.y - 1, y * stride + stride / 2);
-        for (int x = 0; x < nx; x++) {
-          int tx = Math.min(texture.x - 1, x * stride + stride / 2);
-          double v = sampler.valueAt(tx, ty, tz);
-          bone[(z * ny + y) * nx + x] = v >= thresholdHu;
+      float[] slice = slices.slice(tz);
+      int base = (tz / stride) * ny * nx;
+      for (int ty = 0, i = 0; ty < texture.y; ty++) {
+        int row = base + (ty / stride) * nx;
+        for (int tx = 0; tx < texture.x; tx++, i++) {
+          if (slice[i] >= thresholdHu) {
+            bone[row + tx / stride] = true;
+          }
         }
       }
     }
@@ -107,40 +138,44 @@ public final class BoneExtent {
         max[a] = Math.max(max[a], p.max()[a]);
       }
     }
-    double[] size = {nx, ny, nz};
-    double[] mm = {sampleMm.x, sampleMm.y, sampleMm.z};
+    // Block bounds back in texture voxels, the last block cut at the texture's edge.
+    int[] size = {texture.x, texture.y, texture.z};
+    double[] mm = {texelMm.x, texelMm.y, texelMm.z};
     double[] lo = new double[3];
     double[] hi = new double[3];
     for (int a = 0; a < 3; a++) {
       double margin = mm[a] > 0 ? marginMm / mm[a] : 0;
-      lo[a] = (min[a] - margin) / size[a];
-      hi[a] = (max[a] + 1 + margin) / size[a];
+      double first = (double) min[a] * stride;
+      double end = Math.min((double) (max[a] + 1) * stride, size[a]);
+      lo[a] = (first - margin) / size[a];
+      hi[a] = (end + margin) / size[a];
     }
     return Optional.of(new CropBox(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]));
   }
 
   /** The pieces that are bone: not the table, not specks. */
   static List<Piece> keep(List<Piece> pieces, int[] size, Vector3d sampleMm) {
-    double voxelMm3 = sampleMm.x * sampleMm.y * sampleMm.z;
+    double blockMm3 = sampleMm.x * sampleMm.y * sampleMm.z;
     List<Piece> bones = new ArrayList<>();
     for (Piece p : pieces) {
-      if (!isTable(p, size, sampleMm)) {
+      if (!isTable(p, size, sampleMm) && p.voxels() * blockMm3 >= MIN_PIECE_MM3) {
         bones.add(p);
       }
     }
-    int largest = bones.stream().mapToInt(Piece::voxels).max().orElse(0);
-    double minVoxels = Math.max(largest * MIN_PIECE_SHARE, MIN_PIECE_MM3 / voxelMm3);
-    bones.removeIf(p -> p.voxels() < minVoxels);
     return bones;
   }
 
+  /**
+   * A thin, wide plate through the whole length of the scan: the table, behind a supine patient or
+   * in front of a prone one. A scapula or a pelvic wing is thicker front to back or shorter.
+   */
   static boolean isTable(Piece p, int[] size, Vector3d sampleMm) {
     double thickness = (p.max()[1] - p.min()[1] + 1) * sampleMm.y;
     double widthShare = (p.max()[0] - p.min()[0] + 1) / (double) size[0];
-    double centreY = (p.min()[1] + p.max()[1] + 1) / 2.0 / size[1];
+    double lengthShare = (p.max()[2] - p.min()[2] + 1) / (double) size[2];
     return thickness <= TABLE_THICKNESS_MM
         && widthShare >= TABLE_WIDTH_SHARE
-        && centreY >= TABLE_BACK_SHARE;
+        && lengthShare >= TABLE_LENGTH_SHARE;
   }
 
   /** The 6-connected pieces of {@code bone}, with their size and bounds. */

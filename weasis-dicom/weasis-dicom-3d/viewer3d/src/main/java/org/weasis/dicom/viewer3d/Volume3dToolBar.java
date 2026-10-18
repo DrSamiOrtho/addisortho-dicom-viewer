@@ -27,6 +27,7 @@ import org.weasis.core.api.util.ResourceUtil.ActionIcon;
 import org.weasis.core.api.util.ResourceUtil.ResourceIconPath;
 import org.weasis.core.ui.editor.image.MouseActions;
 import org.weasis.core.ui.editor.image.ViewCanvas;
+import org.weasis.core.ui.util.ToolbarLabels;
 import org.weasis.core.ui.util.WtoolBar;
 import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.viewer2d.ResetTools;
@@ -66,41 +67,55 @@ public class Volume3dToolBar extends WtoolBar {
   }
 
   private void initGui() {
-    addTool(ActionW.ROTATION, ActionIcon.ROTATION, ActionW.ROTATION.getTitle() + " (R)");
-    addTool(ActionVol.ROLL, icon("vol.roll"), ActionVol.ROLL.getTitle() + " (T)");
-    addTool(ActionW.PAN, ActionIcon.PAN, ActionW.PAN.getTitle() + " (M)");
-    addTool(ActionW.ZOOM, ActionIcon.ZOOM, ActionW.ZOOM.getTitle() + " (Z)");
-    addTool(ActionW.WINLEVEL, ActionIcon.WINDOW_LEVEL, ActionW.WINLEVEL.getTitle() + " (W)");
+    addTool("Rotate", ActionW.ROTATION, ActionIcon.ROTATION, ActionW.ROTATION.getTitle() + " (R)");
+    addTool("Roll", ActionVol.ROLL, icon("vol.roll"), ActionVol.ROLL.getTitle() + " (T)");
+    addTool("Pan", ActionW.PAN, ActionIcon.PAN, ActionW.PAN.getTitle() + " (M)");
+    addTool("Zoom", ActionW.ZOOM, ActionIcon.ZOOM, ActionW.ZOOM.getTitle() + " (Z)");
+    addTool("W/L", ActionW.WINLEVEL, ActionIcon.WINDOW_LEVEL, ActionW.WINLEVEL.getTitle() + " (W)");
     addTool(
-        ActionVol.SCALPEL, icon("vol.scalpel"), Messages.getString("tool.scalpel.tip") + " (S)");
-    addTool(ActionVol.KEEP_THIS, icon("vol.keep"), Messages.getString("tool.keep.tip"));
-    addTool(ActionVol.REMOVE_THIS, icon("vol.remove"), Messages.getString("tool.remove.tip"));
-    addTool(ActionVol.LENGTH, icon("vol.length"), Messages.getString("tool.length.tip") + " (L)");
-    addTool(ActionVol.ARROW, icon("vol.arrow"), Messages.getString("tool.arrow.tip") + " (Y)");
+        "Scalpel",
+        ActionVol.SCALPEL,
+        icon("vol.scalpel"),
+        Messages.getString("tool.scalpel.tip") + " (S)");
+    addTool("Keep", ActionVol.KEEP_THIS, icon("vol.keep"), Messages.getString("tool.keep.tip"));
+    addTool(
+        "Remove", ActionVol.REMOVE_THIS, icon("vol.remove"), Messages.getString("tool.remove.tip"));
+    addTool(
+        "Length",
+        ActionVol.LENGTH,
+        icon("vol.length"),
+        Messages.getString("tool.length.tip") + " (L)");
+    addTool(
+        "Arrow", ActionVol.ARROW, icon("vol.arrow"), Messages.getString("tool.arrow.tip") + " (Y)");
     addSeparator();
 
     cutInsideButton =
         addButton(
+            "Cut in",
             icon("vol.cutInside"),
             Messages.getString("cut.inside"),
             () -> selectedView().ifPresent(v -> v.cutLasso(LassoCut.Side.INSIDE)));
     cutOutsideButton =
         addButton(
+            "Cut out",
             icon("vol.cutOutside"),
             Messages.getString("cut.outside"),
             () -> selectedView().ifPresent(v -> v.cutLasso(LassoCut.Side.OUTSIDE)));
     undoButton =
         addButton(
+            "Undo",
             icon("vol.undo"),
             Messages.getString("cut.undo"),
             () -> selectedView().ifPresent(View3d::undoEdit));
     redoButton =
         addButton(
+            "Redo",
             icon("vol.redo"),
             Messages.getString("cut.redo"),
             () -> selectedView().ifPresent(View3d::redoEdit));
     restoreButton =
         addButton(
+            "Whole",
             icon("vol.restore"),
             Messages.getString("cut.restore"),
             () -> selectedView().ifPresent(View3d::restoreVolume));
@@ -114,10 +129,12 @@ public class Volume3dToolBar extends WtoolBar {
       addPreset(view.letter(), Messages.getString(view.messageKey()), view.cameraView());
     }
     addButton(
+        "Fit",
         icon("vol.fit"),
         Messages.getString("view.fit"),
         () -> selectedView().ifPresent(View3d::fitToVisible));
     addButton(
+        "Reset",
         ActionIcon.RESET,
         Messages.getString("view.reset.scene"),
         () -> eventManager.reset(ResetTools.ALL));
@@ -128,40 +145,49 @@ public class Volume3dToolBar extends WtoolBar {
               JToggleButton shading = new JToggleButton();
               shading.setToolTipText(ActionVol.VOL_SHADING.getTitle() + " (Ctrl+S)"); // NON-NLS
               shading.setIcon(icon("vol.shading"));
+              shading.putClientProperty(ToolbarLabels.CLIENT_PROPERTY, "Shade"); // NON-NLS
               b.registerActionState(shading);
               add(shading);
             });
     addSeparator();
 
     addButton(
+        "Copy",
         ActionIcon.EXPORT_CLIPBOARD,
         Messages.getString("view.copy"),
         () -> selectedView().ifPresent(View3dSnapshot::copyToClipboard));
     addButton(
+        "JPEG",
         ActionIcon.EXPORT_IMAGE,
         Messages.getString("view.save.jpeg"),
         () -> selectedView().ifPresent(View3dSnapshot::saveJpeg));
     addButton(
+        "Movie",
         ActionIcon.LOOP,
         Messages.getString("view.movie"),
         () -> selectedView().ifPresent(View3d::toggleMovie));
     addButton(
+        "Video",
         ActionIcon.EXPORT_IMAGE,
         Messages.getString("view.video"),
         () -> selectedView().ifPresent(View3dVideoExport::export));
     addButton(
+        "Snap",
         icon("vol.snapshot"),
         Messages.getString("view.snapshot"),
         () -> selectedView().ifPresent(View3d::takeSnapshot));
     addButton(
+        "Prev",
         ActionIcon.PREVIOUS,
         Messages.getString("view.snapshot.previous"),
         () -> selectedView().ifPresent(v -> v.showSnapshot(-1)));
     addButton(
+        "Next",
         ActionIcon.NEXT,
         Messages.getString("view.snapshot.next"),
         () -> selectedView().ifPresent(v -> v.showSnapshot(1)));
     addButton(
+        "Clear",
         ActionIcon.SELECTION_DELETE,
         Messages.getString("view.annotations.clear"),
         () -> selectedView().ifPresent(View3d::clearAnnotations));
@@ -182,13 +208,15 @@ public class Volume3dToolBar extends WtoolBar {
     return ResourceUtil.getToolBarIcon(new IconPath("svg/action/" + name + ".svg")); // NON-NLS
   }
 
-  private void addTool(Feature<?> action, ActionIcon iconPath, String tip) {
-    addTool(action, ResourceUtil.getToolBarIcon(iconPath), tip);
+  private void addTool(String label, Feature<?> action, ActionIcon iconPath, String tip) {
+    addTool(label, action, ResourceUtil.getToolBarIcon(iconPath), tip);
   }
 
-  private void addTool(Feature<?> action, Icon icon, String tip) {
+  /** A mouse tool; {@code label} is the short text under the icon (tool bar labels on). */
+  private void addTool(String label, Feature<?> action, Icon icon, String tip) {
     JToggleButton button = new JToggleButton(icon);
     button.setToolTipText(tip);
+    button.putClientProperty(ToolbarLabels.CLIENT_PROPERTY, label);
     button.addActionListener(_ -> eventManager.changeLeftMouseAction(action.cmd()));
     toolGroup.add(button);
     toolButtons.put(action.cmd(), button);
@@ -196,13 +224,15 @@ public class Volume3dToolBar extends WtoolBar {
     add(button);
   }
 
-  private JButton addButton(ActionIcon iconPath, String tip, Runnable action) {
-    return addButton(ResourceUtil.getToolBarIcon(iconPath), tip, action);
+  private JButton addButton(String label, ActionIcon iconPath, String tip, Runnable action) {
+    return addButton(label, ResourceUtil.getToolBarIcon(iconPath), tip, action);
   }
 
-  private JButton addButton(Icon icon, String tip, Runnable action) {
+  /** A command; {@code label} is the short text under the icon (tool bar labels on). */
+  private JButton addButton(String label, Icon icon, String tip, Runnable action) {
     JButton button = new JButton(icon);
     button.setToolTipText(tip);
+    button.putClientProperty(ToolbarLabels.CLIENT_PROPERTY, label);
     button.addActionListener(_ -> action.run());
     add(button);
     return button;

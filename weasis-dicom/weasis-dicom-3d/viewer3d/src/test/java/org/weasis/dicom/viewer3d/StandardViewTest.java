@@ -80,4 +80,42 @@ class StandardViewTest {
   private static void assertSquare(StandardView a, StandardView b) {
     assertEquals(0, towardViewer(a).dot(towardViewer(b)), 1e-6, a + " / " + b);
   }
+
+  /** The direction to the right of the screen, in volume space. */
+  private static Vector3d screenRight(StandardView view) {
+    Quaterniond r = view.cameraView().rotation();
+    return new Quaterniond(r).conjugate().transform(new Vector3d(1, 0, 0));
+  }
+
+  private static Vector3d screenUp(StandardView view) {
+    Quaterniond r = view.cameraView().rotation();
+    return new Quaterniond(r).conjugate().transform(new Vector3d(0, 1, 0));
+  }
+
+  /**
+   * Handedness, in the volume axes the crop box and the LPS cube use: x towards the patient's left,
+   * y towards the back, z towards the head. Key 3 puts the camera on the patient's left, key 1 in
+   * front with the patient's left on the right of the screen (a radiological AP view), and the head
+   * is up in the four side views.
+   */
+  @Test
+  void camerasSitOnTheNamedSideOfThePatient() {
+    Vector3d left = new Vector3d(1, 0, 0);
+    Vector3d back = new Vector3d(0, 1, 0);
+    Vector3d head = new Vector3d(0, 0, 1);
+    assertEquals(1, towardViewer(StandardView.LEFT).dot(left), 1e-6);
+    assertEquals(-1, towardViewer(StandardView.RIGHT).dot(left), 1e-6);
+    assertEquals(-1, towardViewer(StandardView.ANTERIOR).dot(back), 1e-6);
+    assertEquals(1, towardViewer(StandardView.POSTERIOR).dot(back), 1e-6);
+    assertEquals(1, towardViewer(StandardView.SUPERIOR).dot(head), 1e-6);
+    assertEquals(-1, towardViewer(StandardView.INFERIOR).dot(head), 1e-6);
+    assertEquals(1, screenRight(StandardView.ANTERIOR).dot(left), 1e-6);
+    assertEquals(-1, screenRight(StandardView.POSTERIOR).dot(left), 1e-6);
+    for (StandardView side :
+        new StandardView[] {
+          StandardView.ANTERIOR, StandardView.POSTERIOR, StandardView.LEFT, StandardView.RIGHT
+        }) {
+      assertEquals(1, screenUp(side).dot(head), 1e-6, side.name());
+    }
+  }
 }

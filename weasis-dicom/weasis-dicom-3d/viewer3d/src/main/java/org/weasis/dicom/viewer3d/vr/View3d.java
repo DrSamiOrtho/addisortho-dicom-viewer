@@ -54,6 +54,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import javax.swing.Action;
 import javax.swing.JCheckBoxMenuItem;
@@ -220,6 +221,12 @@ public class View3d extends VolumeCanvas
 
   /** The volume the crop box was last fitted to the bone for, see {@link #autoCropToBone}. */
   private DicomVolTexture autoCroppedTexture;
+
+  /** The volume the preset was chosen for, so reloading it keeps the preset. */
+  private DicomVolTexture presetTexture;
+
+  /** {@code true} while an undo or redo replays a step, which must not record a new one. */
+  private boolean replaying;
 
   /** Name of the preset a CT opens with, see {@link #defaultPresetFor}. */
   public static final String CT_DEFAULT_PRESET = "AO Bone"; // NON-NLS
@@ -471,6 +478,8 @@ public class View3d extends VolumeCanvas
       keptMaskTexture.invalidate();
       editHistory.clear();
       cropBeforeAdjust = null;
+      autoCroppedTexture = null;
+      presetTexture = null;
       seedMarker = null;
       windowBeforePreview = null;
       sharedField = null;
@@ -499,8 +508,14 @@ public class View3d extends VolumeCanvas
           .getAction(ActionVol.VOL_QUALITY)
           .ifPresent(a -> a.setSliderValue(quality, false));
       renderingLayer.setEnableRepaint(true);
-      // The anatomy volume always uses the modality's default preset.
-      setVolumePreset(defaultPresetFor(volTexture.getModality()));
+      // A new volume opens with the modality's default preset; the same volume loaded again
+      // (the Smooth option rebuilds it) keeps the preset chosen meanwhile (Addis Ortho).
+      Preset preset =
+          presetTexture == volTexture && volumePreset != null
+              ? volumePreset
+              : defaultPresetFor(volTexture.getModality());
+      presetTexture = volTexture;
+      setVolumePreset(preset);
       // (Re)build the segmentation texture for this volume.
       updateSegmentation();
       maybeAutoCropToBone();
@@ -1671,7 +1686,7 @@ public class View3d extends VolumeCanvas
       cropBeforeAdjust = before;
     } else {
       cropBeforeAdjust = null;
-      if (!before.equals(after)) {
+      if (!replaying && !before.equals(after)) {
         editHistory.push(EditHistory.crop(before, after, this::applyCropState));
       }
     }
@@ -1762,6 +1777,10 @@ public class View3d extends VolumeCanvas
   /** {@code true} while the bone is being searched for the crop. */
   private volatile boolean autoCropRunning;
 
+  public boolean isAutoCropRunning() {
+    return autoCropRunning;
+  }
+
   /** Whether {@link #autoCropToBone} can run: a fully loaded CT and no search running. */
   public boolean canAutoCropToBone() {
     DicomVolTexture tex = volTexture;
@@ -1838,9 +1857,34 @@ public class View3d extends VolumeCanvas
       if (volTexture != tex) {
         return;
       }
-      if (box.isPresent()) {
-        setCropBox(true, box.get(), false);
+      if (box.isPresent() && cropBeforeAdjust != null) {
+        // A crop slider is being dragged: the user's crop wins over the automatic one.
+        LOGGER.info("Crop to the bone dropped: the crop box is being adjusted");
+      } else if (box.isPresent()) {
+        EditHistory.CropState cropBefore = getCropState();
+        ViewSnapshot viewBefore = ViewSnapshot.of(this);
+        applyCrop(true, box.get(), false);
         fitToVisible();
+        EditHistory.CropState cropAfter = getCropState();
+        ViewSnapshot viewAfter = ViewSnapshot.of(this);
+        // One step that also takes back the zoom and pan of the fit.
+        editHistory.push(
+            new EditHistory.Edit() {
+              @Override
+              public boolean undo() {
+                applyCropState(cropBefore);
+                viewBefore.applyCameraTo(View3d.this);
+                return true;
+              }
+
+              @Override
+              public boolean redo() {
+                applyCropState(cropAfter);
+                viewAfter.applyCameraTo(View3d.this);
+                return true;
+              }
+            });
+        notifyCropListeners();
         showStatus(Messages.getString("crop.auto.done"));
       } else if (asked) {
         showStatus(Messages.getString("crop.auto.none"));
@@ -2664,7 +2708,8 @@ public class View3d extends VolumeCanvas
 
   /** Takes back the last cut or crop box change. */
   public boolean undoEdit() {
-    if (cutRunning || !editHistory.undo()) {
+    cropBeforeAdjust = null;
+    if (cutRunning || !replay(editHistory::undo)) {
       return false;
     }
     cutChanged();
@@ -2674,12 +2719,22 @@ public class View3d extends VolumeCanvas
 
   /** Does again the last cut or crop box change taken back. */
   public boolean redoEdit() {
-    if (cutRunning || !editHistory.redo()) {
+    cropBeforeAdjust = null;
+    if (cutRunning || !replay(editHistory::redo)) {
       return false;
     }
     cutChanged();
     notifyCropListeners();
     return true;
+  }
+
+  private boolean replay(BooleanSupplier step) {
+    replaying = true;
+    try {
+      return step.getAsBoolean();
+    } finally {
+      replaying = false;
+    }
   }
 
   /** {@code true} when neither a crop box nor a cut hides any part of the volume. */
@@ -2698,6 +2753,7 @@ public class View3d extends VolumeCanvas
       return;
     }
     lasso.clear();
+    cropBeforeAdjust = null;
     EditHistory.Group group = new EditHistory.Group();
     if (mask != null && !mask.isFull()) {
       mask.restore();

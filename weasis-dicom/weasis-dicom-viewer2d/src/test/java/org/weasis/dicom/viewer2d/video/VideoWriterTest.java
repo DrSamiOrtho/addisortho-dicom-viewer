@@ -38,6 +38,11 @@ class VideoWriterTest {
 
   @TempDir Path dir;
 
+  /** Four colours far apart, so each decoded frame says which one it is. */
+  private static final Color[] COLORS = {
+    Color.RED, Color.GREEN, Color.BLUE, new Color(240, 240, 240)
+  };
+
   private static BufferedImage solid(int w, int h, Color c) {
     BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
     Graphics2D g = img.createGraphics();
@@ -56,7 +61,7 @@ class VideoWriterTest {
       assertEquals(64, writer.width());
       assertEquals(48, writer.height());
       for (int i = 0; i < 12; i++) {
-        writer.addFrame(solid(i < 6 ? 64 : 128, i < 6 ? 48 : 96, Color.RED));
+        writer.addFrame(solid(i < 6 ? 64 : 128, i < 6 ? 48 : 96, COLORS[i % COLORS.length]));
       }
       assertEquals(12, writer.frameCount());
     }
@@ -75,16 +80,22 @@ class VideoWriterTest {
       FrameGrab grab = FrameGrab.createFrameGrab(in);
       assertEquals(12, grab.getVideoTrack().getMeta().getTotalFrames());
       assertEquals(1.2, grab.getVideoTrack().getMeta().getTotalDuration(), 1e-6);
-      Picture frame = grab.getNativeFrame();
-      assertNotNull(frame);
-      Picture rgb = Picture.create(frame.getWidth(), frame.getHeight(), ColorSpace.RGB);
-      ColorUtil.getTransform(frame.getColor(), ColorSpace.RGB).transform(frame, rgb);
-      byte[] px = rgb.getPlaneData(0);
-      int centre = ((rgb.getHeight() / 2) * rgb.getWidth() + rgb.getWidth() / 2) * 3;
-      int r = px[centre] + 128;
-      int g = px[centre + 1] + 128;
-      int b = px[centre + 2] + 128;
-      assertTrue(r > 200 && g < 60 && b < 60, "decoded colour " + r + "," + g + "," + b);
+      // Every frame comes back in the order written, each in its own colour.
+      for (int i = 0; i < 12; i++) {
+        Picture frame = grab.getNativeFrame();
+        assertNotNull(frame, "frame " + i);
+        Picture rgb = Picture.create(frame.getWidth(), frame.getHeight(), ColorSpace.RGB);
+        ColorUtil.getTransform(frame.getColor(), ColorSpace.RGB).transform(frame, rgb);
+        byte[] px = rgb.getPlaneData(0);
+        int centre = ((rgb.getHeight() / 2) * rgb.getWidth() + rgb.getWidth() / 2) * 3;
+        int[] got = {px[centre] + 128, px[centre + 1] + 128, px[centre + 2] + 128};
+        Color want = COLORS[i % COLORS.length];
+        int[] expected = {want.getRed(), want.getGreen(), want.getBlue()};
+        for (int c = 0; c < 3; c++) {
+          assertEquals(
+              expected[c], got[c], 40, "frame " + i + " channel " + c + " " + Arrays.toString(got));
+        }
+      }
     }
   }
 
@@ -108,5 +119,68 @@ class VideoWriterTest {
     writer.close();
     writer.close();
     assertThrows(IllegalStateException.class, () -> writer.addFrame(solid(32, 32, Color.WHITE)));
+  }
+
+  @org.junit.jupiter.api.Test
+  void recorderDeletesThePartialFileWhenAFrameFails() {
+    Path file = dir.resolve("failed.mp4");
+    Exception e =
+        assertThrows(
+            Exception.class,
+            () ->
+                VideoRecorder.encode(
+                    file,
+                    VideoFormat.MP4,
+                    10,
+                    6,
+                    i -> {
+                      if (i == 3) {
+                        throw new IllegalStateException("view changed");
+                      }
+                      return solid(32, 32, Color.WHITE);
+                    },
+                    new java.util.concurrent.atomic.AtomicBoolean(),
+                    null));
+    assertNotNull(e);
+    assertTrue(Files.notExists(file));
+  }
+
+  @org.junit.jupiter.api.Test
+  void recorderDeletesThePartialFileWhenCancelled() throws Exception {
+    Path file = dir.resolve("cancelled.mov");
+    java.util.concurrent.atomic.AtomicBoolean cancelled =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    Integer written =
+        VideoRecorder.encode(
+            file,
+            VideoFormat.MOV,
+            10,
+            6,
+            i -> {
+              if (i == 2) {
+                cancelled.set(true);
+              }
+              return solid(32, 32, Color.WHITE);
+            },
+            cancelled,
+            null);
+    assertEquals(null, written);
+    assertTrue(Files.notExists(file));
+  }
+
+  @org.junit.jupiter.api.Test
+  void recorderKeepsACompleteVideo() throws Exception {
+    Path file = dir.resolve("done.mp4");
+    Integer written =
+        VideoRecorder.encode(
+            file,
+            VideoFormat.MP4,
+            10,
+            5,
+            i -> solid(32, 32, COLORS[i % COLORS.length]),
+            new java.util.concurrent.atomic.AtomicBoolean(),
+            null);
+    assertEquals(5, written);
+    assertTrue(Files.size(file) > 0);
   }
 }

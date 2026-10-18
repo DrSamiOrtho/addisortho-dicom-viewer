@@ -56,6 +56,34 @@ public record ViewSnapshot(
         view.getCropBox());
   }
 
+  /** The same view turned to another rotation, for the frames of a rotation video. */
+  public ViewSnapshot withRotation(Quaterniond newRotation) {
+    return new ViewSnapshot(
+        new Quaterniond(newRotation),
+        position,
+        pivot,
+        pan,
+        depthOffset,
+        zoom,
+        preset,
+        windowWidth,
+        windowCenter,
+        shading,
+        opacity,
+        cropEnabled,
+        cropBox);
+  }
+
+  /** Puts back the camera alone: rotation, position, pivot, pan, depth and zoom. */
+  public void applyCameraTo(View3d view) {
+    Camera c = view.getCamera();
+    c.setPivot(pivot);
+    c.setPan(pan, depthOffset);
+    c.set(position, rotation, zoom, false);
+    view.getEventManager().getAction(ActionW.ZOOM).ifPresent(a -> a.setRealValue(zoom, false));
+    c.updateCameraTransform();
+  }
+
   public void applyTo(View3d view) {
     RenderingLayer<?> layer = view.getRenderingLayer();
     layer.setEnableRepaint(false);

@@ -63,7 +63,16 @@ public final class SliceVideoExport {
         s.fps(),
         slices.length,
         i -> {
-          cine.setSliderValue(min + slices[i] - 1);
+          // The scroll action moves the selected view (and builds the MPR slice): the modal
+          // progress dialog keeps the selection, and each frame checks it moved this view.
+          if (manager.getSelectedViewPane() != view) {
+            throw new IllegalStateException(Messages.getString("video.viewChanged"));
+          }
+          int target = min + slices[i] - 1;
+          cine.setSliderValue(target);
+          if (cine.getSliderValue() != target) {
+            throw new IllegalStateException(Messages.getString("video.viewChanged"));
+          }
           RenderedImage image = ViewTransferHandler.createComponentImage(view, s.anonymize());
           return image instanceof BufferedImage b ? b : null;
         },

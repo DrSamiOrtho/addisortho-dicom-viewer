@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026 Addis Ortho and other contributors.
+ * Copyright (c) 2026 Weasis Team and other contributors.
  *
  * This program and the accompanying materials are made available under the terms of the Eclipse
  * Public License 2.0 which is available at https://www.eclipse.org/legal/epl-2.0, or the Apache
@@ -24,8 +24,8 @@ import org.weasis.core.api.gui.util.DropDownButton;
 import org.weasis.core.api.gui.util.GuiUtils;
 
 /**
- * Adds short RadiAnt-style text labels under toolbar icons. The label is chosen from the
- * "ao.label" client property, the drop-down type, or the SVG file name of the icon (set by {@link
+ * Adds short RadiAnt-style text labels under toolbar icons. The label is chosen from the "ao.label"
+ * client property, the drop-down type, or the SVG file name of the icon (set by {@link
  * org.weasis.core.api.util.ResourceUtil} as the icon description). Buttons that already have text
  * or no known label are left untouched.
  */
@@ -131,9 +131,11 @@ public final class ToolbarLabels {
         return;
       }
       button.putClientProperty(CLIENT_PROPERTY, label);
-      synchronized (DECORATED) {
-        DECORATED.add(new WeakReference<>(button));
-      }
+    }
+    // A label set by the tool bar itself follows the on/off switch too.
+    synchronized (DECORATED) {
+      DECORATED.removeIf(r -> r.get() == null || r.get() == button);
+      DECORATED.add(new WeakReference<>(button));
     }
     apply(button);
   }

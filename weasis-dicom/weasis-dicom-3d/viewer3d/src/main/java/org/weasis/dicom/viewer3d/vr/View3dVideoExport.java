@@ -42,6 +42,14 @@ public final class View3dVideoExport {
   }
 
   public static void export(View3d view) {
+    if (view.isCutRunning() || view.isAutoCropRunning()) {
+      JOptionPane.showMessageDialog(
+          view,
+          Messages.getString("view.video.busy"),
+          Messages.getString("3d.viewer"),
+          JOptionPane.WARNING_MESSAGE);
+      return;
+    }
     if (!view.hasValidContent() || View3dSnapshot.capture(view).isEmpty()) {
       JOptionPane.showMessageDialog(
           view,
@@ -58,28 +66,32 @@ public final class View3dVideoExport {
     if (view.isMovieRunning()) {
       view.toggleMovie();
     }
-    Camera camera = view.getCamera();
-    Vector3d position = new Vector3d(camera.getPosition());
-    Quaterniond start = new Quaterniond(camera.getRotation());
-    double zoom = camera.getZoomFactor();
+    // The whole view state is put back before each frame, only the rotation changes: the modal
+    // progress dialog blocks the mouse and keys, and this also undoes any change made by code.
+    ViewSnapshot start = ViewSnapshot.of(view);
     double[] angles = FrameSequence.rotationAngles(s.degrees(), s.frames());
     Vector3d axis = screenAxis(s.axis());
-    VideoRecorder.record(
-        view,
-        s.file(),
-        s.format(),
-        s.fps(),
-        angles.length,
-        i -> {
-          Quaterniond turned =
-              CameraFraming.rotateAboutViewAxis(start, axis, Math.toRadians(angles[i]));
-          camera.setAdjusting(false);
-          camera.set(position, turned, zoom, false);
-          return View3dSnapshot.capture(view).map(View3dSnapshot.Frame::toImage).orElse(null);
-        },
-        () -> {
-          camera.setAdjusting(false);
-          camera.set(position, start, zoom);
-        });
+    Camera camera = view.getCamera();
+    try (View3dSnapshot.Reader reader = new View3dSnapshot.Reader()) {
+      VideoRecorder.record(
+          view,
+          s.file(),
+          s.format(),
+          s.fps(),
+          angles.length,
+          i -> {
+            Quaterniond turned =
+                CameraFraming.rotateAboutViewAxis(
+                    start.rotation(), axis, Math.toRadians(angles[i]));
+            camera.setAdjusting(false);
+            start.withRotation(turned).applyTo(view);
+            return reader.capture(view).map(View3dSnapshot.Frame::toImage).orElse(null);
+          },
+          () -> {
+            camera.setAdjusting(false);
+            start.applyTo(view);
+            view.repaint();
+          });
+    }
   }
 }

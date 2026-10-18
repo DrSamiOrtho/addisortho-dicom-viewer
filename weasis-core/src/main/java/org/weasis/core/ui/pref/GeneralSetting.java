@@ -80,8 +80,7 @@ public class GeneralSetting extends AbstractItemDialogPage {
   protected void initialize() {
     WProperties preferences = GuiUtils.getUICore().getSystemPreferences();
     checkboxConfirmClosing.setSelected(preferences.getBooleanProperty(UICore.CONFIRM_CLOSE, false));
-    checkboxToolbarLabels.setSelected(
-        preferences.getBooleanProperty(ToolbarLabels.PREF_KEY, true));
+    checkboxToolbarLabels.setSelected(preferences.getBooleanProperty(ToolbarLabels.PREF_KEY, true));
   }
 
   @Override

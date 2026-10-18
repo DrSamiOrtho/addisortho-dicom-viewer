@@ -173,7 +173,8 @@ public final class Shortcuts3d {
         }
       }
       default -> {
-        Optional<StandardView> standard = StandardView.ofKey(key);
+        // Plain digits only, as in RadiAnt: Shift+digit is left to the other keys.
+        Optional<StandardView> standard = shift ? Optional.empty() : StandardView.ofKey(key);
         if (standard.isEmpty()) {
           return false;
         }
