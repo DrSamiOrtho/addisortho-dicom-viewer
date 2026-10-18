@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import org.weasis.core.api.gui.util.AppProperties;
 import org.weasis.core.api.media.data.MediaSeries;
 import org.weasis.core.api.media.data.TagW;
+import org.weasis.core.ui.editor.image.ViewTransferHandler;
 import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.explorer.DicomModel;
@@ -86,7 +87,9 @@ final class TemplatingService {
     }
     XrayFile.withFileMeta(copy);
     Object model = series.getTagValue(TagW.ExplorerModel);
-    return s.handOver(copy, model);
+    URI page = s.handOver(copy, model);
+    // the page draws the viewer's footer on its saved picture unless the preference turns it off
+    return ViewTransferHandler.isFooterEnabled() ? page : URI.create(page + "&footer=0");
   }
 
   /** Puts a saved plan into the explorer, in the X-ray's patient and study. */

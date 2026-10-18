@@ -173,6 +173,12 @@ public class WeasisWin {
   /** URL of the issue tracker opened by "Submit bug report"; the menu item is off when empty. */
   private static final String P_REPORT_URL = "weasis.help.report"; // NON-NLS
 
+  /** Addis Ortho's download page (Help, Download page); the menu item is off when empty. */
+  private static final String P_DOWNLOAD_URL = "addisortho.help.download"; // NON-NLS
+
+  /** Addis Ortho's support channel (Help, Support (Telegram)); the menu item is off when empty. */
+  private static final String P_SUPPORT_URL = "addisortho.help.support"; // NON-NLS
+
   public static final List<String> functions = List.of("info", "ui"); // NON-NLS
 
   private final JMenu menuFile = new JMenu(Messages.getString("WeasisWin.file"));
@@ -812,6 +818,8 @@ public class WeasisWin {
       websiteMenuItem.addActionListener(e -> openBrowser(websiteMenuItem, onlineHelpURL));
       helpMenuItem.add(websiteMenuItem);
     }
+    addLinkItem(helpMenuItem, "WeasisWin.download", P_DOWNLOAD_URL); // NON-NLS
+    addLinkItem(helpMenuItem, "WeasisWin.support", P_SUPPORT_URL); // NON-NLS
     helpMenuItem.add(new JSeparator());
 
     if (getConfiguredUrl(P_UPDATE_URL) != null) {
@@ -926,6 +934,15 @@ public class WeasisWin {
   }
 
   /** Returns the trimmed value of a URL property, or null when it is missing or empty. */
+  private void addLinkItem(JMenu menu, String messageKey, String urlKey) {
+    String url = getConfiguredUrl(urlKey);
+    if (url != null) {
+      JMenuItem item = new JMenuItem(Messages.getString(messageKey));
+      item.addActionListener(_ -> openBrowser(item, url));
+      menu.add(item);
+    }
+  }
+
   private static String getConfiguredUrl(String key) {
     String value = GuiUtils.getUICore().getSystemPreferences().getProperty(key);
     return StringUtil.hasText(value) ? value.trim() : null;

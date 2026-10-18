@@ -14,6 +14,7 @@ import java.util.Optional;
 import javax.swing.JOptionPane;
 import org.joml.Quaterniond;
 import org.joml.Vector3d;
+import org.weasis.core.ui.editor.image.ViewTransferHandler;
 import org.weasis.dicom.viewer2d.video.FrameSequence;
 import org.weasis.dicom.viewer2d.video.VideoExportDialog;
 import org.weasis.dicom.viewer2d.video.VideoExportDialog.RotationAxis;
@@ -85,7 +86,11 @@ public final class View3dVideoExport {
                     start.rotation(), axis, Math.toRadians(angles[i]));
             camera.setAdjusting(false);
             start.withRotation(turned).applyTo(view);
-            return reader.capture(view).map(View3dSnapshot.Frame::toImage).orElse(null);
+            // The brand footer, as on the 3D pictures and the slice videos (General preference).
+            return reader
+                .capture(view)
+                .map(f -> ViewTransferHandler.withFooter(f.toImage()))
+                .orElse(null);
           },
           () -> {
             camera.setAdjusting(false);

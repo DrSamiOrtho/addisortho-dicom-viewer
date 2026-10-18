@@ -192,3 +192,17 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
   per texture voxel on the CPU (`isKeptVolumeVoxel` is the API for the bones bundle) and one byte per voxel on the GPU
   (unit 7), which every rendering mode and the segment overlays sample. Rotation and zoom centre on the crop box when
   it is on. Keys of the 3D view are listed in `Shortcuts3d`; T is the roll (M pans), unlike the 2D viewer.
+
+## Brand footer and Help links (18 Oct 2026)
+
+- Footer: view pictures saved or copied from the screenshot dialog (view mode) and 3D pictures (copied or saved
+  to the study) get a thin strip below the picture, white on `#034537`, naming `weasis.name`. The templating
+  page's saved picture (PNG, DICOM, saved to the viewer) says "Templated with Addis Ortho Viewer" at the foot of
+  its report column. One switch turns all of them off: Preferences, General (`addisortho.picture.footer`,
+  default on; the viewer adds `footer=0` to the templating page's address when it is off). Image mode (raw
+  pixels) and the explorer's image export are not touched. The templating page's "leave out the patient's
+  name" switch is unchanged.
+- `app.js` in `templating-web` was patched here (BUILD.txt updated), so the change must also go into the
+  templating project's `web/app.js` before the next `sync-templating-web.sh`, or the sync drops it.
+- Help, Download page (`addisortho.help.download`) and Help, Support (Telegram) (`addisortho.help.support`) in
+  `weasis-distributions/etc/config/base.json`; each is hidden when empty.
