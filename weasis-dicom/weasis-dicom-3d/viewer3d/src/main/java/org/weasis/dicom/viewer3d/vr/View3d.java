@@ -36,6 +36,8 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.AffineTransform;
+import java.awt.geom.Ellipse2D;
+import java.awt.geom.Line2D;
 import java.awt.geom.Point2D;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
@@ -209,6 +211,15 @@ public class View3d extends VolumeCanvas
   private volatile boolean cropEnabled;
 
   private volatile CropBox cropBox = CropBox.FULL;
+
+  /** Crop box changes and cuts, undone and redone in the order they were made. */
+  private final EditHistory editHistory = new EditHistory();
+
+  /** The crop box before a slider drag began, recorded as one step when the drag ends. */
+  private EditHistory.CropState cropBeforeAdjust;
+
+  /** The volume the crop box was last fitted to the bone for, see {@link #autoCropToBone}. */
+  private DicomVolTexture autoCroppedTexture;
 
   /** Name of the preset a CT opens with, see {@link #defaultPresetFor}. */
   public static final String CT_DEFAULT_PRESET = "AO Bone"; // NON-NLS
@@ -458,6 +469,10 @@ public class View3d extends VolumeCanvas
       // The cuts and the annotations belong to the volume they were made on.
       keptMask = null;
       keptMaskTexture.invalidate();
+      editHistory.clear();
+      cropBeforeAdjust = null;
+      seedMarker = null;
+      windowBeforePreview = null;
       sharedField = null;
       sharedFieldKey = null;
       cancelPicks();
@@ -488,6 +503,7 @@ public class View3d extends VolumeCanvas
       setVolumePreset(defaultPresetFor(volTexture.getModality()));
       // (Re)build the segmentation texture for this volume.
       updateSegmentation();
+      maybeAutoCropToBone();
     } else {
       display();
     }
@@ -566,6 +582,7 @@ public class View3d extends VolumeCanvas
       return;
     }
     lasso.draw(g2d);
+    drawSeedMarker(g2d);
     Font font = getLayerFont();
     annotations.draw(g2d, this::projectTexCoord, font);
     if (lengthStart != null) {
@@ -1644,11 +1661,50 @@ public class View3d extends VolumeCanvas
    * @param adjusting {@code true} while a slider is dragged, to render at the interactive quality
    */
   public void setCropBox(boolean enabled, CropBox box, boolean adjusting) {
+    Objects.requireNonNull(box);
+    EditHistory.CropState before =
+        cropBeforeAdjust != null
+            ? cropBeforeAdjust
+            : new EditHistory.CropState(cropEnabled, cropBox);
+    EditHistory.CropState after = new EditHistory.CropState(enabled, box);
+    if (adjusting) {
+      cropBeforeAdjust = before;
+    } else {
+      cropBeforeAdjust = null;
+      if (!before.equals(after)) {
+        editHistory.push(EditHistory.crop(before, after, this::applyCropState));
+      }
+    }
+    applyCrop(enabled, box, adjusting);
+    if (!adjusting) {
+      notifyToolState();
+    }
+  }
+
+  /** The crop box state now, for the history and the panels. */
+  public EditHistory.CropState getCropState() {
+    return new EditHistory.CropState(cropEnabled, cropBox);
+  }
+
+  private void applyCropState(EditHistory.CropState state) {
+    applyCrop(state.enabled(), state.box(), false);
+    notifyCropListeners();
+  }
+
+  private void applyCrop(boolean enabled, CropBox box, boolean adjusting) {
     this.cropEnabled = enabled;
-    this.cropBox = Objects.requireNonNull(box);
+    this.cropBox = box;
     camera.setAdjusting(adjusting);
     updatePivot();
     display();
+  }
+
+  /**
+   * Tells the crop panel and the tool bar that the crop box changed outside of the panel (undo,
+   * redo, auto-crop): they listen to the mouse tool changes of the event manager.
+   */
+  private void notifyCropListeners() {
+    notifyToolState();
   }
 
   private CropBox getEffectiveCropBox() {
@@ -1699,6 +1755,175 @@ public class View3d extends VolumeCanvas
     eventManager
         .getAction(ActionW.ZOOM)
         .ifPresent(a -> a.setRealValue(camera.getZoomFactor(), false));
+  }
+
+  // ---- Crop fitted to the bone (Addis Ortho) ----
+
+  /** {@code true} while the bone is being searched for the crop. */
+  private volatile boolean autoCropRunning;
+
+  /** Whether {@link #autoCropToBone} can run: a fully loaded CT and no search running. */
+  public boolean canAutoCropToBone() {
+    DicomVolTexture tex = volTexture;
+    return tex != null
+        && tex.getModality() == org.weasis.dicom.codec.display.Modality.CT
+        && tex.isFullyLoaded()
+        && !autoCropRunning;
+  }
+
+  /** Fits the crop box to the bone, as an undoable step; Fit to bone in the crop panel. */
+  public void autoCropToBone() {
+    startAutoCrop(true);
+  }
+
+  /** Once per CT, when it is fully loaded, if the preference to open on the bone is on. */
+  private void maybeAutoCropToBone() {
+    DicomVolTexture tex = volTexture;
+    if (tex == null || tex == autoCroppedTexture || !canAutoCropToBone()) {
+      return;
+    }
+    boolean onBone =
+        GuiUtils.getUICore()
+            .getLocalPersistence()
+            .getBooleanProperty(
+                RenderingLayer.P_OPEN_CT_ON_BONE, RenderingLayer.DEFAULT_OPEN_CT_ON_BONE);
+    if (!onBone) {
+      return;
+    }
+    autoCroppedTexture = tex;
+    startAutoCrop(false);
+  }
+
+  private void startAutoCrop(boolean asked) {
+    DicomVolTexture tex = volTexture;
+    Volume<?, ?> volume = tex == null ? null : tex.getVolume();
+    if (!canAutoCropToBone() || volume == null) {
+      return;
+    }
+    Vector3i texture = new Vector3i(tex.getWidth(), tex.getHeight(), tex.getDepth());
+    Vector3d spacing = volume.getPixelRatio();
+    Vector3i size = volume.getSize();
+    Vector3d texelMm =
+        new Vector3d(
+            spacing.x * size.x / texture.x,
+            spacing.y * size.y / texture.y,
+            spacing.z * size.z / texture.z);
+    VoxelSampler sampler = voxelSampler();
+    autoCropRunning = true;
+    notifyToolState();
+    CUT_EXECUTOR.execute(
+        () -> {
+          Optional<CropBox> box = Optional.empty();
+          try {
+            box =
+                BoneExtent.find(
+                    sampler,
+                    texture,
+                    texelMm,
+                    BoneExtent.DEFAULT_THRESHOLD_HU,
+                    BoneExtent.DEFAULT_MARGIN_MM,
+                    () -> volTexture != tex);
+          } catch (Throwable e) { // NOSONAR the view must not stay locked
+            LOGGER.error("Crop to the bone", e);
+          } finally {
+            Optional<CropBox> found = box;
+            GuiExecutor.execute(() -> finishAutoCrop(tex, found, asked));
+          }
+        });
+  }
+
+  private void finishAutoCrop(DicomVolTexture tex, Optional<CropBox> box, boolean asked) {
+    autoCropRunning = false;
+    try {
+      if (volTexture != tex) {
+        return;
+      }
+      if (box.isPresent()) {
+        setCropBox(true, box.get(), false);
+        fitToVisible();
+        showStatus(Messages.getString("crop.auto.done"));
+      } else if (asked) {
+        showStatus(Messages.getString("crop.auto.none"));
+      }
+    } finally {
+      notifyToolState();
+    }
+  }
+
+  // ---- Seed marker and threshold preview of the Bones panel (Addis Ortho) ----
+
+  /** Texture coordinate of the region grow seed, drawn as a target, or {@code null}. */
+  private volatile Vector3d seedMarker;
+
+  /** The window and level before the threshold preview, or {@code null} without a preview. */
+  private int[] windowBeforePreview;
+
+  /** Shows the region grow seed at a patient position (LPS, mm); {@code null} hides it. */
+  public void setSeedMarker(Vector3d lps) {
+    Vector3d marker = null;
+    DicomVolTexture tex = volTexture;
+    VolumeSpace space = volumeSpace();
+    if (lps != null && tex != null && space != null) {
+      try {
+        Vector3d v = tex.getVolume().lpsToVoxel(lps, new Vector3d());
+        Vector3d t = space.texCoordOfVolume(v.x, v.y, v.z, new Vector3d());
+        if (t.x >= 0 && t.x <= 1 && t.y >= 0 && t.y <= 1 && t.z >= 0 && t.z <= 1) {
+          marker = t;
+        }
+      } catch (UnsupportedOperationException e) {
+        // a volume without geometry has no patient position
+      }
+    }
+    seedMarker = marker;
+    repaint();
+  }
+
+  /**
+   * Previews a bone threshold: the window is narrowed to {@code hu}, so what is at or above it is
+   * shown opaque in the preset's colours and the rest is clear; {@code null} puts the window back.
+   * The window/level tool or a preset change ends the preview as well.
+   */
+  public void previewThreshold(Double hu) {
+    if (hu == null) {
+      int[] before = windowBeforePreview;
+      windowBeforePreview = null;
+      if (before != null) {
+        renderingLayer.setWindowWidth(before[0]);
+        renderingLayer.setWindowCenter(before[1], true);
+      }
+      return;
+    }
+    if (windowBeforePreview == null) {
+      windowBeforePreview =
+          new int[] {renderingLayer.getWindowWidth(), renderingLayer.getWindowCenter()};
+    }
+    renderingLayer.setWindowWidth(2);
+    renderingLayer.setWindowCenter((int) Math.round(hu) + 1, true);
+  }
+
+  public boolean isPreviewingThreshold() {
+    return windowBeforePreview != null;
+  }
+
+  private void drawSeedMarker(Graphics2D g2d) {
+    Vector3d t = seedMarker;
+    Point2D p = t == null ? null : projectTexCoord(t);
+    if (p == null) {
+      return;
+    }
+    Stroke stroke = g2d.getStroke();
+    double r = 9;
+    g2d.setStroke(new BasicStroke(3f));
+    g2d.setColor(Color.BLACK);
+    g2d.draw(new Ellipse2D.Double(p.getX() - r, p.getY() - r, 2 * r, 2 * r));
+    g2d.setStroke(new BasicStroke(1.5f));
+    g2d.setColor(Color.YELLOW);
+    g2d.draw(new Ellipse2D.Double(p.getX() - r, p.getY() - r, 2 * r, 2 * r));
+    g2d.draw(new Line2D.Double(p.getX() - r - 4, p.getY(), p.getX() - 3, p.getY()));
+    g2d.draw(new Line2D.Double(p.getX() + 3, p.getY(), p.getX() + r + 4, p.getY()));
+    g2d.draw(new Line2D.Double(p.getX(), p.getY() - r - 4, p.getX(), p.getY() - 3));
+    g2d.draw(new Line2D.Double(p.getX(), p.getY() + 3, p.getX(), p.getY() + r + 4));
+    g2d.setStroke(stroke);
   }
 
   // ---- Kept mask, scalpel and keep/remove (Addis Ortho) ----
@@ -2411,6 +2636,9 @@ public class View3d extends VolumeCanvas
         showStatus(failure);
       } else if (result != null && keptMask == mask) {
         mask.apply(result);
+        if (!result.isEmpty()) {
+          editHistory.push(EditHistory.cut(mask));
+        }
         after.run();
         showStatus(
             result.isEmpty()
@@ -2429,35 +2657,63 @@ public class View3d extends VolumeCanvas
     display();
   }
 
-  public boolean undoCut() {
-    KeptMask mask = keptMask;
-    if (cutRunning || mask == null || !mask.undo()) {
+  /** The crop and cut history of this view. */
+  public EditHistory getEditHistory() {
+    return editHistory;
+  }
+
+  /** Takes back the last cut or crop box change. */
+  public boolean undoEdit() {
+    if (cutRunning || !editHistory.undo()) {
       return false;
     }
     cutChanged();
+    notifyCropListeners();
     return true;
   }
 
-  public boolean redoCut() {
-    KeptMask mask = keptMask;
-    if (cutRunning || mask == null || !mask.redo()) {
+  /** Does again the last cut or crop box change taken back. */
+  public boolean redoEdit() {
+    if (cutRunning || !editHistory.redo()) {
       return false;
     }
     cutChanged();
+    notifyCropListeners();
     return true;
   }
 
-  /** Shows the whole volume again (an undoable step) and clears the lasso. */
+  /** {@code true} when neither a crop box nor a cut hides any part of the volume. */
+  public boolean isWholeVolumeShown() {
+    KeptMask mask = keptMask;
+    return (!cropEnabled || cropBox.isFull()) && (mask == null || mask.isFull());
+  }
+
+  /**
+   * Shows the whole volume again, with the crop box off and every cut restored, as one undoable
+   * step, and clears the lasso.
+   */
   public void restoreVolume() {
     KeptMask mask = keptMask;
     if (cutRunning) {
       return;
     }
     lasso.clear();
-    if (mask != null) {
+    EditHistory.Group group = new EditHistory.Group();
+    if (mask != null && !mask.isFull()) {
       mask.restore();
+      group.add(EditHistory.cut(mask));
+    }
+    EditHistory.CropState before = getCropState();
+    EditHistory.CropState after = new EditHistory.CropState(false, CropBox.FULL);
+    if (!before.equals(after)) {
+      applyCrop(false, CropBox.FULL, false);
+      group.add(EditHistory.crop(before, after, this::applyCropState));
+    }
+    if (!group.isEmpty()) {
+      editHistory.push(group.build());
     }
     cutChanged();
+    notifyCropListeners();
   }
 
   public void clearCutHistory() {
@@ -2465,6 +2721,7 @@ public class View3d extends VolumeCanvas
     if (mask != null) {
       mask.clearHistory();
     }
+    editHistory.clear();
     cutChanged();
   }
 
@@ -3222,8 +3479,10 @@ public class View3d extends VolumeCanvas
           continue;
         }
         if (command.equals(ActionW.WINDOW.cmd())) {
+          windowBeforePreview = null; // the user's window ends a threshold preview
           renderingLayer.setWindowWidth(((Double) val).intValue(), forceRepaint);
         } else if (command.equals(ActionW.LEVEL.cmd())) {
+          windowBeforePreview = null;
           renderingLayer.setWindowCenter(((Double) val).intValue(), forceRepaint);
         } else if (command.equals(ActionW.PRESET.cmd())) {
           if (val instanceof PresetWindowLevel preset) {
@@ -3390,6 +3649,7 @@ public class View3d extends VolumeCanvas
 
   private void setPresetWindowLevel(PresetWindowLevel preset, boolean repaint) {
     if (preset != null) {
+      windowBeforePreview = null;
       renderingLayer.setEnableRepaint(false);
       renderingLayer.setWindowWidth((int) preset.getWindow());
       renderingLayer.setWindowCenter((int) preset.getLevel());

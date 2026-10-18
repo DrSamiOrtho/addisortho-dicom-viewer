@@ -16,11 +16,30 @@
 
   <build>
     <plugins>
+      <!-- Addis Ortho: JCodec (pure Java H.264, MP4/MOV) is embedded for the video export, so
+           the installers need no native encoder and no extra bundle. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>copy-dependency</id>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <includeArtifactIds>jcodec</includeArtifactIds>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
       <plugin>
         <groupId>biz.aQute.bnd</groupId>
         <artifactId>bnd-maven-plugin</artifactId>
         <configuration>
           <bnd>
+            -includeresource.all: lib/=target/dependency/;lib:=true
+            Import-Package: !org.jcodec.*,*
             Export-Package:!org.weasis.dicom.viewer2d.internal,org.weasis.dicom.viewer2d.*
           </bnd>
         </configuration>
@@ -50,6 +69,11 @@
     <dependency>
       <groupId>org.joml</groupId>
       <artifactId>joml</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.jcodec</groupId>
+      <artifactId>jcodec</artifactId>
+      <version>0.2.5</version>
     </dependency>
   </dependencies>
 </project>

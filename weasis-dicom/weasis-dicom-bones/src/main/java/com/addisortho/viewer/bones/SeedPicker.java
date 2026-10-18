@@ -34,10 +34,11 @@ import org.weasis.dicom.viewer2d.mpr.MprContainer;
 import org.weasis.dicom.viewer2d.mpr.MprController;
 import org.weasis.dicom.viewer2d.mpr.MprView;
 import org.weasis.dicom.viewer2d.mpr.Volume;
+import org.weasis.dicom.viewer3d.vr.View3d;
 
 /**
- * Takes the seed of a region grow from the MPR views (axial, coronal, sagittal), in patient space:
- * either the point clicked in one of them once armed, or their crosshair.
+ * Takes the seed of a region grow in patient space: the point clicked once armed, on the bone
+ * surface of the 3D view or in an MPR view (axial, coronal, sagittal), or the MPR crosshair.
  */
 final class SeedPicker {
 
@@ -57,18 +58,25 @@ final class SeedPicker {
   }
 
   /**
-   * Waits for the next left click in an MPR view and hands its patient position to {@code onPick},
-   * on the event dispatch thread. The click still reaches the view, which may move its crosshair
-   * there.
+   * Waits for the next left click on the bone in a 3D view or in an MPR view and hands its patient
+   * position to {@code onPick}, on the event dispatch thread. A click in the 3D view is taken by
+   * the picker; one in an MPR still reaches the view, which may move its crosshair there. A click
+   * in the 3D view that hits nothing is reported to {@code onMiss} and the picker stays armed.
    */
-  void arm(Consumer<Seed> onPick) {
+  void arm(Consumer<Seed> onPick, Consumer<String> onMiss) {
     disarm();
     listener =
         event -> {
-          if (event instanceof MouseEvent e
-              && e.getID() == MouseEvent.MOUSE_PRESSED
-              && SwingUtilities.isLeftMouseButton(e)
-              && mprViewOf(e.getComponent()) instanceof MprView view) {
+          if (!(event instanceof MouseEvent e)
+              || e.getID() != MouseEvent.MOUSE_PRESSED
+              || !SwingUtilities.isLeftMouseButton(e)) {
+            return;
+          }
+          if (view3dOf(e.getComponent()) instanceof View3d view3d) {
+            e.consume();
+            Point p = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), view3d);
+            pick3d(view3d, p, onPick, onMiss);
+          } else if (mprViewOf(e.getComponent()) instanceof MprView view) {
             Point p = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), view);
             Optional<Seed> seed = fromClick(view, p);
             if (seed.isPresent()) {
@@ -78,6 +86,41 @@ final class SeedPicker {
           }
         };
     Toolkit.getDefaultToolkit().addAWTEventListener(listener, AWTEvent.MOUSE_EVENT_MASK);
+  }
+
+  /** The surface the 3D view shows under the point, through the view's own picking. */
+  private void pick3d(View3d view, Point p, Consumer<Seed> onPick, Consumer<String> onMiss) {
+    String unavailable = view.pickUnavailableReason();
+    if (unavailable != null) {
+      onMiss.accept(unavailable);
+      return;
+    }
+    AWTEventListener armed = listener;
+    view.pickAsync(
+        p,
+        hit -> {
+          if (listener != armed) {
+            return; // disarmed or armed again meanwhile
+          }
+          Optional<Vector3d> lps = hit.flatMap(view::lpsOf);
+          Volume<?, ?> volume =
+              view.getVolTexture() == null ? null : view.getVolTexture().getVolume();
+          if (lps.isEmpty() || volume == null) {
+            onMiss.accept(Messages.getString("BoneGrowTool.missed"));
+            return;
+          }
+          disarm();
+          onPick.accept(new Seed(lps.get(), frameOfReferenceOf(volume), "3D")); // NON-NLS
+        });
+  }
+
+  private static View3d view3dOf(Component component) {
+    if (component instanceof View3d view) {
+      return view;
+    }
+    return component == null
+        ? null
+        : (View3d) SwingUtilities.getAncestorOfClass(View3d.class, component);
   }
 
   void disarm() {

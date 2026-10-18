@@ -52,6 +52,7 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
       new JComboBox<>(View3DContainer.LAYOUT_LIST.toArray(new MigLayoutModel[0]));
 
   private final JComboBox<CameraView> comboBoxOrientations = new JComboBox<>(CameraView.values());
+  private final JCheckBox openOnBone = new JCheckBox(Messages.getString("open.bone"));
   private final JSpinner spinnerMaxXY;
   private final JSpinner spinnerMaxZ;
 
@@ -251,6 +252,12 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
             labelLayout,
             comboBoxOrientations));
 
+    openOnBone.setToolTipText(Messages.getString("open.bone.tip"));
+    openOnBone.setSelected(
+        localPersistence.getBooleanProperty(
+            RenderingLayer.P_OPEN_CT_ON_BONE, RenderingLayer.DEFAULT_OPEN_CT_ON_BONE));
+    otherPanel.add(GuiUtils.getFlowLayoutPanel(openOnBone));
+
     otherPanel.add(
         GuiUtils.getFlowLayoutPanel(
             new JLabel(Messages.getString("bck.color")),
@@ -304,6 +311,7 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
     localPersistence.putIntProperty(
         RenderingLayer.P_MAX_TEX_Z,
         spinnerMaxZ.getValue() instanceof Integer val ? val : View3DFactory.getMax3dTextureSize());
+    localPersistence.putBooleanProperty(RenderingLayer.P_OPEN_CT_ON_BONE, openOnBone.isSelected());
     boolean openglEnabled = enableOpenGL.isSelected();
     if (openglEnabled && !View3DFactory.isOpenglEnable()) {
       localPersistence.putBooleanProperty(View3DFactory.P_OPENGL_PREV_INIT, true);
@@ -320,6 +328,7 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
     WProperties preferences = GuiUtils.getUICore().getSystemPreferences();
     WProperties localPersistence = GuiUtils.getUICore().getLocalPersistence();
     enableOpenGL.setSelected(true);
+    openOnBone.setSelected(RenderingLayer.DEFAULT_OPEN_CT_ON_BONE);
     sliderDynamic.setValue(RenderingLayer.DEFAULT_DYNAMIC_QUALITY_RATE);
     int maxSize = View3DFactory.getMax3dTextureSize();
     localPersistence.putIntProperty(RenderingLayer.P_MAX_TEX_XY, maxSize);

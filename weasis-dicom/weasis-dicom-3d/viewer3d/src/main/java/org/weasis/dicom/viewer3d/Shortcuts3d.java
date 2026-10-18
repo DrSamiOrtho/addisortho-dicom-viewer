@@ -12,6 +12,7 @@ package org.weasis.dicom.viewer3d;
 
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.util.Optional;
 import org.joml.Vector3d;
 import org.weasis.core.api.gui.util.ActionW;
 import org.weasis.core.api.gui.util.Feature;
@@ -24,6 +25,7 @@ import org.weasis.dicom.viewer3d.geometry.CameraView;
 import org.weasis.dicom.viewer3d.vr.LassoCut;
 import org.weasis.dicom.viewer3d.vr.View3d;
 import org.weasis.dicom.viewer3d.vr.View3dSnapshot;
+import org.weasis.dicom.viewer3d.vr.View3dVideoExport;
 
 /**
  * Keys of the 3D view, handled before the common viewer keys so the 3D tools win where they clash:
@@ -36,9 +38,11 @@ import org.weasis.dicom.viewer3d.vr.View3dSnapshot;
  *   <li>Ctrl+plus / Ctrl+minus zoom, Ctrl+0 fits the visible part, 0 restores the default window,
  *       Ctrl+S toggles the shading, Ctrl+R resets the scene, Ctrl+Alt+0 restores the whole volume.
  *   <li>Scalpel: Delete cuts inside the area, Enter cuts outside, Escape clears the area (then a
- *       pending measure, then it resets the view as before), Ctrl+Z / Ctrl+Y undo and redo a cut,
- *       Ctrl+Shift+Alt+Z clears the cut history.
- *   <li>1 to 6: anterior, posterior, left, right, superior, inferior.
+ *       pending measure, then it resets the view as before), Ctrl+Z / Ctrl+Y undo and redo a cut or
+ *       a crop box change, Ctrl+Shift+Alt+Z clears the history.
+ *   <li>1 to 6: anterior, posterior, left, right, superior, inferior, centred (see {@link
+ *       StandardView}).
+ *   <li>Ctrl+F2 exports a rotation video (RadiAnt's advanced movie).
  *   <li>Ctrl+C copies the image, Ctrl+E saves it as JPEG, F2 starts or stops the quick movie, K
  *       takes a 3D snapshot of the view state, [ and ] show the previous and next one, F12 toggles
  *       the annotations, F shows the view full screen (F11 as before).
@@ -99,12 +103,13 @@ public final class Shortcuts3d {
       case KeyEvent.VK_R -> manager.reset(ResetTools.ALL);
       case KeyEvent.VK_Z -> {
         if (shift) {
-          view.redoCut();
+          view.redoEdit();
         } else {
-          view.undoCut();
+          view.undoEdit();
         }
       }
-      case KeyEvent.VK_Y -> view.redoCut();
+      case KeyEvent.VK_Y -> view.redoEdit();
+      case KeyEvent.VK_F2 -> View3dVideoExport.export(view);
       case KeyEvent.VK_C -> View3dSnapshot.copyToClipboard(view);
       case KeyEvent.VK_E -> View3dSnapshot.saveJpeg(view);
       default -> {
@@ -145,12 +150,6 @@ public final class Shortcuts3d {
           return false; // the common reset of the view
         }
       }
-      case KeyEvent.VK_1, KeyEvent.VK_NUMPAD1 -> preset(view, CameraView.FRONT);
-      case KeyEvent.VK_2, KeyEvent.VK_NUMPAD2 -> preset(view, CameraView.BACK);
-      case KeyEvent.VK_3, KeyEvent.VK_NUMPAD3 -> preset(view, CameraView.LEFT);
-      case KeyEvent.VK_4, KeyEvent.VK_NUMPAD4 -> preset(view, CameraView.RIGHT);
-      case KeyEvent.VK_5, KeyEvent.VK_NUMPAD5 -> preset(view, CameraView.TOP);
-      case KeyEvent.VK_6, KeyEvent.VK_NUMPAD6 -> preset(view, CameraView.BOTTOM);
       case KeyEvent.VK_T -> tool(manager, ActionVol.ROLL);
       case KeyEvent.VK_M -> tool(manager, ActionW.PAN);
       case KeyEvent.VK_S -> tool(manager, ActionVol.SCALPEL);
@@ -174,7 +173,11 @@ public final class Shortcuts3d {
         }
       }
       default -> {
-        return false;
+        Optional<StandardView> standard = StandardView.ofKey(key);
+        if (standard.isEmpty()) {
+          return false;
+        }
+        preset(view, standard.get().cameraView());
       }
     }
     return true;
@@ -192,8 +195,12 @@ public final class Shortcuts3d {
         .ifPresent(a -> a.setRealValue(view.getCamera().getZoomFactor(), false));
   }
 
-  /** A rotation preset keeps the pivot, the pan and the zoom, as the orientation menu does. */
+  /**
+   * Turns the view to a standard orientation and centres it on the pivot (the crop box, or the
+   * volume when the crop is off), keeping the zoom, as RadiAnt's 1 to 6 keys do.
+   */
   public static void preset(View3d view, CameraView cameraView) {
+    view.getCamera().clearPan();
     view.getCamera()
         .set(
             view.getCamera().getPosition(),
@@ -204,5 +211,38 @@ public final class Shortcuts3d {
   /** Puts a tool on the left mouse button. */
   public static void tool(EventManager manager, Feature<?> action) {
     manager.changeLeftMouseAction(action.cmd());
+  }
+
+  /** The keys of the 3D view as a two-column HTML table, for the help button and tooltips. */
+  public static String helpHtml() {
+    String[][] rows = {
+      {"1 2 3 4 5 6", Messages.getString("help.views")}, // NON-NLS
+      {"R T M Z W", Messages.getString("help.tools")}, // NON-NLS
+      {"S", Messages.getString("help.scalpel")}, // NON-NLS
+      {"L / Y", Messages.getString("help.measure")}, // NON-NLS
+      {"Del / Enter", Messages.getString("help.cut")}, // NON-NLS
+      {"Ctrl+Z / Ctrl+Y", Messages.getString("help.undo")}, // NON-NLS
+      {"Ctrl+Alt+0", Messages.getString("help.restore")}, // NON-NLS
+      {"\u2190 \u2192 \u2191 \u2193  < >", Messages.getString("help.rotate")}, // NON-NLS
+      {"Ctrl+arrows", Messages.getString("help.pan")}, // NON-NLS
+      {"Ctrl+ + / Ctrl+ -  / Ctrl+0", Messages.getString("help.zoom")}, // NON-NLS
+      {"0", Messages.getString("help.window")}, // NON-NLS
+      {"Ctrl+S", Messages.getString("help.shading")}, // NON-NLS
+      {"Ctrl+R", Messages.getString("help.reset")}, // NON-NLS
+      {"F2 / Ctrl+F2", Messages.getString("help.movie")}, // NON-NLS
+      {"K  [  ]", Messages.getString("help.snapshot")}, // NON-NLS
+      {"Ctrl+C / Ctrl+E", Messages.getString("help.picture")}, // NON-NLS
+      {"F / F12", Messages.getString("help.screen")}, // NON-NLS
+      {"Alt+drag", Messages.getString("help.alt")} // NON-NLS
+    };
+    StringBuilder html = new StringBuilder("<html><table cellpadding='2'>"); // NON-NLS
+    for (String[] row : rows) {
+      html.append("<tr><td><b>") // NON-NLS
+          .append(row[0])
+          .append("</b></td><td>") // NON-NLS
+          .append(row[1])
+          .append("</td></tr>"); // NON-NLS
+    }
+    return html.append("</table></html>").toString(); // NON-NLS
   }
 }

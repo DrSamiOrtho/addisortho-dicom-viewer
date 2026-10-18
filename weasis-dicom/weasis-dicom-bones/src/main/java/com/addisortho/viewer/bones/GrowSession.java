@@ -10,13 +10,17 @@ package com.addisortho.viewer.bones;
 
 import com.addisortho.viewer.bones.seg.SegmentationBuilder.Segment;
 import java.awt.Color;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import org.dcm4che3.util.UIDUtils;
 
 /**
  * The bones grown on one CT in this session: they all go into one segmentation series, rewritten
- * with every segment each time one is added or removed. Used on the event dispatch thread.
+ * with every segment each time one is added or removed. Undo takes the last segment out and keeps
+ * it for redo, many steps deep; growing a new bone forgets what was undone. Used on the event
+ * dispatch thread.
  */
 final class GrowSession {
 
@@ -35,6 +39,7 @@ final class GrowSession {
   private final String ctSeriesUID;
   private final String segSeriesUID = UIDUtils.createUID();
   private List<Segment> segments = List.of();
+  private final Deque<Segment> undone = new ArrayDeque<>();
   private String sopInstanceUID;
   private int instanceNumber;
 
@@ -81,8 +86,37 @@ final class GrowSession {
     return sopInstanceUID;
   }
 
+  /** The segments with the last undone one put back, for redo; empty when nothing was undone. */
+  List<Segment> withRedone() {
+    return undone.isEmpty() ? segments : with(undone.peek());
+  }
+
+  boolean canUndo() {
+    return !segments.isEmpty();
+  }
+
+  boolean canRedo() {
+    return !undone.isEmpty();
+  }
+
+  /** What a written segmentation did to the list, for the redo history. */
+  enum Change {
+    GROWN,
+    UNDONE,
+    REDONE
+  }
+
   /** Records the segmentation just written, which replaces the previous one. */
-  void written(List<Segment> now, String sopUID) {
+  void written(List<Segment> now, String sopUID, Change change) {
+    switch (change) {
+      case GROWN -> undone.clear();
+      case UNDONE -> {
+        if (!segments.isEmpty()) {
+          undone.push(segments.getLast());
+        }
+      }
+      case REDONE -> undone.poll();
+    }
     this.segments = List.copyOf(now);
     this.sopInstanceUID = sopUID;
     if (sopUID != null) {

@@ -17,6 +17,7 @@ import javax.swing.ButtonGroup;
 import javax.swing.Icon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JOptionPane;
 import javax.swing.JToggleButton;
 import org.weasis.core.api.gui.util.ActionW;
 import org.weasis.core.api.gui.util.Feature;
@@ -33,6 +34,7 @@ import org.weasis.dicom.viewer3d.geometry.CameraView;
 import org.weasis.dicom.viewer3d.vr.LassoCut;
 import org.weasis.dicom.viewer3d.vr.View3d;
 import org.weasis.dicom.viewer3d.vr.View3dSnapshot;
+import org.weasis.dicom.viewer3d.vr.View3dVideoExport;
 
 /**
  * The 3D tools bar: the mouse tools (rotate, roll, pan, zoom, window/level, scalpel, keep only
@@ -91,12 +93,12 @@ public class Volume3dToolBar extends WtoolBar {
         addButton(
             icon("vol.undo"),
             Messages.getString("cut.undo"),
-            () -> selectedView().ifPresent(View3d::undoCut));
+            () -> selectedView().ifPresent(View3d::undoEdit));
     redoButton =
         addButton(
             icon("vol.redo"),
             Messages.getString("cut.redo"),
-            () -> selectedView().ifPresent(View3d::redoCut));
+            () -> selectedView().ifPresent(View3d::redoEdit));
     restoreButton =
         addButton(
             icon("vol.restore"),
@@ -108,12 +110,9 @@ public class Volume3dToolBar extends WtoolBar {
     add(separation);
     addSeparator();
 
-    addPreset("A", Messages.getString("view.anterior"), CameraView.FRONT); // NON-NLS
-    addPreset("P", Messages.getString("view.posterior"), CameraView.BACK); // NON-NLS
-    addPreset("L", Messages.getString("view.left"), CameraView.LEFT); // NON-NLS
-    addPreset("R", Messages.getString("view.right"), CameraView.RIGHT); // NON-NLS
-    addPreset("S", Messages.getString("view.superior"), CameraView.TOP); // NON-NLS
-    addPreset("I", Messages.getString("view.inferior"), CameraView.BOTTOM); // NON-NLS
+    for (StandardView view : StandardView.values()) {
+      addPreset(view.letter(), Messages.getString(view.messageKey()), view.cameraView());
+    }
     addButton(
         icon("vol.fit"),
         Messages.getString("view.fit"),
@@ -147,6 +146,10 @@ public class Volume3dToolBar extends WtoolBar {
         Messages.getString("view.movie"),
         () -> selectedView().ifPresent(View3d::toggleMovie));
     addButton(
+        ActionIcon.EXPORT_IMAGE,
+        Messages.getString("view.video"),
+        () -> selectedView().ifPresent(View3dVideoExport::export));
+    addButton(
         icon("vol.snapshot"),
         Messages.getString("view.snapshot"),
         () -> selectedView().ifPresent(View3d::takeSnapshot));
@@ -162,6 +165,17 @@ public class Volume3dToolBar extends WtoolBar {
         ActionIcon.SELECTION_DELETE,
         Messages.getString("view.annotations.clear"),
         () -> selectedView().ifPresent(View3d::clearAnnotations));
+    JButton help = new JButton("?"); // NON-NLS
+    help.setToolTipText(Messages.getString("help.button"));
+    help.setPreferredSize(GuiUtils.getBigIconButtonSize(help));
+    help.addActionListener(
+        _ ->
+            JOptionPane.showMessageDialog(
+                this,
+                Shortcuts3d.helpHtml(),
+                Messages.getString("help.title"),
+                JOptionPane.INFORMATION_MESSAGE));
+    add(help);
   }
 
   private static Icon icon(String name) {
@@ -221,12 +235,9 @@ public class Volume3dToolBar extends WtoolBar {
     cutInsideButton.setEnabled(hasLasso);
     cutOutsideButton.setEnabled(hasLasso);
     boolean idle = view.map(v -> !v.isCutRunning()).orElse(false);
-    undoButton.setEnabled(
-        idle && view.map(v -> v.getKeptMask() != null && v.getKeptMask().canUndo()).orElse(false));
-    redoButton.setEnabled(
-        idle && view.map(v -> v.getKeptMask() != null && v.getKeptMask().canRedo()).orElse(false));
-    restoreButton.setEnabled(
-        idle && view.map(v -> v.getKeptMask() != null && !v.getKeptMask().isFull()).orElse(false));
+    undoButton.setEnabled(idle && view.map(v -> v.getEditHistory().canUndo()).orElse(false));
+    redoButton.setEnabled(idle && view.map(v -> v.getEditHistory().canRedo()).orElse(false));
+    restoreButton.setEnabled(idle && view.map(v -> !v.isWholeVolumeShown()).orElse(false));
     for (Map.Entry<String, JToggleButton> e : toolButtons.entrySet()) {
       e.getValue().setEnabled(view.isPresent());
       e.getValue().setToolTipText(toolTips.get(e.getKey()));

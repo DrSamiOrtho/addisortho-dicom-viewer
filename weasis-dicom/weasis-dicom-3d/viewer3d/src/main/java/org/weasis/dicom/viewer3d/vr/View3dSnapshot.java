@@ -82,7 +82,10 @@ public final class View3dSnapshot {
 
   private View3dSnapshot() {}
 
-  /** Export actions of the 3D view: save to the study and copy to the clipboard. */
+  /**
+   * Export actions of the 3D view: save to the study, copy to the clipboard, and the rotation
+   * video.
+   */
   public static List<Action> getExportActions(View3d view) {
     return List.of(
         new DefaultAction(
@@ -92,7 +95,11 @@ public final class View3dSnapshot {
         new DefaultAction(
             Messages.getString("3d.picture.copy"),
             ResourceUtil.getIcon(ActionIcon.EXPORT_CLIPBOARD),
-            _ -> copyToClipboard(view)));
+            _ -> copyToClipboard(view)),
+        new DefaultAction(
+            Messages.getString("view.video"),
+            ResourceUtil.getIcon(ActionIcon.EXPORT_IMAGE),
+            _ -> View3dVideoExport.export(view)));
   }
 
   /**

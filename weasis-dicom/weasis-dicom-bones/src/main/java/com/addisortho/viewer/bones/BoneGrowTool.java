@@ -13,6 +13,7 @@ import com.addisortho.viewer.bones.BoneExportWorker.Problem;
 import com.addisortho.viewer.bones.BoneGrowWorker.Outcome;
 import com.addisortho.viewer.bones.BoneGrowWorker.Request;
 import com.addisortho.viewer.bones.SeedPicker.Seed;
+import com.addisortho.viewer.bones.grow.BonePreset;
 import com.addisortho.viewer.bones.grow.GrowOptions;
 import com.addisortho.viewer.bones.grow.RegionGrow.Result;
 import com.addisortho.viewer.bones.grow.VoxelBox;
@@ -34,6 +35,7 @@ import javax.swing.Icon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JColorChooser;
+import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
@@ -61,9 +63,14 @@ import org.weasis.dicom.viewer3d.EventManager;
 import org.weasis.dicom.viewer3d.vr.View3d;
 
 /**
- * Tool of the 3D view that selects a bone by region growing from a seed picked in the MPR views,
- * and adds it as a segment of a DICOM Segmentation of the CT, so that the segmentation display,
- * smooth surfaces and the Bone STL export work on it.
+ * The Bones panel of the 3D view: selects a bone by region growing from one click on it, in the 3D
+ * view or in an MPR view, and adds it as a segment of a DICOM Segmentation of the CT, so that the
+ * segmentation display, smooth surfaces and the Bone STL export work on it.
+ *
+ * <p>Made to be used without training: a bone type sets every setting ({@link BonePreset}), the
+ * seed is shown as a target in the 3D view with its CT value, the threshold can be previewed on the
+ * 3D view, the bone is selected as soon as it is clicked, and Undo and Redo take segments out and
+ * put them back. The detailed settings stay under More settings.
  */
 public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
@@ -74,8 +81,16 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   /** A region above this volume has most likely leaked out of the bone. */
   private static final double LARGE_CM3 = 1500;
 
+  private final JComboBox<String> presetBox = new JComboBox<>();
   private final JToggleButton pickButton =
       new JToggleButton(Messages.getString("BoneGrowTool.pick"));
+  private final JCheckBox autoGrowBox =
+      new JCheckBox(Messages.getString("BoneGrowTool.autoGrow"), true);
+  private final JCheckBox previewBox = new JCheckBox(Messages.getString("BoneGrowTool.preview"));
+  private final JCheckBox moreBox = new JCheckBox(Messages.getString("BoneGrowTool.more"));
+  private final JPanel morePanel = GuiUtils.getVerticalBoxLayoutPanel();
+  private final JButton undoButton = new JButton(Messages.getString("BoneGrowTool.undo"));
+  private final JButton redoButton = new JButton(Messages.getString("BoneGrowTool.redo"));
   private final JButton crosshairButton = new JButton(Messages.getString("BoneGrowTool.crosshair"));
   private final JLabel seedLabel = new JLabel(Messages.getString("BoneGrowTool.noSeed"));
   private final JSpinner lowerSpinner =
@@ -94,7 +109,6 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   private final JButton colorButton = new JButton(Messages.getString("BoneGrowTool.color"));
   private final JButton growButton = new JButton(Messages.getString("BoneGrowTool.grow"));
   private final JButton cancelButton = new JButton(Messages.getString("BoneGrowTool.cancel"));
-  private final JButton removeButton = new JButton(Messages.getString("BoneGrowTool.removeLast"));
   private final JProgressBar progressBar = new JProgressBar(0, 100);
   private final JLabel statusLabel = new JLabel(" ");
   private final JLabel sessionLabel = new JLabel(" ");
@@ -107,6 +121,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   private Color color;
   private CtSource source;
   private BoneGrowWorker worker;
+  private GrowSession.Change pendingChange = GrowSession.Change.GROWN;
 
   public BoneGrowTool() {
     super(BUTTON_NAME, Insertable.Type.TOOL, 41);
@@ -129,38 +144,32 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     int gap = 7;
 
     panel.add(GuiUtils.getFlowLayoutPanel(new JLabel(Messages.getString("BoneGrowTool.how"))));
+    for (BonePreset preset : BonePreset.ALL) {
+      presetBox.addItem(Messages.getString(preset.key()));
+    }
+    presetBox.setToolTipText(Messages.getString("BoneGrowTool.preset.tip"));
+    presetBox.addActionListener(_ -> applyPreset());
+    panel.add(row(Messages.getString("BoneGrowTool.preset"), presetBox));
+    panel.add(GuiUtils.boxVerticalStrut(gap));
+
     pickButton.setToolTipText(Messages.getString("BoneGrowTool.pick.tip"));
     pickButton.addActionListener(_ -> togglePicking());
     crosshairButton.setToolTipText(Messages.getString("BoneGrowTool.crosshair.tip"));
     crosshairButton.addActionListener(_ -> useCrosshair());
     panel.add(GuiUtils.getFlowLayoutPanel(pickButton, crosshairButton));
+    autoGrowBox.setToolTipText(Messages.getString("BoneGrowTool.autoGrow.tip"));
+    panel.add(GuiUtils.getFlowLayoutPanel(autoGrowBox));
     panel.add(GuiUtils.getFlowLayoutPanel(seedLabel));
     panel.add(GuiUtils.boxVerticalStrut(gap));
 
     String rangeTip = Messages.getString("BoneGrowTool.range.tip");
     lowerSpinner.setToolTipText(rangeTip);
     upperSpinner.setToolTipText(rangeTip);
+    lowerSpinner.addChangeListener(_ -> thresholdChanged());
     panel.add(row(Messages.getString("BoneGrowTool.lower"), lowerSpinner));
-    panel.add(GuiUtils.boxVerticalStrut(gap));
-    panel.add(row(Messages.getString("BoneGrowTool.upper"), upperSpinner));
-    panel.add(GuiUtils.boxVerticalStrut(gap));
-    closingSpinner.setToolTipText(Messages.getString("BoneGrowTool.closing.tip"));
-    panel.add(row(Messages.getString("BoneGrowTool.closing"), closingSpinner));
-    panel.add(GuiUtils.boxVerticalStrut(gap));
-    separationSpinner.setToolTipText(Messages.getString("BoneGrowTool.separation.tip"));
-    panel.add(row(Messages.getString("BoneGrowTool.separation"), separationSpinner));
-    panel.add(GuiUtils.boxVerticalStrut(gap));
-    panel.add(GuiUtils.getFlowLayoutPanel(fillBox));
-    minPieceSpinner.setToolTipText(Messages.getString("BoneGrowTool.minPiece.tip"));
-    panel.add(row(Messages.getString("BoneGrowTool.minPiece"), minPieceSpinner));
-    panel.add(GuiUtils.boxVerticalStrut(gap));
-    panel.add(GuiUtils.getFlowLayoutPanel(cropBox));
-    panel.add(GuiUtils.boxVerticalStrut(gap));
-
-    panel.add(row(Messages.getString("BoneGrowTool.name"), nameField));
-    panel.add(GuiUtils.boxVerticalStrut(gap));
-    colorButton.addActionListener(_ -> chooseColor());
-    panel.add(GuiUtils.getFlowLayoutPanel(colorButton));
+    previewBox.setToolTipText(Messages.getString("BoneGrowTool.preview.tip"));
+    previewBox.addActionListener(_ -> updatePreview());
+    panel.add(GuiUtils.getFlowLayoutPanel(previewBox));
     panel.add(GuiUtils.boxVerticalStrut(gap));
 
     growButton.setToolTipText(Messages.getString("BoneGrowTool.grow.tip"));
@@ -172,13 +181,76 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     progressBar.setVisible(false);
     panel.add(GuiUtils.getHorizontalBoxLayoutPanel(progressBar));
     panel.add(GuiUtils.getFlowLayoutPanel(statusLabel));
-    panel.add(GuiUtils.boxVerticalStrut(gap));
-    removeButton.addActionListener(_ -> removeLast());
+    undoButton.setToolTipText(Messages.getString("BoneGrowTool.undo.tip"));
+    redoButton.setToolTipText(Messages.getString("BoneGrowTool.redo.tip"));
+    undoButton.addActionListener(_ -> undo());
+    redoButton.addActionListener(_ -> redo());
+    panel.add(GuiUtils.getFlowLayoutPanel(undoButton, redoButton));
     panel.add(GuiUtils.getFlowLayoutPanel(sessionLabel));
-    panel.add(GuiUtils.getFlowLayoutPanel(removeButton));
+    panel.add(GuiUtils.boxVerticalStrut(gap));
+
+    moreBox.addActionListener(_ -> morePanel.setVisible(moreBox.isSelected()));
+    panel.add(GuiUtils.getFlowLayoutPanel(moreBox));
+    morePanel.add(row(Messages.getString("BoneGrowTool.upper"), upperSpinner));
+    morePanel.add(GuiUtils.boxVerticalStrut(gap));
+    closingSpinner.setToolTipText(Messages.getString("BoneGrowTool.closing.tip"));
+    morePanel.add(row(Messages.getString("BoneGrowTool.closing"), closingSpinner));
+    morePanel.add(GuiUtils.boxVerticalStrut(gap));
+    separationSpinner.setToolTipText(Messages.getString("BoneGrowTool.separation.tip"));
+    morePanel.add(row(Messages.getString("BoneGrowTool.separation"), separationSpinner));
+    morePanel.add(GuiUtils.boxVerticalStrut(gap));
+    morePanel.add(GuiUtils.getFlowLayoutPanel(fillBox));
+    minPieceSpinner.setToolTipText(Messages.getString("BoneGrowTool.minPiece.tip"));
+    morePanel.add(row(Messages.getString("BoneGrowTool.minPiece"), minPieceSpinner));
+    morePanel.add(GuiUtils.boxVerticalStrut(gap));
+    morePanel.add(GuiUtils.getFlowLayoutPanel(cropBox));
+    morePanel.add(GuiUtils.boxVerticalStrut(gap));
+    morePanel.add(row(Messages.getString("BoneGrowTool.name"), nameField));
+    morePanel.add(GuiUtils.boxVerticalStrut(gap));
+    colorButton.addActionListener(_ -> chooseColor());
+    morePanel.add(GuiUtils.getFlowLayoutPanel(colorButton));
+    morePanel.setVisible(false);
+    panel.add(morePanel);
     panel.add(GuiUtils.getFlowLayoutPanel(new JLabel(Messages.getString("BoneGrowTool.note"))));
     add(panel);
     add(GuiUtils.boxYLastElement(3));
+    presetBox.setSelectedIndex(0);
+    applyPreset();
+  }
+
+  private BonePreset selectedPreset() {
+    int i = presetBox.getSelectedIndex();
+    return i < 0 ? BonePreset.OTHER : BonePreset.ALL[i];
+  }
+
+  /** Puts the settings of the chosen bone type in every field. */
+  private void applyPreset() {
+    BonePreset p = selectedPreset();
+    lowerSpinner.setValue((int) p.lowerHu());
+    upperSpinner.setValue((int) GrowOptions.DEFAULT_UPPER_HU);
+    closingSpinner.setValue(p.closingRadius());
+    separationSpinner.setValue(p.separationVoxels());
+    fillBox.setSelected(true);
+    minPieceSpinner.setValue((int) p.minPieceMm3());
+    refreshSession();
+  }
+
+  private void thresholdChanged() {
+    updatePreview();
+    showSeed();
+  }
+
+  /** Shows or ends the threshold preview on the 3D view. */
+  private void updatePreview() {
+    Optional<View3d> view = selectedView();
+    if (view.isEmpty()) {
+      return;
+    }
+    if (previewBox.isSelected()) {
+      view.get().previewThreshold(((Number) lowerSpinner.getValue()).doubleValue());
+    } else if (view.get().isPreviewingThreshold()) {
+      view.get().previewThreshold(null);
+    }
   }
 
   private static JPanel row(String title, JComponent field) {
@@ -225,7 +297,11 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
           picked -> {
             pickButton.setSelected(false);
             setSeed(picked);
-          });
+            if (autoGrowBox.isSelected() && worker == null) {
+              grow();
+            }
+          },
+          missed -> seedLabel.setText(missed));
     } else {
       picker.disarm();
       showSeed();
@@ -245,6 +321,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   private void setSeed(Seed picked) {
     seed = picked;
+    selectedView().ifPresent(v -> v.setSeedMarker(picked == null ? null : picked.lps()));
     showSeed();
   }
 
@@ -259,21 +336,20 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
             .flatMap(ct -> ct.voxelOf(seed.lps()).map(v -> ct.huSource().huAt(v[0], v[1], v[2])))
             .orElse(Double.NaN);
     String plane = seed.plane().toLowerCase(Locale.ROOT);
-    seedLabel.setText(
-        Double.isNaN(hu)
-            ? String.format(
-                Messages.getString("BoneGrowTool.seed"),
-                plane,
-                seed.lps().x,
-                seed.lps().y,
-                seed.lps().z)
-            : String.format(
-                Messages.getString("BoneGrowTool.seedHu"),
-                plane,
-                seed.lps().x,
-                seed.lps().y,
-                seed.lps().z,
-                hu));
+    if (Double.isNaN(hu)) {
+      seedLabel.setText(
+          String.format(
+              Messages.getString("BoneGrowTool.seed"),
+              plane,
+              seed.lps().x,
+              seed.lps().y,
+              seed.lps().z));
+      return;
+    }
+    double lower = ((Number) lowerSpinner.getValue()).doubleValue();
+    String verdict =
+        Messages.getString(hu >= lower ? "BoneGrowTool.seedInBone" : "BoneGrowTool.seedBelow");
+    seedLabel.setText(String.format(Messages.getString("BoneGrowTool.seedHu"), plane, hu, verdict));
   }
 
   private void chooseColor() {
@@ -293,10 +369,15 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     Optional<GrowSession> session = currentSource().map(this::session);
     int count = session.map(s -> s.segments().size()).orElse(0);
     int next = session.map(GrowSession::nextSegmentNumber).orElse(1);
-    nameField.setText(String.format(Messages.getString("BoneGrowTool.defaultName"), next));
+    nameField.setText(
+        String.format(
+            Messages.getString("BoneGrowTool.defaultName"),
+            Messages.getString(selectedPreset().key()),
+            next));
     setColor(session.map(GrowSession::nextColor).orElse(new Color(241, 214, 145)));
     sessionLabel.setText(String.format(Messages.getString("BoneGrowTool.session"), count));
-    removeButton.setEnabled(count > 0 && worker == null);
+    undoButton.setEnabled(worker == null && session.map(GrowSession::canUndo).orElse(false));
+    redoButton.setEnabled(worker == null && session.map(GrowSession::canRedo).orElse(false));
   }
 
   private void grow() {
@@ -325,10 +406,13 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       if (label.isEmpty()) {
         label =
             String.format(
-                Messages.getString("BoneGrowTool.defaultName"), session.nextSegmentNumber());
+                Messages.getString("BoneGrowTool.defaultName"),
+                Messages.getString(selectedPreset().key()),
+                session.nextSegmentNumber());
       }
       Request request =
           new Request(voxel, crop, options(ct), session.nextSegmentNumber(), label, color);
+      pendingChange = GrowSession.Change.GROWN;
       start(
           new BoneGrowWorker(
               ct,
@@ -341,6 +425,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
+  /** The settings in the fields, which a bone type fills and More settings lets one change. */
   private GrowOptions options(CtSource ct) {
     int lower = ((Number) lowerSpinner.getValue()).intValue();
     int upper = ((Number) upperSpinner.getValue()).intValue();
@@ -353,20 +438,42 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         .withMinPieceVoxels(Math.round(mm3 / ct.grid().voxelVolumeMm3()));
   }
 
-  private void removeLast() {
+  /** Takes the last segment out of the segmentation; Redo puts it back. */
+  private void undo() {
     Optional<CtSource> ct = currentSource();
     if (ct.isEmpty() || worker != null) {
       return;
     }
     GrowSession session = session(ct.get());
-    if (session.segments().isEmpty()) {
+    if (!session.canUndo()) {
       return;
     }
+    pendingChange = GrowSession.Change.UNDONE;
     start(
         new BoneGrowWorker(
             ct.get(),
             null,
             session.withoutLast(),
+            session.segSeriesUID(),
+            session.nextInstanceNumber()));
+  }
+
+  /** Puts back the last segment taken out by Undo. */
+  private void redo() {
+    Optional<CtSource> ct = currentSource();
+    if (ct.isEmpty() || worker != null) {
+      return;
+    }
+    GrowSession session = session(ct.get());
+    if (!session.canRedo()) {
+      return;
+    }
+    pendingChange = GrowSession.Change.REDONE;
+    start(
+        new BoneGrowWorker(
+            ct.get(),
+            null,
+            session.withRedone(),
             session.segSeriesUID(),
             session.nextInstanceNumber()));
   }
@@ -387,7 +494,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   private void setRunning(boolean running) {
     growButton.setEnabled(!running);
     cancelButton.setEnabled(running);
-    removeButton.setEnabled(!running);
+    undoButton.setEnabled(!running);
+    redoButton.setEnabled(!running);
     progressBar.setVisible(running);
     progressBar.setIndeterminate(false);
     progressBar.setValue(0);
@@ -422,11 +530,15 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       CtSource ct = done.ct();
       GrowSession session = session(ct);
       String oldSop = session.sopInstanceUID();
-      session.written(outcome.segments(), outcome.sopInstanceUID());
+      session.written(outcome.segments(), outcome.sopInstanceUID(), pendingChange);
       explorer.replace(
           ct.series(), session.segSeriesUID(), oldSop, outcome.file(), outcome.sopInstanceUID());
       if (outcome.result() == null) {
-        statusLabel.setText(Messages.getString("BoneGrowTool.removed"));
+        statusLabel.setText(
+            Messages.getString(
+                pendingChange == GrowSession.Change.REDONE
+                    ? "BoneGrowTool.redone"
+                    : "BoneGrowTool.removed"));
       } else {
         report(done.request(), outcome, ct);
       }

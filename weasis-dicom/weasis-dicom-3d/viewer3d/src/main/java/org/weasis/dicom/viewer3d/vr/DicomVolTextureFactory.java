@@ -129,9 +129,12 @@ public class DicomVolTextureFactory {
     DicomVolTexture texture =
         new DicomVolTexture(
             new Vector3i(width, height, depth), volume, imageDataPixFormat, changeSupport);
+    boolean onBone =
+        localPersistence.getBooleanProperty(
+            RenderingLayer.P_OPEN_CT_ON_BONE, RenderingLayer.DEFAULT_OPEN_CT_ON_BONE);
     texture.setSmoothing(
         texture.getModality() == Modality.CT
-            && localPersistence.getBooleanProperty(RenderingLayer.P_SMOOTH_CT, true));
+            && (onBone || localPersistence.getBooleanProperty(RenderingLayer.P_SMOOTH_CT, true)));
     return texture;
   }
 

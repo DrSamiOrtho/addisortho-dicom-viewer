@@ -30,6 +30,14 @@ public class RenderingLayer<E extends ImageElement> {
   /** Whether a CT volume opens smoothed (on by default), see DicomVolTexture#isSmoothing(). */
   public static final String P_SMOOTH_CT = "volume.smooth.ct";
 
+  /**
+   * A CT opens on the bone, as RadiAnt's 3D button: the AO Bone preset, the Smooth option on
+   * whatever was chosen last time, and the crop box fitted to the bone (Addis Ortho).
+   */
+  public static final String P_OPEN_CT_ON_BONE = "volume.open.ct.bone"; // NON-NLS
+
+  public static final boolean DEFAULT_OPEN_CT_ON_BONE = true;
+
   public static final int MAX_QUALITY = 8192;
   public static final int MIN_QUALITY = 128;
   public static final int MIN_TEXTURE_SIZE = 2048;
