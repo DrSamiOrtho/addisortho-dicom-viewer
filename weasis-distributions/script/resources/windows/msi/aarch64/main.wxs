@@ -117,6 +117,13 @@
     <Icon Id="JpARPPRODUCTICON" SourceFile="$(var.JpIcon)"/>
     <?endif?>
 
+    <!-- Addis Ortho: brand bitmaps for the installer pages (banner and welcome/finish), from
+         resources/windows/msi; package-weasis.sh sets AO_MSI_UI_DIR. Without it, WiX's own. -->
+    <?ifdef env.AO_MSI_UI_DIR ?>
+    <WixVariable Id="WixUIBannerBmp" Value="$(env.AO_MSI_UI_DIR)\ao-banner.bmp"/>
+    <WixVariable Id="WixUIDialogBmp" Value="$(env.AO_MSI_UI_DIR)\ao-dialog.bmp"/>
+    <?endif?>
+
     <UIRef Id="JpUI"/>
 
     <InstallExecuteSequence>
