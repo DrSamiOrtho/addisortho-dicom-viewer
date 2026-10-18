@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d;
 
 import java.awt.Cursor;
@@ -54,6 +55,10 @@ public class ActionVol {
 
   public static final ToggleButtonListenerValue VOL_SHADING =
       new ToggleButtonListenerValue(Messages.getString("shading"), "vol.shading", 0, 0, null);
+
+  /** Smooths the CT volume and its shading, and blends samples by the distance they cover. */
+  public static final ToggleButtonListenerValue VOL_SMOOTH =
+      new ToggleButtonListenerValue(Messages.getString("smooth"), "vol.smooth", 0, 0, null);
 
   public static final ToggleButtonListenerValue VOL_PROJECTION =
       new ToggleButtonListenerValue(

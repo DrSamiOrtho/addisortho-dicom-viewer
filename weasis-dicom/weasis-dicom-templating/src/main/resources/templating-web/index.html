@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en" data-mode="viewer">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>X-ray templating · Addis Ortho</title>
+<link rel="icon" type="image/png" href="brand/favicon.png">
+<style>
+  :root { --green: #034537; --lime: #A8FF30; --ink: #000; --panel: #f4f7f6; --line: #d5dedb; --warn: #8a5a00; --bad: #a40000; --side-w: 300px; --icon: 36px; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { height: 100vh; height: 100dvh; overflow: hidden; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: #fff; display: flex; flex-direction: column; }
+  /* the header is one line; the study text gives way first (round 6, 13 Oct 2026) */
+  header { background: var(--green); color: #fff; padding: 6px 12px; padding-top: max(6px, env(safe-area-inset-top)); padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); display: flex; gap: 10px; align-items: center; border-bottom: 3px solid var(--lime); flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+  header b { font-weight: 600; white-space: nowrap; }
+  header img.logo { height: 33px; width: auto; display: block; flex: 0 0 auto; }
+  #open .card img.cardlogo { display: block; height: 74px; width: auto; margin: 0 0 12px; }
+  header .study { font-size: 13px; opacity: .92; flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header label { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; white-space: nowrap; }
+  header select, header button { font: inherit; font-size: 13px; }
+  header select { min-width: 0; max-width: 220px; }
+  header button { background: #fff; color: var(--green); border: 0; padding: 4px 10px; flex: 0 0 auto; }
+  header button.icon { width: var(--icon); height: var(--icon); padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; }
+  header button.icon svg { width: 20px; height: 20px; display: block; }
+  header button.icon:disabled { opacity: .45; }
+  header .sp { display: none; }
+  header .slot:empty { display: none; }
+  header .slot { display: flex; gap: 6px; flex: 0 0 auto; }
+  #openBtn .sm { display: none; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #fff; color: var(--green); font-weight: 600; white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .badge.bad { background: #ffe1e1; color: var(--bad); }
+  .badge.warn { background: #fff0cc; color: var(--warn); }
+  /* visible focus for the keyboard: lime on the green header, green on the light panel */
+  :focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
+  header :focus-visible { outline-color: var(--lime); }
+  #cv:focus-visible { outline: 3px solid var(--lime); outline-offset: -3px; }
+  button, select, input, summary, label, a, ul.lm li, .steps button { touch-action: manipulation; }   /* no double-tap zoom on controls */
+  main { flex: 1; display: flex; min-height: 0; padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+  #stage { flex: 1; position: relative; background: #000; min-width: 0; min-height: 0; overflow: hidden; }
+  #cv { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  #cv.armed { cursor: crosshair; }
+  #prompt { position: absolute; left: 12px; top: 12px; background: rgba(3,69,55,.92); color: #fff; padding: 6px 10px; border-radius: 4px; border-left: 4px solid var(--lime); max-width: 70%; pointer-events: none; }
+  #prompt:empty { display: none; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  #alerts { position: absolute; right: 12px; top: 12px; max-width: 45%; pointer-events: none; }
+  #alerts div { background: rgba(164,0,0,.92); color: #fff; padding: 5px 9px; margin-bottom: 6px; border-radius: 4px; font-size: 13px; }
+  #hud { position: absolute; right: 12px; bottom: 10px; color: #cfd; font-size: 12px; text-align: right; pointer-events: none; text-shadow: 0 0 3px #000; }
+  /* the panel column: implant bar, then the panel; on a phone it is a resizable panel under the film */
+  #pcol { width: var(--side-w); flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--panel); }
+  body.nopanel #pcol { display: none; }
+  #sheetbar { display: none; }
+  aside#panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 10px 40px; }
+  aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--green); margin: 14px 0 6px; border-bottom: 1px solid var(--line); padding-bottom: 3px; }
+  aside h2:first-child { margin-top: 2px; }
+  /* the implant bar: name and "Next implant" on the first row, the size and turn buttons under them (one row on a phone) */
+  #dock { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 5px 8px; background: #fff; border-bottom: 1px solid var(--line); }
+  #dock[hidden] { display: none; }
+  #dock .dname { font-size: 12px; color: var(--green); min-width: 0; flex: 1 0 calc(100% - 124px); order: -2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #dock select { min-width: 56px; max-width: 84px; flex: 0 0 auto; }
+  #dock button { padding: 3px 8px; }
+  #dock button.rot { font-size: 18px; line-height: 1; padding: 2px 8px; }
+  #dock .next-imp { order: -1; white-space: nowrap; margin-left: auto; }
+  #dock .dmore, #dock .dmenu, #linesBtn { display: none; }   /* phones only (round 11) */
+  .row { display: flex; gap: 6px; align-items: center; margin: 4px 0; flex-wrap: wrap; }
+  button { font: inherit; padding: 4px 9px; border: 1px solid var(--green); background: #fff; color: var(--green); border-radius: 3px; cursor: pointer; }
+  button.primary { background: var(--green); color: #fff; }
+  button.on { background: var(--green); color: #fff; box-shadow: inset 0 -3px 0 var(--lime); }
+  button:disabled { opacity: .45; cursor: default; }
+  select, input[type=number] { font: inherit; padding: 3px 4px; border: 1px solid #9bb; border-radius: 3px; background: #fff; }
+  select { max-width: 100%; }
+  input[type=number] { width: 72px; }
+  ul.lm { list-style: none; padding: 0; margin: 0; }
+  ul.lm li { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 3px; cursor: pointer; }
+  ul.lm li:hover { background: #e6eeeb; }
+  ul.lm li.armed { background: var(--green); color: #fff; }
+  ul.lm li .tick { width: 16px; text-align: center; font-weight: 700; color: var(--green); flex: 0 0 auto; }
+  ul.lm li.armed .tick { color: var(--lime); }
+  ul.lm li .opt { color: #667; font-size: 12px; }
+  ul.lm li.armed .opt { color: #dfe; }
+  ul.lm li button.x { margin-left: auto; color: #456; font-size: 12px; padding: 0 6px; border: 0; background: transparent; flex: 0 0 auto; }
+  ul.lm li.armed button.x { color: #dfe; }
+  table.res { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.res td { padding: 2px 3px; border-bottom: 1px solid #e3e9e7; vertical-align: top; }
+  table.res { table-layout: fixed; }
+  table.res td:first-child { width: 58%; }
+  table.res td:last-child { text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  table.res tr.note td { text-align: left; font-size: 12px; } table.res tr.note span { color: #456; }
+  table.res tr.h td { font-weight: 600; color: var(--green); padding-top: 8px; border-bottom: 1px solid var(--line); }
+  table.res td.warn { color: var(--warn); } table.res td.bad { color: var(--bad); }
+  .note { font-size: 12px; color: #456; margin: 4px 0; }
+  .warnbox { font-size: 12px; background: #fff0cc; color: #5a3d00; border-left: 3px solid #c08a00; padding: 5px 8px; margin: 6px 0; }
+  .badbox { font-size: 12px; background: #ffe1e1; color: var(--bad); border-left: 3px solid var(--bad); padding: 5px 8px; margin: 6px 0; }
+  .badbox:empty { display: none; }
+  /* the amber results in a few words, with "Show all" (Astra's page re-review, 13 Oct: kept at every height of the phone's panel) */
+  .warnsum { display: flex; align-items: center; gap: 8px; font-size: 12px; background: #fff0cc; color: #5a3d00; border-left: 3px solid #c08a00; padding: 4px 8px; margin: 6px 0; }
+  .warnsum:empty { display: none; }
+  .warnsum .wsn { flex: 1 1 auto; min-width: 0; }
+  .warnsum .wsbtn { flex: 0 0 auto; font-size: 12px; padding: 2px 8px; }
+  .tpl { border: 1px solid var(--line); background: #fff; border-radius: 4px; padding: 6px 8px; margin: 6px 0; }
+  .tpl.active { border-color: var(--green); box-shadow: 0 0 0 1px var(--green); }
+  .tpl .name { font-weight: 600; color: var(--green); }
+  #open { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; background: #0b1412; color: #fff; overflow-y: auto; }
+  #open .card { max-width: 520px; background: #fff; color: #000; border-radius: 6px; padding: 22px 24px; border-top: 5px solid var(--green); margin: auto; }   /* centred, and scrolls whole when taller than the stage (the patient list) */
+  body.choosing #pcol { display: none; }   /* the start card over an open film (Open on t.addisortho.com): the panel is the film's */
+  #open h1 { font-size: 19px; color: var(--green); margin: 0 0 8px; }
+  #open.drag .card { outline: 3px dashed var(--lime); }
+  #open ul { padding-left: 18px; }
+  #cases:empty, #openNote:empty { display: none; }
+  /* saved projects and the templated-patients list (projects.js, round 6) */
+  header .slot button.projsave { width: auto; min-width: var(--icon); padding: 0 10px; gap: 6px; }
+  header .slot button.projsave.busy { opacity: .6; }
+  /* the patient list saved automatically (round 13): its status beside Save project; on a phone a dot on Save project */
+  header .slot button.autostat { width: auto; min-width: var(--icon); height: var(--icon); padding: 0 8px; font-size: 12px; max-width: 26ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.55); border-radius: 4px; flex: 0 1 auto; min-width: 0; }
+  header .slot button.autostat[hidden] { display: none; }
+  header .slot button.autostat.st-saved { border-color: var(--lime); }
+  header .slot button.autostat.st-offline { background: #fff0cc; color: var(--warn); border-color: #fff0cc; }
+  header .slot button.autostat.st-fail, header .slot button.autostat.st-conflict { background: #ffe1e1; color: var(--bad); border-color: #ffe1e1; }
+  header .slot button.projsave { position: relative; }
+  .projout { font-size: 12px; margin: 2px 0 6px; }
+  .projout[hidden] { display: none; }
+  .projout > div { padding: 4px 8px; border-left: 3px solid #9bb; margin: 3px 0; background: #fff; color: #345; }
+  .projout .ok { background: #e6f4ec; border-color: var(--green); color: #123; }
+  .projout .ok::before { content: '✓ '; font-weight: 700; color: var(--green); }
+  .projout .bad { background: #ffe1e1; border-color: var(--bad); color: var(--bad); }
+  .projout a.signin, .cmsg a.signin { font-weight: 600; color: var(--green); }
+  section.cases { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+  section.cases h2 { font-size: 15px; color: var(--green); margin: 0 0 6px; }
+  .csearch { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid #9bb; border-radius: 4px; min-height: 44px; }
+  .cmsg { font-size: 13px; color: #456; margin: 6px 0; } .cmsg.bad { color: var(--bad); } .cmsg:empty { display: none; }
+  .cmsg button { margin-left: 4px; font-size: 12px; }
+  #open ul.clist { list-style: none; padding: 0; margin: 6px 0; }
+  li.case { border: 1px solid var(--line); border-radius: 4px; margin: 6px 0; background: #fff; display: flex; flex-wrap: wrap; align-items: stretch; }
+  li.case .copen { flex: 1 1 0; min-width: 0; text-align: left; border: 0; background: transparent; color: #000; padding: 8px 10px; min-height: 44px; display: flex; flex-direction: column; gap: 2px; border-radius: 4px 0 0 4px; }
+  li.case .copen:hover { background: #f0f6f3; }
+  .ctop { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; }
+  .cname { color: var(--green); font-size: 14px; overflow-wrap: anywhere; }
+  .cside { font-size: 13px; } .cdate { font-size: 12px; color: #456; margin-left: auto; white-space: nowrap; }
+  .cimp { font-size: 12px; color: #234; } .cby { font-size: 11px; color: #567; overflow-wrap: anywhere; }
+  .cby:empty { display: none; }
+  .cact { display: flex; flex-direction: column; gap: 4px; padding: 6px; justify-content: center; border-left: 1px solid var(--line); }
+  .cact button { font-size: 12px; padding: 3px 8px; }
+  .cshare { flex: 1 0 100%; padding: 6px 10px 10px; border-top: 1px solid var(--line); font-size: 13px; }
+  .cshare[hidden] { display: none; }
+  .cshare label { display: grid; gap: 3px; }
+  .cshare input { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid #9bb; border-radius: 4px; min-height: 40px; }
+  .cmore { width: 100%; min-height: 40px; }
+  .cmore[hidden] { display: none; }
+  .dlg .pvbox { max-width: min(480px, 92vw); }
+  .dlg .fields { display: grid; gap: 8px; }
+  .dlg .fields label { display: grid; gap: 3px; font-size: 13px; color: #234; }
+  .dlg .fields input { font: inherit; padding: 8px; border: 1px solid #9bb; border-radius: 4px; min-height: 44px; }
+  /* the implant choice card (13 Oct 2026): families as rows to tap, the best geometric match marked, ranges without
+     template files greyed and not selectable */
+  .choice { width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin: 6px 0; font-size: 13px; }
+  .choice .ch-h { font-weight: 600; color: var(--green); margin-bottom: 4px; }
+  .choice .ch-g { display: grid; gap: 3px; margin: 4px 0 6px; }
+  .choice .ch-t { font-size: 12px; font-weight: 600; color: #456; text-transform: uppercase; letter-spacing: .04em; }
+  .choice .ch-o { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; text-align: left; width: 100%; padding: 5px 8px 5px 30px; position: relative; border: 1px solid #9bb; background: #fff; color: #123; font-size: 13px; border-radius: 4px; }
+  .choice button.ch-o::before { content: ''; position: absolute; left: 9px; top: 50%; width: 12px; height: 12px; margin-top: -7px; border: 1.5px solid var(--green); border-radius: 50%; background: #fff; }
+  .choice button.ch-o[aria-checked="true"] { border-color: var(--green); box-shadow: inset 3px 0 0 var(--green); background: #f0f6f3; }
+  .choice button.ch-o[aria-checked="true"]::before { background: var(--green); box-shadow: inset 0 0 0 2px #fff; }
+  .choice .ch-o .best { font-size: 11px; font-weight: 600; background: var(--green); color: var(--lime); padding: 1px 6px; border-radius: 9px; white-space: nowrap; }
+  .choice .ch-o.pend { color: #667; background: #eef1f0; border-style: dashed; cursor: not-allowed; padding-left: 8px; font-size: 12px; }
+  #pendNote:empty { display: none; }
+  #pendNote ul { margin: 4px 0; padding-left: 18px; }
+  footer { font-size: 12px; background: #fff0cc; color: #5a3d00; padding: 3px 14px; border-top: 1px solid #e8d49a; }
+  kbd { font: 11px ui-monospace, monospace; border: 1px solid #aab; border-bottom-width: 2px; border-radius: 3px; padding: 0 3px; background: #fff; }
+  aside h3 { font-size: 12px; color: var(--green); margin: 10px 0 4px; font-weight: 600; }
+  .steps { display: flex; gap: 3px; margin: 0 0 6px; font-size: 12px; }
+  .steps button { flex: 1 1 auto; min-width: 0; text-align: center; padding: 3px 2px; border-radius: 3px; background: #e3ebe8; color: #456; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 0; font-size: 12px; }
+  .steps button.done { background: #d6eadf; color: var(--green); }
+  .steps button.done:hover { background: #c3e0cf; text-decoration: underline; }
+  .steps button.cur { background: var(--green); color: #fff; box-shadow: inset 0 -3px 0 var(--lime); font-weight: 600; cursor: default; }
+  .steps button:disabled { opacity: 1; }
+  .steps .mk + .nm { margin-left: 4px; }
+  .steps button:not(.cur) .nm { display: none; }   /* a narrow side panel: ticks and numbers, the current step by name */
+  .steps button.cur { flex: 3 1 auto; }
+  /* who, which side, the scale: always in view, also with every segment closed */
+  .ctx { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12px; color: #234; margin: 0 0 4px; }
+  .ctx span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .ctx .who { font-weight: 600; color: var(--green); }
+  .ctx .cal.bad { color: var(--bad); font-weight: 600; } .ctx .cal.warn { color: var(--warn); font-weight: 600; }
+  .nav { display: flex; gap: 6px; width: 100%; align-items: center; flex-wrap: wrap; }
+  .nav button.back { margin-left: auto; font-size: 12px; padding: 2px 8px; border-color: #9bb; color: #345; }
+  .nav.solo { width: auto; flex: 0 0 auto; margin-left: auto; }
+  /* the five segments, one open at a time */
+  details.sec { border-top: 1px solid var(--line); margin: 0; padding: 0 0 6px; }
+  details.sec:not([open]) { padding-bottom: 0; }
+  details.sec > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 6px; padding: 7px 0 5px; }
+  details.sec > summary::-webkit-details-marker { display: none; }
+  details.sec > summary::before { content: '▸'; display: inline-block; width: 12px; flex: 0 0 auto; color: var(--green); transition: transform .1s; }
+  details.sec[open] > summary::before { transform: rotate(90deg); }
+  details.sec > summary .segn { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: var(--green); }
+  details.sec > summary .segt { flex: 0 0 auto; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--green); font-weight: 600; }
+  details.sec > summary .segr { flex: 1 1 auto; min-width: 0; font-size: 12px; color: #456; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  details.sec > summary .segr.warn { color: var(--warn); } details.sec > summary .segr.bad { color: var(--bad); }
+  details.sec[open] > summary { flex-wrap: wrap; }
+  details.sec[open] > summary .segr { flex: 1 0 100%; white-space: normal; text-align: left; padding-left: 18px; }
+  details.help { margin: 6px 0 2px; font-size: 12px; color: #456; }
+  details.help > summary { cursor: pointer; color: #1d5f7a; font-size: 12px; }
+  details.help > div p { margin: 4px 0; }
+  .rec { background: #fff; border: 1px solid var(--green); border-left: 4px solid var(--lime); border-radius: 3px; padding: 6px 9px; margin: 6px 0 8px; font-size: 13px; }
+  .rec .rec-h { font-weight: 600; color: var(--green); margin-bottom: 3px; }
+  .rec ul { margin: 2px 0; padding-left: 18px; font-size: 12px; color: #345; }
+  .rec table { width: 100%; border-collapse: collapse; }
+  .rec td { padding: 2px 3px; vertical-align: top; border-bottom: 1px solid #e3e9e7; }
+  .rec td:first-child { width: 30%; color: #456; }
+  .rec .sub { font-size: 11px; color: #567; }
+  .next { display: flex; gap: 8px; align-items: center; justify-content: space-between; background: #fff; border: 1px solid var(--green); border-left: 4px solid var(--green); border-radius: 3px; padding: 6px 8px; margin-bottom: 4px; font-size: 13px; }
+  .next { flex-wrap: wrap; }
+  .next .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; width: 100%; }
+  .next .choices button { font-size: 12px; }
+  .okbox { font-size: 12px; background: #e6f4ec; color: #123; border-left: 3px solid var(--green); padding: 5px 8px; margin: 6px 0; }
+  .okbox button { margin: 4px 6px 0 0; font-size: 12px; padding: 2px 7px; }
+  ul.lm li.guide { display: block; cursor: default; background: #fff; border: 1px solid var(--line); margin: 2px 0 6px 22px; }
+  ul.lm li.guide:hover { background: #fff; }
+  ul.lm li.guide svg { display: block; max-width: 100%; height: auto; border: 1px solid #e3e9e7; }
+  ul.lm li.guide p { font-size: 12px; margin: 4px 0 0; color: #123; }
+  ul.lm li.sub { display: block; cursor: default; font-size: 12px; color: #456; margin: 0 0 4px 22px; padding: 0 4px; }
+  ul.lm li.sub:hover { background: none; }
+  ul.lm li .opt.bad { color: var(--bad); }
+  details.settings { border: 1px solid var(--line); background: #fff; border-radius: 4px; padding: 4px 8px; margin: 6px 0; }
+  details.settings summary { cursor: pointer; color: var(--green); font-weight: 600; font-size: 13px; }
+  details.settings input[type=number] { width: 56px; }
+  .tpl.other { background: #f7fbfd; border-style: dashed; }
+  .tpl.other .name { color: #1d5f7a; }
+  .wl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; font-size: 12px; color: #456; }
+  .wl input[type=range] { width: 100%; accent-color: var(--green); }
+  .pv { position: fixed; inset: 0; background: rgba(0,0,0,.75); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  .pvbox { background: #fff; max-width: 92vw; max-height: 92vh; padding: 12px 14px; border-top: 5px solid var(--green); border-radius: 4px; display: flex; flex-direction: column; gap: 8px; }
+  .pvbox p { margin: 0; font-size: 13px; }
+  .pvimg { overflow: auto; min-height: 0; flex: 1; }
+  .pvimg img { max-width: 100%; max-height: 72vh; display: block; margin: auto; }
+  .prep { width: 100%; }
+  .prep label.rot { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .prep label.rot input { flex: 1; accent-color: var(--green); }
+  button.wide { width: 100%; margin-top: 6px; }
+  /* short windows (a phone held sideways): a compact header, no footer */
+  @media (max-height: 520px) {
+    header { padding-top: max(3px, env(safe-area-inset-top)); padding-bottom: 3px; gap: 8px; }
+    header .study, header b, footer { display: none; }
+    header img.logo { height: 24px; }
+    header label { font-size: 0; gap: 0; }
+    header .slot button.projsave { width: var(--icon); padding: 0; } header .slot .lg { display: none; }
+    :root { --side-w: 340px; }   /* a film on a short screen is limited by its height: the panel takes the width it leaves */
+    #hud { display: none; }
+    #dock { gap: 3px; padding: 4px 6px; flex-wrap: nowrap; }
+    #dock .dname, #dock .lg { display: none; }
+    #dock .next-imp { order: 0; }
+  }
+  /* phones (Sami, 11 and 13 Oct: reps and surgeons template from their phone): the film on top, a panel under it that
+     one handle cycles through three heights (round 11: smallest = one row) */
+  @media (max-width: 700px), (pointer: coarse) and (orientation: portrait) {
+    header { padding: 5px 6px; padding-top: max(5px, env(safe-area-inset-top)); padding-left: max(6px, env(safe-area-inset-left)); padding-right: max(6px, env(safe-area-inset-right)); gap: 3px; }   /* 3 px: room for Save project (round 6) with every control 44 px wide down to 360 px */
+    header .study, header b, footer, #panelBtn { display: none; }
+    header img.logo { height: 22px; }
+    header label { font-size: 0; gap: 0; min-width: 44px; }   /* never narrower than its 44 px list */
+    header select { font-size: 12px; padding: 4px 2px; max-width: 30vw; min-height: 34px; min-width: 44px; }
+    header button { font-size: 12px; padding: 4px 6px; min-height: 34px; }
+    #openBtn .lg { display: none; } #openBtn .sm { display: inline; }
+    header .slot button.projsave { width: var(--icon); padding: 0; } header .slot .lg { display: none; }
+    header .slot button.autostat { display: none; }   /* no room for words: the dot below, the words in the live region */
+    header .slot button.projsave[data-st]::after { content: ''; position: absolute; top: 3px; right: 3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; background: #8aa; }
+    header .slot button.projsave[data-st=saved]::after { background: var(--green); }
+    header .slot button.projsave[data-st=offline]::after { background: #d08a00; }
+    header .slot button.projsave[data-st=fail]::after, header .slot button.projsave[data-st=conflict]::after { background: var(--bad); }
+    #calBadge { font-size: 0; width: 12px; height: 12px; padding: 0; border-radius: 50%; flex: 0 0 12px; }
+    main { flex-direction: column; }
+    body:not(.has-img) #pcol { display: none; }   /* no film yet: the open card has the whole screen */
+    #stage { flex: 1 1 auto; min-height: 96px; }
+    /* round 11 (Sami, 13 Oct: "clear things as much as possible ... collapsable and expandable"): at its smallest the
+       panel is one row (the step, its one button, a badge for the results to check, the handle); a question step
+       (the ball, the side, the reference, preparing) adds its answers under it, nothing else */
+    #pcol { position: relative; width: auto; border-left: 0; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
+    #pcol.peek { max-height: 62%; }
+    #pcol.peek:not(.ask) aside#panel { display: none; }
+    #pcol.peek aside#panel { flex: 0 1 auto; padding-bottom: 6px; }
+    #pcol.peek aside#panel > :not(.next):not(.keep) { display: none; }
+    #pcol.peek .next > span:first-child { font-size: 12px; }
+    #pcol.half { height: 50%; }
+    #pcol.full { height: calc(100% - 96px); }
+    #sheetbar { display: flex; align-items: center; gap: 6px; padding: 4px 6px; background: #e8efec; border-bottom: 1px solid var(--line); touch-action: none; }
+    #sheetbar .sbstep { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 600; color: var(--green); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #sheetbar .sbact { flex: 0 1 auto; min-width: 0; display: flex; }
+    #sheetbar .sbact:empty { display: none; }
+    #sheetbar .sbact button { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; }
+    #pcol:not(.peek) #sheetbar .sbact { display: none; }   /* taller: the step's button is at the top of the panel */
+    #warnBadge { flex: 0 0 auto; background: #fff0cc; color: #5a3d00; border: 1px solid #c08a00; border-radius: 22px; font-weight: 700; font-size: 13px; padding: 2px 10px; }
+    #warnBadge.bad { background: #ffe1e1; color: var(--bad); border-color: var(--bad); }
+    #warnBadge[hidden] { display: none; }
+    #sheetHandle { flex: 0 0 auto; font-size: 16px; padding: 0; width: 44px; position: relative; }
+    #sheetHandle::before { content: ''; position: absolute; top: 5px; left: 12px; width: 20px; height: 3px; border-radius: 2px; background: #9bb; }
+    aside#panel { padding: 6px 8px 60px; }
+    #pcol:not(.peek) .next { position: sticky; top: -6px; z-index: 2; box-shadow: 0 2px 6px rgba(0,0,0,.12); }
+    /* who and the scale: one short line, shown when the panel is opened */
+    .ctx { flex-wrap: nowrap; gap: 8px; overflow: hidden; }
+    .ctx span { flex: 0 1 auto; min-width: 0; }
+    .ctx .who { max-width: 48%; }
+    .warnsum .wsn { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    /* the prompt: one line, then a small "i" chip after a few seconds or the first tap on the film; tap it to read it */
+    #prompt { max-width: calc(100% - 84px); font-size: 13px; pointer-events: auto; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 44px; line-height: 32px; padding: 6px 10px; left: 8px; top: 8px; }
+    #prompt.full { white-space: normal; line-height: 1.4; }
+    #prompt.mini { width: 44px; height: 44px; padding: 0; font-size: 0; border-left: 0; border-radius: 22px; text-align: center; background: var(--green); box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
+    #prompt.mini::before { content: 'i'; font: italic 700 20px/44px Georgia, serif; color: var(--lime); }
+    /* reference lines on the film: one toggle in the corner (round 11) */
+    #linesBtn:not([hidden]) { display: inline-flex; align-items: center; position: absolute; top: 8px; right: 8px; z-index: 2; background: rgba(3,69,55,.92); color: #fff; border: 1px solid rgba(255,255,255,.5); border-radius: 22px; font-size: 13px; padding: 0 12px; }
+    #linesBtn[aria-pressed="true"] { background: #fff; color: var(--green); box-shadow: inset 0 -3px 0 var(--lime); }
+    /* the serious alerts: in the panel column above its row (moved there by placeAlerts), never covered */
+    #pcol > #alerts { position: static; max-width: none; pointer-events: auto; padding: 4px 6px 0; background: #ffe1e1; flex: 0 0 auto; max-height: 22vh; overflow-y: auto; }
+    #pcol > #alerts:empty { display: none; }
+    #pcol > #alerts div { margin: 0 0 4px; font-size: 12px; padding: 3px 8px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    #hud { display: none; }
+    #open .card { margin: 10px; padding: 16px; }
+    .steps button { font-size: 11px; padding: 4px 1px; }
+    table.res { font-size: 12px; }
+    /* the implant bar: one slim row laid over the bottom of the film (the film is not resized when it comes and goes);
+       "Next implant" and "Done" in its ⋯ menu; hidden with no implant selected */
+    #dock { flex-wrap: nowrap; position: absolute; left: 0; right: 0; bottom: 100%; z-index: 3; background: rgba(255,255,255,.96); border-top: 1px solid var(--line); box-shadow: 0 -2px 6px rgba(0,0,0,.25); padding: 3px 6px; gap: 4px; }
+    #dock .dname { flex: 1 1 auto; order: 0; }
+    #dock .next-imp { display: none; }
+    #dock .dmore { display: inline-flex; align-items: center; justify-content: center; font-size: 18px; padding: 0 8px; }
+    #dock .dmenu:not([hidden]) { display: flex; flex-direction: column; gap: 4px; position: absolute; right: 6px; bottom: calc(100% + 4px); background: #fff; border: 1px solid var(--green); border-radius: 4px; padding: 6px; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+    #dock .dmenu button { text-align: left; white-space: nowrap; }
+    #dock .lg, #dock .fam { display: none; }
+    .steps button .nm { display: inline; }
+    .steps button.cur { flex: 1 1 auto; }
+  }
+  /* fingers: 44 px targets (Astra, 13 Oct) */
+  @media (pointer: coarse) {
+    :root { --icon: 44px; }
+    button, select, input[type=number], .steps button, header select, header button { min-height: 44px; }
+    button { min-width: 44px; }
+    .steps button { min-width: 44px; }
+    ul.lm li { min-height: 44px; padding: 4px 6px; }
+    ul.lm li button.x { min-height: 44px; }
+    input[type=range] { height: 44px; }
+    input[type=checkbox] { width: 22px; height: 22px; flex: 0 0 auto; }
+    label:has(> input[type=checkbox]) { min-height: 44px; display: flex; align-items: center; gap: 8px; }
+    details > summary { min-height: 44px; }
+    details.help > summary, details.settings > summary { display: flex; align-items: center; }
+    details.help > summary::before, details.settings > summary::before { content: '▸'; width: 14px; }
+    details.help[open] > summary::before, details.settings[open] > summary::before { content: '▾'; }
+    details.sec > summary { align-items: center; }
+    #open a { display: inline-block; min-height: 44px; padding: 10px 0; }
+    .cshare input, .csearch { min-height: 44px; }
+    #sheetbar { min-height: 46px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <img class="logo" src="brand/logo-lime.png" alt="Addis Ortho" width="67" height="33"><b>X-ray templating</b>
+  <span class="study" id="study"></span>
+  <span class="sp"></span>
+  <label>Plan <select id="wf" aria-label="Plan"></select></label>
+  <label>Side <select id="side" aria-label="Surgery side"><option value="R">Right</option><option value="L">Left</option></select></label>
+  <button id="openBtn" aria-label="Open file" title="Open a DICOM, PNG or JPEG file, or a saved project (.aotp), from this computer"><span class="lg">Open file…</span><span class="sm" aria-hidden="true">Open</span></button>
+  <!-- Save project (projects.js, round 6) -->
+  <span class="slot" id="projSlot"></span>
+  <button id="undoBtn" class="icon" aria-label="Undo" title="Undo the last change (Ctrl/⌘+Z)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+  <button id="fitBtn" class="icon" aria-label="Fit to window" title="Fit the X-ray to the window (F)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+  <button id="panelBtn" title="Show or hide the side panel" aria-controls="pcol">Panel</button>
+  <input type="file" id="file2" accept=".dcm,.dicom,.aotp,application/dicom,application/zip,image/png,image/jpeg,image/webp,image/*" hidden>
+  <input type="file" id="planFile" accept=".json,application/json" hidden>
+  <span class="badge bad" id="calBadge">Not calibrated</span>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="cv" tabindex="0" role="application" aria-roledescription="X-ray editor" aria-label="X-ray. Tap or click to place the landmark asked for; drag implants and points; keyboard shortcuts are listed under Implants, Moving implants by hand."></canvas>
+    <div id="prompt" aria-live="polite"></div>
+    <div id="hud"></div>
+    <div id="alerts"></div>
+    <button id="linesBtn" aria-pressed="false" aria-label="Reference lines" title="Show the reference lines (teardrop line, midline, canal lines, landmarks, mirrored targets)" hidden>Lines</button>
+    <div id="open">
+      <div class="card">
+        <img class="cardlogo" src="brand/logo-card.png" alt="Addis Ortho" width="150" height="74">
+        <h1 id="openTitle">Open an X-ray to template</h1>
+        <p id="openMsg">Open this page from an X-ray in the imaging viewer, or drop a DICOM, PNG or JPEG file or a saved project
+          (.aotp) here. A picture or file you open stays in this browser.</p>
+        <ul id="openList"></ul>
+        <p><label class="row"><input type="file" id="file" accept=".dcm,.dicom,.aotp,application/dicom,application/zip,image/png,image/jpeg,image/webp,image/*"></label></p>
+        <p class="note" style="font-size:13px;color:#456">DICOM is best (full grey range and the machine's scale; compressed DICOM from CDs is fine). PNG and JPEG work too, calibrated on the ball.</p>
+        <!-- implant ranges this account holds whose template files are not on the server yet (t.addisortho.com, 13 Oct 2026) -->
+        <div id="pendNote"></div>
+        <!-- the templated-patients list (projects.js; t.addisortho.com only) -->
+        <div id="cases"></div>
+        <p class="note" id="openNote"></p>
+      </div>
+    </div>
+  </div>
+  <div id="pcol" class="peek">
+    <div id="dock" role="toolbar" aria-label="Selected implant" hidden></div>
+    <div id="sheetbar">
+      <span class="sbstep" id="sbStep"></span>
+      <span class="sbact" id="sbAct"></span>
+      <button id="warnBadge" hidden></button>
+      <button id="sheetHandle" aria-controls="panel" aria-label="Show more of the panel" title="Show more of the panel (tap, or swipe up or down)">▴</button>
+    </div>
+    <aside id="panel" tabindex="-1" aria-label="Templating steps"></aside>
+  </div>
+</main>
+<!-- the one warning status for screen readers (round 11 review): outside the panel, so it is never hidden with it -->
+<div id="srStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+<footer id="foot">Trial software for planning practice; not for clinical decisions until validated and approved. Implants: Addis Ortho range, outlines from the manufacturer's 1:1 template sheets and 3D models.</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>

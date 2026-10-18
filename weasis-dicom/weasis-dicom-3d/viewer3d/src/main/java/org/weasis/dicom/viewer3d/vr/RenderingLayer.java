@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.vr;
 
 import java.util.ArrayList;
@@ -21,6 +22,9 @@ public class RenderingLayer<E extends ImageElement> {
   public static final String P_DYNAMIC_QUALITY = "volume.dynamic.quality";
   public static final String P_MAX_TEX_XY = "volume.texture.max.xy";
   public static final String P_MAX_TEX_Z = "volume.texture.max.z";
+
+  /** Whether a CT volume opens smoothed (on by default), see DicomVolTexture#isSmoothing(). */
+  public static final String P_SMOOTH_CT = "volume.smooth.ct";
 
   public static final int MAX_QUALITY = 8192;
   public static final int MIN_QUALITY = 128;

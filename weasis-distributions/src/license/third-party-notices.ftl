@@ -122,6 +122,19 @@ A4. Icons
     - Icons by Icons8 (We love SVG), MIT licence, https://github.com/icons8/welovesvg
     - Other icons and resources of the Weasis project, Apache-2.0.
 
+A5. X-ray templating page (weasis-dicom-templating)
+    The Template button opens Addis Ortho's X-ray templating page, which the viewer serves on
+    this computer only (127.0.0.1). The page and the Addis Ortho implant outlines are by
+    Addis Ortho Trading PLC, Apache-2.0. The page decodes compressed X-rays with these
+    WebAssembly decoders, shipped unchanged inside the bundle (templating-web/vendor, with
+    their licence files):
+    - @cornerstonejs/codec-charls 1.2.7 (JPEG-LS), MIT licence, Copyright (c) 2020 Chris Hafey;
+      built from CharLS, BSD 3-clause licence, https://github.com/team-charls/charls
+    - @cornerstonejs/codec-openjpeg 1.3.6 (JPEG 2000), MIT licence; built from OpenJPEG,
+      BSD 2-clause licence, https://github.com/uclouvain/openjpeg
+    - jpeg-lossless-decoder-js 2.1.2 (JPEG lossless), MIT licence, Copyright (c) 2015
+      RII-UTHSCSA
+
 
 B. JAVA LIBRARIES AND OSGI BUNDLES (generated at build time, grouped by licence)
 --------------------------------------------------------------------------------

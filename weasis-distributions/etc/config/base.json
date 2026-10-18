@@ -2,7 +2,7 @@
   "weasisPreferences": [
     {
       "code": "framework.system.packages.extra.basic",
-      "value": "ch.qos.logback.classic,ch.qos.logback.classic.encoder,ch.qos.logback.classic.spi,ch.qos.logback.core,ch.qos.logback.core.encoder,ch.qos.logback.core.rolling,ch.qos.logback.core.util,com.formdev.flatlaf, com.formdev.flatlaf.extras, com.formdev.flatlaf.extras.components, com.formdev.flatlaf.icons, com.formdev.flatlaf.ui, com.formdev.flatlaf.util, com.sun.awt, com.sun.image.codec.jpeg, com.sun.imageio.spi, com.sun.management, javax.accessibility, javax.imageio, javax.imageio.event, javax.imageio.metadata, javax.imageio.plugins.jpeg, javax.imageio.spi, javax.imageio.stream, javax.media, javax.sound.sampled, javax.swing, javax.swing.border, javax.swing.event, javax.swing.filechooser, javax.swing.plaf, javax.swing.plaf.basic, javax.swing.plaf.metal, javax.swing.table, javax.swing.text, javax.swing.tree, javax.xml.bind, javax.xml.parsers, javax.xml.namespace, javax.xml.stream, javax.xml.transform, javax.xml.transform.stax, javax.xml.validation, net.miginfocom.layout, net.miginfocom.swing, org.slf4j, org.w3c.dom, org.weasis.pref, org.xml.sax, org.xml.sax.ext, org.xml.sax.helpers, sun.awt, sun.awt.geom, sun.awt.image, sun.awt.image.codec, sun.java2d.opengl, sun.security.action, sun.misc, sun.net.www.protocol.file, sun.reflect",
+      "value": "ch.qos.logback.classic,ch.qos.logback.classic.encoder,ch.qos.logback.classic.spi,ch.qos.logback.core,ch.qos.logback.core.encoder,ch.qos.logback.core.rolling,ch.qos.logback.core.util,com.formdev.flatlaf, com.formdev.flatlaf.extras, com.formdev.flatlaf.extras.components, com.formdev.flatlaf.icons, com.formdev.flatlaf.ui, com.formdev.flatlaf.util, com.sun.awt, com.sun.image.codec.jpeg, com.sun.imageio.spi, com.sun.management, com.sun.net.httpserver, javax.accessibility, javax.imageio, javax.imageio.event, javax.imageio.metadata, javax.imageio.plugins.jpeg, javax.imageio.spi, javax.imageio.stream, javax.media, javax.sound.sampled, javax.swing, javax.swing.border, javax.swing.event, javax.swing.filechooser, javax.swing.plaf, javax.swing.plaf.basic, javax.swing.plaf.metal, javax.swing.table, javax.swing.text, javax.swing.tree, javax.xml.bind, javax.xml.parsers, javax.xml.namespace, javax.xml.stream, javax.xml.transform, javax.xml.transform.stax, javax.xml.validation, net.miginfocom.layout, net.miginfocom.swing, org.slf4j, org.w3c.dom, org.weasis.pref, org.xml.sax, org.xml.sax.ext, org.xml.sax.helpers, sun.awt, sun.awt.geom, sun.awt.image, sun.awt.image.codec, sun.java2d.opengl, sun.security.action, sun.misc, sun.net.www.protocol.file, sun.reflect",
       "description": "List of additional packages for Felix (by default only java.* is visible in main class loader)",
       "type": "A",
       "category": "FELIX_CONFIG"
@@ -165,7 +165,7 @@
     },
     {
       "code": "felix.auto.start.110",
-      "value": "${dollar}{weasis.codebase.url}/bundle/weasis-dicom-send-${app.version}.jar${xz.ext} ${dollar}{weasis.codebase.url}/bundle/weasis-dicom-isowriter-${app.version}.jar${xz.ext} ${dollar}{weasis.codebase.url}/bundle/weasis-dicom-qr-${app.version}.jar${xz.ext}",
+      "value": "${dollar}{weasis.codebase.url}/bundle/weasis-dicom-send-${app.version}.jar${xz.ext} ${dollar}{weasis.codebase.url}/bundle/weasis-dicom-isowriter-${app.version}.jar${xz.ext} ${dollar}{weasis.codebase.url}/bundle/weasis-dicom-qr-${app.version}.jar${xz.ext} ${dollar}{weasis.codebase.url}/bundle/weasis-dicom-templating-${app.version}.jar${xz.ext}",
       "description": "DICOM send, Q/R and ISO writer",
       "type": "A",
       "category": "FELIX_INSTALL"
@@ -188,6 +188,13 @@
       "code": "felix.auto.install.121",
       "value": "${dollar}{weasis.codebase.url}/bundle/jogamp-${native.library.spec}-${jogamp.version}.jar${xz.ext}",
       "description": "JOGL native package",
+      "type": "A",
+      "category": "FELIX_INSTALL"
+    },
+    {
+      "code": "felix.auto.start.125",
+      "value": "${dollar}{weasis.codebase.url}/bundle/weasis-dicom-bones-${app.version}.jar${xz.ext}",
+      "description": "Addis Ortho bone surface export (STL), after the 3D viewer",
       "type": "A",
       "category": "FELIX_INSTALL"
     },
@@ -251,6 +258,13 @@
       "type": "A",
       "javaType": "BOOLEAN",
       "category": "LOG"
+    },
+    {
+      "code": "addisortho.build",
+      "value": "${build.stamp}",
+      "description": "Addis Ortho installer build stamp: a new stamp makes the launcher clean its plug-in cache",
+      "type": "A",
+      "category": "LOCK"
     },
     {
       "code": "weasis.version",
@@ -394,6 +408,20 @@
       "code": "weasis.help.shortcuts",
       "value": "https://nroduit.github.io/en/basics/shortcuts",
       "description": "Provides a list of available shortcuts.",
+      "type": "A",
+      "category": "DOC"
+    },
+    {
+      "code": "addisortho.help.download",
+      "value": "https://github.com/DrSamiOrtho/addisortho-dicom-viewer/releases",
+      "description": "Addis Ortho's download page, opened by Help > Download page. Placeholder (the GitHub releases page) until the owner supplies the page. The menu item is hidden when the value is empty.",
+      "type": "A",
+      "category": "DOC"
+    },
+    {
+      "code": "addisortho.help.support",
+      "value": "",
+      "description": "Addis Ortho's support channel on Telegram (a https://t.me/... link), opened by Help > Support (Telegram). Empty until the owner supplies it; the menu item is hidden when the value is empty.",
       "type": "A",
       "category": "DOC"
     },

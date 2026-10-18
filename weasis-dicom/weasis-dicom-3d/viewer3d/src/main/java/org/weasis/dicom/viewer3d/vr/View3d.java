@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.vr;
 
 import com.jogamp.common.nio.Buffers;
@@ -184,6 +185,16 @@ public class View3d extends VolumeCanvas
 
   /** {@code true} while an asynchronous seg texture build is running for this view. */
   private volatile boolean segBuildRunning;
+
+  /** Renders the segments from their trilinear occupancy rather than the nearest label voxel. */
+  private volatile boolean segSmooth = true;
+
+  /** 1×1×1 placeholder keeping the occupancy sampler unit complete, see bindSegTextures. */
+  private int segOccupancyPlaceholderId;
+
+  private volatile boolean cropEnabled;
+
+  private volatile CropBox cropBox = CropBox.FULL;
 
   /**
    * Per-view auto-sync button rendered as a corner overlay. Lazily created the first time {@link
@@ -595,6 +606,12 @@ public class View3d extends VolumeCanvas
     program.allocateUniform(
         gl, "shading", (g, loc) -> g.glUniform1i(loc, renderingLayer.isShading() ? 1 : 0));
     program.allocateUniform(
+        gl, "smoothShading", (g, loc) -> g.glUniform1i(loc, isVolumeSmooth() ? 1 : 0)); // NON-NLS
+    program.allocateUniform(
+        gl,
+        "accurateBlending",
+        (g, loc) -> g.glUniform1i(loc, isVolumeSmooth() ? 1 : 0)); // NON-NLS
+    program.allocateUniform(
         gl,
         "texelSize",
         (g, loc) -> {
@@ -752,6 +769,28 @@ public class View3d extends VolumeCanvas
         gl, "segTexture", (g, loc) -> g.glUniform1i(loc, SegVolumeTexture.SEG_TEXTURE_UNIT));
     program.allocateUniform(
         gl, "segColorMap", (g, loc) -> g.glUniform1i(loc, SegVolumeTexture.SEG_COLOR_UNIT));
+    program.allocateUniform(
+        gl,
+        "segOccTexture", // NON-NLS
+        (g, loc) -> g.glUniform1i(loc, SegVolumeTexture.SEG_OCCUPANCY_UNIT));
+    program.allocateUniform(
+        gl, "segSmooth", (g, loc) -> g.glUniform1i(loc, isSegSmoothReady() ? 1 : 0)); // NON-NLS
+
+    // Crop box in normalised volume-texture space, the whole volume when the crop is off
+    program.allocateUniform(
+        gl,
+        "cropMin", // NON-NLS
+        (g, loc) -> {
+          CropBox box = getEffectiveCropBox();
+          g.glUniform3f(loc, (float) box.minX(), (float) box.minY(), (float) box.minZ());
+        });
+    program.allocateUniform(
+        gl,
+        "cropMax", // NON-NLS
+        (g, loc) -> {
+          CropBox box = getEffectiveCropBox();
+          g.glUniform3f(loc, (float) box.maxX(), (float) box.maxY(), (float) box.maxZ());
+        });
 
     quadProgram.init(gl);
     // Blit uniforms: the compute path writes its image to unit 0 and always fills it entirely,
@@ -772,6 +811,12 @@ public class View3d extends VolumeCanvas
         (long) vertexBufferData.length * Float.BYTES,
         Buffers.newDirectFloatBuffer(vertexBufferData),
         GL.GL_STATIC_DRAW);
+  }
+
+  /** Smooth rendering of the volume, see DicomVolTexture#isSmoothing(). */
+  private boolean isVolumeSmooth() {
+    DicomVolTexture tex = volTexture;
+    return tex != null && tex.isSmoothing() && !isSegMode();
   }
 
   private boolean isSegMode() {
@@ -827,8 +872,12 @@ public class View3d extends VolumeCanvas
     SegVolumeTexture svt = segVolumeTexture;
     if (svt != null && svt.isReady()) {
       svt.bind(gl);
+      if (!svt.bindOccupancy(gl)) {
+        bindOccupancyPlaceholder(gl);
+      }
       return;
     }
+    bindOccupancyPlaceholder(gl);
     if (segPlaceholderTextureId <= 0) {
       IntBuffer buf = IntBuffer.allocate(2);
       gl.glGenTextures(2, buf);
@@ -870,6 +919,33 @@ public class View3d extends VolumeCanvas
       gl.glBindTexture(GL2ES2.GL_TEXTURE_3D, segPlaceholderTextureId);
       gl.glActiveTexture(GL.GL_TEXTURE0 + SegVolumeTexture.SEG_COLOR_UNIT);
       gl.glBindTexture(GL.GL_TEXTURE_2D, segPlaceholderColorId);
+    }
+    gl.glActiveTexture(GL.GL_TEXTURE0);
+  }
+
+  /** Binds an empty 1×1×1 occupancy on its unit, for the same reason as in bindSegTextures. */
+  private void bindOccupancyPlaceholder(GL2ES2 gl) {
+    gl.glActiveTexture(GL.GL_TEXTURE0 + SegVolumeTexture.SEG_OCCUPANCY_UNIT);
+    if (segOccupancyPlaceholderId <= 0) {
+      int[] ids = new int[1];
+      gl.glGenTextures(1, ids, 0);
+      segOccupancyPlaceholderId = ids[0];
+      gl.glBindTexture(GL2ES2.GL_TEXTURE_3D, segOccupancyPlaceholderId);
+      gl.glTexParameteri(GL2ES2.GL_TEXTURE_3D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST);
+      gl.glTexParameteri(GL2ES2.GL_TEXTURE_3D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST);
+      gl.glTexImage3D(
+          GL2ES2.GL_TEXTURE_3D,
+          0,
+          GL.GL_R8,
+          1,
+          1,
+          1,
+          0,
+          GL2ES2.GL_RED,
+          GL.GL_UNSIGNED_BYTE,
+          Buffers.newDirectByteBuffer(4));
+    } else {
+      gl.glBindTexture(GL2ES2.GL_TEXTURE_3D, segOccupancyPlaceholderId);
     }
     gl.glActiveTexture(GL.GL_TEXTURE0);
   }
@@ -1209,6 +1285,8 @@ public class View3d extends VolumeCanvas
     // current GL context), so stash the LUT — SegVolumeTexture.bind() uploads it on the GL
     // thread at the next render. buildSegmentColorLUT() is pure CPU work.
     newSvt.setPendingColorLut(newSvt.getSegVolume().buildSegmentColorLUT(buildRegionOverrideMap()));
+    newSvt.setOccupancyListener(this::display);
+    newSvt.setSmoothSurfaces(segSmooth);
 
     SegVolumeTexture old = this.segVolumeTexture;
     this.segVolumeTexture = newSvt;
@@ -1390,6 +1468,52 @@ public class View3d extends VolumeCanvas
       return 1;
     }
     return segType == Type.SEG_MASK_EXCLUDE ? 2 : 0;
+  }
+
+  public boolean isSegSmooth() {
+    return segSmooth;
+  }
+
+  /** Renders the segments as smooth surfaces (trilinear occupancy) or as label voxels. */
+  public void setSegSmooth(boolean smooth) {
+    if (smooth != segSmooth) {
+      this.segSmooth = smooth;
+      SegVolumeTexture svt = segVolumeTexture;
+      if (svt != null) {
+        svt.setSmoothSurfaces(smooth);
+      }
+      display();
+    }
+  }
+
+  /** {@code true} when the segments are rendered and their occupancy texture is up to date. */
+  private boolean isSegSmoothReady() {
+    SegVolumeTexture svt = segVolumeTexture;
+    return svt != null && isSegTextureActive() && svt.isSmoothSurfaceReady();
+  }
+
+  public boolean isCropEnabled() {
+    return cropEnabled;
+  }
+
+  public CropBox getCropBox() {
+    return cropBox;
+  }
+
+  /**
+   * Sets the crop box applied to the volume rendering.
+   *
+   * @param adjusting {@code true} while a slider is dragged, to render at the interactive quality
+   */
+  public void setCropBox(boolean enabled, CropBox box, boolean adjusting) {
+    this.cropEnabled = enabled;
+    this.cropBox = Objects.requireNonNull(box);
+    camera.setAdjusting(adjusting);
+    display();
+  }
+
+  private CropBox getEffectiveCropBox() {
+    return cropEnabled ? cropBox : CropBox.FULL;
   }
 
   private void destroySegTexture() {
@@ -1714,7 +1838,7 @@ public class View3d extends VolumeCanvas
 
   @Override
   public List<Action> getExportActions() {
-    return null;
+    return View3dSnapshot.getExportActions(this);
   }
 
   public MouseActionAdapter getMouseAdapter(String command) {
@@ -1829,6 +1953,9 @@ public class View3d extends VolumeCanvas
       count = addSeparatorToPopupMenu(popupMenu, count);
 
       GuiUtils.addItemToMenu(popupMenu, buildSyncOptionsMenu());
+      count = addSeparatorToPopupMenu(popupMenu, count);
+
+      getExportActions().forEach(popupMenu::add);
       count = addSeparatorToPopupMenu(popupMenu, count);
 
       GuiUtils.addItemToMenu(popupMenu, manager.getResetMenu(null));

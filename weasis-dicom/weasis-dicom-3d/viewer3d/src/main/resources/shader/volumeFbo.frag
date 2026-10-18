@@ -1,4 +1,5 @@
 #version 330 core
+// Modified by Addis Ortho Trading PLC, 2026.
 // FBO-based volume rendering fragment shader.
 // This is the OpenGL 3.3-compatible fallback for the compute shader (volume.comp).
 // It performs identical ray-casting but as a fragment shader over a full-screen quad,
@@ -19,6 +20,7 @@ uniform sampler2D colorMap;     // unit 1 — set from Java
 uniform sampler2D lightingMap;  // unit 2 — set from Java
 uniform usampler3D segTexture;  // unit 4 — set from Java
 uniform sampler2D segColorMap;  // unit 5 — set from Java
+uniform sampler3D segOccTexture; // unit 6 — set from Java
 
 #include "voxelUniforms330.glsl"
 

@@ -163,3 +163,36 @@ that lack the line:
 
 The output should only hold the files `NOTICE` lists (JSON, images, `Licence.txt`) and files that Addis
 Ortho wrote entirely. Use the tag you merged last instead of `v4.7.3`.
+
+## Templating and 3D bones (14 Oct 2026)
+
+Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automatic or automatic, not reviewed.
+
+- `weasis-dicom/weasis-dicom-templating`: the **Template** button (2D viewer toolbar) opens the selected CR/DX/DR/RG
+  X-ray in the X-ray templating page, offline: a local server on 127.0.0.1 (port 47210 when free) with a one-time
+  token per X-ray serves the page's viewer build (Addis Ortho BE2, BE, cementless cup and total knee only) and takes
+  back the plan picture, which loads into the X-ray's study. The page lives in the templating project
+  (CENTER/EMR-POC/pacs-trial/templating, `build_viewer.sh`); copy it in with `sync-templating-web.sh`, which checks every
+  file against `BUILD.txt`. The protocol and its browser test: the templating project's `workflow/28o_templating_viewer.py`.
+  Needs `jdk.httpserver` in the installer runtime (`launch-options.sh`) and `com.sun.net.httpserver` in both `base.json`.
+- `weasis-dicom/weasis-dicom-bones` (3D view tool panels):
+  - **Bone STL**: one segment of a shown SEG as a binary STL, mm, DICOM LPS.
+  - **Bone select (region grow)**: seeded HU region grow (default 200-3000 HU) with closing, hole filling and optional
+    separation, written as a SEG (series 902) in the study; for knee bones and fragments without a licence.
+  - **Make 3D bones**: runs the owner's TotalSegmentator pipeline (`planning/make_3d.sh`, free model: hip, shoulder,
+    spine) where it is installed, and opens its results in the study.
+- `viewer3d`: Smooth surfaces for segments, a crop box, and "Save 3D picture to the study" / "Copy 3D picture".
+
+## Brand footer and Help links (18 Oct 2026)
+
+- Footer: view pictures saved or copied from the screenshot dialog (view mode) and 3D pictures (copied or saved
+  to the study) get a thin strip below the picture, white on `#034537`, naming `weasis.name`. The templating
+  page's saved picture (PNG, DICOM, saved to the viewer) says "Templated with Addis Ortho Viewer" at the foot of
+  its report column. One switch turns all of them off: Preferences, General (`addisortho.picture.footer`,
+  default on; the viewer adds `footer=0` to the templating page's address when it is off). Image mode (raw
+  pixels) and the explorer's image export are not touched. The templating page's "leave out the patient's
+  name" switch is unchanged.
+- `app.js` in `templating-web` was patched here (BUILD.txt updated), so the change must also go into the
+  templating project's `web/app.js` before the next `sync-templating-web.sh`, or the sync drops it.
+- Help, Download page (`addisortho.help.download`) and Help, Support (Telegram) (`addisortho.help.support`) in
+  `weasis-distributions/etc/config/base.json`; each is hidden when empty.

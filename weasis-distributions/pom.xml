@@ -186,6 +186,19 @@
               <locale>en</locale>
             </configuration>
           </execution>
+          <execution>
+            <!-- Addis Ortho: the build stamp that makes the launcher refresh its plug-in cache -->
+            <id>build-stamp-property</id>
+            <goals>
+              <goal>timestamp-property</goal>
+            </goals>
+            <configuration>
+              <name>build.stamp</name>
+              <pattern>yyyyMMddHHmmss</pattern>
+              <timeZone>UTC</timeZone>
+              <locale>en</locale>
+            </configuration>
+          </execution>
         </executions>
       </plugin>
 
@@ -502,6 +515,20 @@
                 <artifactItem>
                   <groupId>org.weasis.dicom</groupId>
                   <artifactId>weasis-dicom-send</artifactId>
+                  <version>${app.version}</version>
+                  <outputDirectory>${tmp.bundle.dir}</outputDirectory>
+                </artifactItem>
+                <artifactItem>
+                  <!-- Addis Ortho bone surface export (STL) for the 3D viewer -->
+                  <groupId>org.weasis.dicom</groupId>
+                  <artifactId>weasis-dicom-bones</artifactId>
+                  <version>${app.version}</version>
+                  <outputDirectory>${tmp.bundle.dir}</outputDirectory>
+                </artifactItem>
+                <artifactItem>
+                  <!-- Addis Ortho X-ray templating (Template button and the offline templating page) -->
+                  <groupId>org.weasis.dicom</groupId>
+                  <artifactId>weasis-dicom-templating</artifactId>
                   <version>${app.version}</version>
                   <outputDirectory>${tmp.bundle.dir}</outputDirectory>
                 </artifactItem>
