@@ -25,6 +25,8 @@ const STANDALONE = document.documentElement.dataset.mode === 'standalone';
 // the archive (dicomweb, wado, store) for the one X-ray it hands over: offline, Addis Ortho primary hip and knee ranges
 // only. Only words differ from the hospital copy: the plan goes into the viewer, which can send it on to PACS.
 const VIEWER = document.documentElement.dataset.mode === 'viewer';
+// the viewer's own footer on the saved picture; the viewer adds footer=0 when its preference is off (18 Oct 2026)
+const FOOTER = VIEWER && new URLSearchParams(location.search).get('footer') !== '0' ? 'Templated with Addis Ortho Viewer' : '';
 const SEND = VIEWER ? 'Save in the viewer' : 'Send to PACS', DEST = VIEWER ? 'the viewer' : 'PACS', SRCN = VIEWER ? 'the viewer' : 'archive';
 const RS = '../dicomweb', WADO = '../wado';            // relative to /openmrs/aoc/pacs/templating/ (pacs-web, read-only)
 const EXPLICIT_LE = '1.2.840.10008.1.2.1';
@@ -3446,7 +3448,8 @@ function exportCanvas(maxSide = 3600) {
   items.push(['sub', 'A printout is not true size; measure on screen or use the scale bar.']);
   const lines = []; for (const [kind, text, cls] of items) for (const l of wrap(text, repW - 2 * pad)) lines.push([kind, l, cls]);
   const logoH = LOGO.complete && LOGO.naturalWidth ? Math.round(56 * lw) : 0;
-  const H = Math.max(H0, Math.round(pad * 2 + logoH + lines.length * lh + 10 * lw));
+  const footH = FOOTER ? 2 * lh : 0;
+  const H = Math.max(H0, Math.round(pad * 2 + logoH + lines.length * lh + 10 * lw + footH));
   const c = document.createElement('canvas'); c.width = W0 + repW; c.height = H;
   const g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, W0, H);
   g.save(); g.setTransform(scale, 0, 0, scale, -bx0 * scale, -by0 * scale);
@@ -3484,6 +3487,7 @@ function exportCanvas(maxSide = 3600) {
     g.fillStyle = kind === 'title' || kind === 'head' ? COL.green : kind === 'sub' ? '#444' : cls === 'bad' ? '#a40000' : cls === 'warn' ? '#8a5a00' : '#000';
     g.fillText(text, W0 + pad, y);
   }
+  if (FOOTER) { g.font = `${fs * 0.9}px system-ui, sans-serif`; g.fillStyle = COL.green; g.fillText(FOOTER, W0 + pad, H - pad); }   // at the foot of the report column
   return c;
 }
 // landmarks marked red (refused): saving or sending a plan built on them needs them fixed first (Fable, 11 Oct)

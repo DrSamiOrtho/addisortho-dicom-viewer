@@ -48,6 +48,7 @@ import org.weasis.core.api.media.data.MediaSeriesGroup;
 import org.weasis.core.api.media.data.TagW;
 import org.weasis.core.api.util.ResourceUtil;
 import org.weasis.core.api.util.ResourceUtil.ActionIcon;
+import org.weasis.core.ui.editor.image.ViewTransferHandler;
 import org.weasis.core.ui.util.DefaultAction;
 import org.weasis.dicom.codec.DcmMediaReader;
 import org.weasis.dicom.codec.DicomImageElement;
@@ -77,6 +78,23 @@ public final class View3dSnapshot {
         pixels[i] = (rgb[j] & 0xFF) << 16 | (rgb[j + 1] & 0xFF) << 8 | rgb[j + 2] & 0xFF;
       }
       return image;
+    }
+
+    /** The frame with the viewer's footer below it, when that preference is on. */
+    public Frame withFooter() {
+      if (!ViewTransferHandler.isFooterEnabled()) {
+        return this;
+      }
+      BufferedImage image = ViewTransferHandler.addFooter(toImage(), AppProperties.WEASIS_NAME);
+      int[] pixels =
+          image.getRGB(0, 0, image.getWidth(), image.getHeight(), null, 0, image.getWidth());
+      byte[] out = new byte[pixels.length * 3];
+      for (int i = 0, j = 0; i < pixels.length; i++, j += 3) {
+        out[j] = (byte) (pixels[i] >> 16);
+        out[j + 1] = (byte) (pixels[i] >> 8);
+        out[j + 2] = (byte) pixels[i];
+      }
+      return new Frame(image.getWidth(), image.getHeight(), out);
     }
   }
 
@@ -220,7 +238,7 @@ public final class View3dSnapshot {
       showError(view);
       return;
     }
-    BufferedImage image = frame.get().toImage();
+    BufferedImage image = ViewTransferHandler.withFooter(frame.get().toImage());
     Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new ImageSelection(image), null);
   }
 
@@ -239,7 +257,8 @@ public final class View3dSnapshot {
       return;
     }
     List<SourceInstance> instances = sourceInstances(series);
-    CompletableFuture.supplyAsync(() -> writeSeries(source, instances, frame.get()))
+    Frame withFooter = frame.get().withFooter();
+    CompletableFuture.supplyAsync(() -> writeSeries(source, instances, withFooter))
         .whenComplete(
             (picture, e) ->
                 GuiExecutor.execute(
