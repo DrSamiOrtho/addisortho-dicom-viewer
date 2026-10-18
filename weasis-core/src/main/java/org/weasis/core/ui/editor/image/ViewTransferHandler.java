@@ -7,11 +7,16 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.core.ui.editor.image;
 
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.Transferable;
 import java.awt.datatransfer.UnsupportedFlavorException;
@@ -20,6 +25,8 @@ import java.awt.image.RenderedImage;
 import javax.swing.JComponent;
 import javax.swing.TransferHandler;
 import org.weasis.core.api.gui.model.ViewModel;
+import org.weasis.core.api.gui.util.AppProperties;
+import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.media.data.ImageElement;
 import org.weasis.core.ui.model.layer.LayerItem;
 import org.weasis.core.ui.model.utils.imp.DefaultViewModel;
@@ -27,6 +34,11 @@ import org.weasis.core.ui.util.ImagePrint;
 import org.weasis.opencv.op.ImageConversion;
 
 public class ViewTransferHandler extends TransferHandler implements Transferable {
+
+  /** System preference: a footer naming the viewer under exported pictures (default on). */
+  public static final String P_PICTURE_FOOTER = "addisortho.picture.footer"; // NON-NLS
+
+  private static final Color FOOTER_BACKGROUND = new Color(0x03, 0x45, 0x37);
 
   private static final DataFlavor[] flavors = {DataFlavor.imageFlavor};
   private Image image;
@@ -114,6 +126,43 @@ public class ViewTransferHandler extends TransferHandler implements Transferable
     } finally {
       exportImage.disposeView();
     }
-    return img;
+    return withFooter(img);
+  }
+
+  public static boolean isFooterEnabled() {
+    return GuiUtils.getUICore().getSystemPreferences().getBooleanProperty(P_PICTURE_FOOTER, true);
+  }
+
+  /**
+   * The picture with a thin strip below it naming the viewer (white on the brand green), never over
+   * the image itself; the picture unchanged when the footer preference is off.
+   */
+  public static BufferedImage withFooter(BufferedImage image) {
+    return isFooterEnabled() ? addFooter(image, AppProperties.WEASIS_NAME) : image;
+  }
+
+  /** The picture with the footer strip naming {@code text}, whatever the preference. */
+  public static BufferedImage addFooter(BufferedImage image, String text) {
+    int width = image.getWidth();
+    int stripHeight = Math.max(16, Math.round(Math.max(width, image.getHeight()) / 60f));
+    BufferedImage out =
+        new BufferedImage(width, image.getHeight() + stripHeight, BufferedImage.TYPE_3BYTE_BGR);
+    Graphics2D g = out.createGraphics();
+    try {
+      g.drawImage(image, 0, 0, null);
+      g.setColor(FOOTER_BACKGROUND);
+      g.fillRect(0, image.getHeight(), width, stripHeight);
+      g.setRenderingHint(
+          RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+      g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, Math.round(stripHeight * 0.62f)));
+      FontMetrics fm = g.getFontMetrics();
+      int x = Math.max(4, width - fm.stringWidth(text) - stripHeight / 2);
+      int y = image.getHeight() + (stripHeight - fm.getHeight()) / 2 + fm.getAscent();
+      g.setColor(Color.WHITE);
+      g.drawString(text, x, y);
+    } finally {
+      g.dispose();
+    }
+    return out;
   }
 }
