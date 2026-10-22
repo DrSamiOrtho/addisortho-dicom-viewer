@@ -23,18 +23,23 @@ case "$1" in
     customOptions=("--java-options" "-splash:\$APPDIR/resources/images/about-round.png" \
     "--java-options" "-Dapple.laf.useScreenMenuBar=true" \
     "--java-options" "-Dapple.awt.application.appearance=NSAppearanceNameDarkAqua" \
-    "--java-options" "-Dapple.awt.application.name=\"Addis Ortho DICOM Viewer\"")
+    "--java-options" "-Dapple.awt.application.name=\"Addis Ortho DICOM Viewer\"" \
+    "--java-options" "-XX:MaxRAMPercentage=25")
     ;;
   windows)
     JDK_MODULES="$JDK_MODULES_BASE,jdk.crypto.mscapi"
-    customOptions=("--java-options" "-splash:\$APPDIR\resources\images\about-round.png")
+    # Hospital Windows PCs often have 8 GB of RAM: a quarter of it (2 GB) is too little for a CT
+    # series with 3D and segmentation open, so the viewer may use half of the memory there.
+    customOptions=("--java-options" "-splash:\$APPDIR\resources\images\about-round.png" \
+    "--java-options" "-XX:MaxRAMPercentage=50")
     ;;
   linux)
     JDK_MODULES="$JDK_MODULES_BASE"
     # sun.awt.disablegrab works around unreliable X11 pointer grabs on XWayland (GNOME/mutter),
     # which can leave Swing popup menus invisible until the window regains focus (see issue #819).
     customOptions=("--java-options" "-splash:\$APPDIR/resources/images/about-round.png" \
-    "--java-options" "-Dsun.awt.disablegrab=true")
+    "--java-options" "-Dsun.awt.disablegrab=true" \
+    "--java-options" "-XX:MaxRAMPercentage=25")
     ;;
   *)
     echo -e "ERROR: launch-options.sh expects a platform (macosx, windows or linux), got '$1'" >&2
@@ -42,13 +47,13 @@ case "$1" in
     ;;
 esac
 
-# Options applied to the main Weasis launcher on every platform. The Dicomizer launcher does not
+# Options applied to the main Weasis launcher on every platform (the heap limit, MaxRAMPercentage,
+# is set per platform above). The Dicomizer launcher does not
 # inherit them: jpackage drops the command line --java-options as soon as an --add-launcher
 # properties file defines java-options, so they are repeated in
 # resources/<platform>/dicomizer-launcher.properties.
 commonOptions=("--java-options" "-Dgosh.port=17179" \
 "--java-options" "--enable-native-access=ALL-UNNAMED" \
-"--java-options" "-XX:MaxRAMPercentage=25" \
 "--java-options" "-XX:+UseStringDeduplication" \
 "--java-options" "-Djavax.accessibility.assistive_technologies=org.weasis.launcher.EmptyAccessibilityProvider" \
 "--java-options" "-Djavax.accessibility.screen_magnifier_present=false")
