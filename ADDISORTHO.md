@@ -186,6 +186,8 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
     (double-click), colour and Delete. Every step is an `EditHistory` entry of the 3D view, so Ctrl+Z walks through bone
     steps, cuts and crops together. Bones are immutable (`Bone`, `grow/BoxMask`); the SEG (series 902, segments
     numbered in list order) is rewritten in the background after each step (`SegWriteWorker`, one at a time).
+    The bone to click is chosen by region, bone and side (`BoneNames`: the whole skeleton, about 90 bones, each with
+    its region's grow settings); the new bone is named "Right femur", "L3" and so on, and rename offers the same list.
   - **Make 3D bones**: runs the owner's TotalSegmentator pipeline (`planning/make_3d.sh`, free model: hip, shoulder,
     spine) where it is installed, and opens its results in the study.
 - `viewer3d`: Smooth surfaces for segments, a crop box, and "Save 3D picture to the study" / "Copy 3D picture".

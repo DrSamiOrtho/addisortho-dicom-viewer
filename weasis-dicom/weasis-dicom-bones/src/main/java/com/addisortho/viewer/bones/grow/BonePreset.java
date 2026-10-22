@@ -40,12 +40,23 @@ public record BonePreset(
   /** One vertebra, cut from its neighbours. */
   public static final BonePreset SPINE = new BonePreset("preset.spine", 180, 1, 2, 100);
 
+  /** Elbow and forearm: radius and ulna cut from each other and from the humerus. */
+  public static final BonePreset ARM = new BonePreset("preset.arm", 200, 1, 2, 50);
+
+  /** Wrist and hand: small bones close together, small pieces kept. */
+  public static final BonePreset HAND = new BonePreset("preset.hand", 200, 1, 1, 10);
+
+  /** Ribs and sternum: thin cortex. */
+  public static final BonePreset CHEST = new BonePreset("preset.chest", 150, 1, 1, 50);
+
   /** Any other bone: the plain defaults, every setting at hand. */
   public static final BonePreset OTHER =
       new BonePreset("preset.other", GrowOptions.DEFAULT_LOWER_HU, 1, 0, 100);
 
   /** In the order of the list. */
-  public static final BonePreset[] ALL = {PELVIS, FEMUR, KNEE, LEG, SHOULDER, SPINE, OTHER};
+  public static final BonePreset[] ALL = {
+    PELVIS, FEMUR, KNEE, LEG, SHOULDER, ARM, HAND, SPINE, CHEST, OTHER
+  };
 
   /**
    * The grow options of this preset.

@@ -128,7 +128,10 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
-  private final JComboBox<String> presetBox = new JComboBox<>();
+  private final JComboBox<BoneNames.Region> regionBox =
+      new JComboBox<>(BoneNames.REGIONS.toArray(BoneNames.Region[]::new));
+  private final JComboBox<BoneNames.Name> boneBox = new JComboBox<>();
+  private final JComboBox<BoneNames.Side> sideBox = new JComboBox<>(BoneNames.Side.values());
   private final Map<Tool, JToggleButton> toolButtons = new LinkedHashMap<>();
   private final JLabel toolHint = new JLabel();
   private final JProgressBar progressBar = new JProgressBar(0, 100);
@@ -191,12 +194,18 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     int gap = 7;
 
     panel.add(GuiUtils.getFlowLayoutPanel(new JLabel(Messages.getString("BoneGrowTool.how"))));
-    for (BonePreset preset : BonePreset.ALL) {
-      presetBox.addItem(Messages.getString(preset.key()));
-    }
-    presetBox.setToolTipText(Messages.getString("BoneGrowTool.preset.tip"));
-    presetBox.addActionListener(_ -> applyPreset());
-    panel.add(row(Messages.getString("BoneGrowTool.preset"), presetBox));
+    regionBox.setMaximumRowCount(12);
+    boneBox.setMaximumRowCount(20);
+    regionBox.setToolTipText(Messages.getString("BoneGrowTool.region.tip"));
+    boneBox.setToolTipText(Messages.getString("BoneGrowTool.preset.tip"));
+    sideBox.setToolTipText(Messages.getString("BoneGrowTool.side.tip"));
+    regionBox.addActionListener(_ -> fillBones());
+    boneBox.addActionListener(_ -> applyPreset());
+    panel.add(row(Messages.getString("BoneGrowTool.region"), regionBox));
+    panel.add(GuiUtils.boxVerticalStrut(3));
+    panel.add(row(Messages.getString("BoneGrowTool.preset"), boneBox));
+    panel.add(GuiUtils.boxVerticalStrut(3));
+    panel.add(row(Messages.getString("BoneGrowTool.side"), sideBox));
     panel.add(GuiUtils.boxVerticalStrut(gap));
 
     JPanel tools = GuiUtils.getFlowLayoutPanel();
@@ -259,19 +268,38 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     panel.add(GuiUtils.getFlowLayoutPanel(new JLabel(Messages.getString("BoneGrowTool.note"))));
     add(panel);
     add(GuiUtils.boxYLastElement(3));
-    presetBox.setSelectedIndex(0);
-    applyPreset();
+    regionBox.setSelectedIndex(0);
+    fillBones();
     setRunning(false);
     showHint();
   }
 
-  private BonePreset selectedPreset() {
-    int i = presetBox.getSelectedIndex();
-    return i < 0 ? BonePreset.OTHER : BonePreset.ALL[i];
+  /** Lists the bones of the chosen region. */
+  private void fillBones() {
+    BoneNames.Region region = (BoneNames.Region) regionBox.getSelectedItem();
+    boneBox.removeAllItems();
+    if (region != null) {
+      region.bones().forEach(boneBox::addItem);
+    }
+    if (boneBox.getItemCount() > 0) {
+      boneBox.setSelectedIndex(0);
+    }
+    applyPreset();
   }
 
-  /** Puts the settings of the chosen bone type in every field. */
+  private BoneNames.Name selectedName() {
+    return (BoneNames.Name) boneBox.getSelectedItem();
+  }
+
+  private BonePreset selectedPreset() {
+    BoneNames.Name name = selectedName();
+    return name == null ? BonePreset.OTHER : name.preset();
+  }
+
+  /** Puts the settings of the chosen bone in every field; the side only for a paired bone. */
   private void applyPreset() {
+    BoneNames.Name name = selectedName();
+    sideBox.setEnabled(name != null && name.paired());
     BonePreset p = selectedPreset();
     lowerSpinner.setValue((int) p.lowerHu());
     upperSpinner.setValue((int) GrowOptions.DEFAULT_UPPER_HU);
@@ -528,11 +556,12 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       return;
     }
     int id = session.newId();
+    BoneNames.Name chosen = selectedName();
+    List<String> taken = session.bones().stream().map(Bone::label).toList();
     String name =
-        String.format(
-            Messages.getString("BoneGrowTool.defaultName"),
-            Messages.getString(selectedPreset().key() + ".name"),
-            id);
+        chosen == null
+            ? Messages.getString("bone.other") + " " + id
+            : BoneNames.label(chosen, (BoneNames.Side) sideBox.getSelectedItem(), taken);
     Bone bone =
         new Bone(
             id,
@@ -748,18 +777,22 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     view.get().cutSegment(seg -> Objects.equals(sop, SegExplorer.sopUID(seg)), number, keep);
   }
 
+  /** Renames a bone: a name of the list, with its side, or any name typed in. */
   private void rename(CtSource ct, GrowSession session, Bone bone) {
-    Object answer =
-        JOptionPane.showInputDialog(
+    JComboBox<String> names = new JComboBox<>(BoneNames.labels().toArray(String[]::new));
+    names.setEditable(true);
+    names.setMaximumRowCount(20);
+    names.setSelectedItem(bone.label());
+    int answer =
+        JOptionPane.showConfirmDialog(
             WinUtil.getParentWindow(this),
-            Messages.getString("BoneGrowTool.rename"),
+            new Object[] {Messages.getString("BoneGrowTool.rename"), names},
             BUTTON_NAME,
-            JOptionPane.PLAIN_MESSAGE,
-            null,
-            null,
-            bone.label());
-    String label = answer == null ? "" : answer.toString().trim();
-    if (!label.isEmpty() && !label.equals(bone.label())) {
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.PLAIN_MESSAGE);
+    Object chosen = names.getEditor().getItem();
+    String label = chosen == null ? "" : chosen.toString().trim();
+    if (answer == JOptionPane.OK_OPTION && !label.isEmpty() && !label.equals(bone.label())) {
       apply(ct, session, session.replaced(bone.id(), bone.withLabel(label), null));
     }
   }
