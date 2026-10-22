@@ -75,6 +75,48 @@ class SegVolumeFieldTest {
   }
 
   @Test
+  void visibleLabelTellsTouchingSegmentsApart() {
+    // Segments 1 and 2 touch at x = 8 on slices 4 to 7; segment 3, hidden, lies on slices 9 to 11.
+    SegVolumeField.LabelSource touching =
+        new SegVolumeField.LabelSource() {
+          @Override
+          public int sizeX() {
+            return N;
+          }
+
+          @Override
+          public int sizeY() {
+            return N;
+          }
+
+          @Override
+          public int sizeZ() {
+            return N;
+          }
+
+          @Override
+          public int[] slice(int z) {
+            int[] ids = new int[N * N];
+            for (int i = 0; i < ids.length; i++) {
+              ids[i] = z >= 4 && z <= 7 ? (i % N < 8 ? 1 : 2) : z >= 9 && z <= 11 ? 3 : 0;
+            }
+            return ids;
+          }
+        };
+    byte[] lut = {
+      0, 0, 0, 0, (byte) 255, 0, 0, (byte) 255, 0, (byte) 255, 0, (byte) 255, 0, 0, 0, 0
+    };
+    SegVolumeField field = new SegVolumeField(touching, lut, false);
+    assertEquals(1, field.visibleLabel(at(7, 7, 5)));
+    assertEquals(2, field.visibleLabel(at(8, 7, 5)));
+    assertEquals(0, field.visibleLabel(at(7, 7, 10)), "hidden segment");
+    assertEquals(0, field.visibleLabel(at(7, 7, 1)), "outside every segment");
+    // A surface point just outside a segment takes the nearest visible label around it.
+    assertEquals(1, field.visibleLabel(at(7, 7, 3.4)));
+    assertEquals(0, SegmentField.NONE.visibleLabel(at(7, 7, 5)));
+  }
+
+  @Test
   void smoothFieldFollowsTheTrilinearOccupancyNotTheLabel() {
     SegVolumeField smooth = new SegVolumeField(LABELS, lut(255), true);
     SegVolumeField labels = new SegVolumeField(LABELS, lut(255), false);

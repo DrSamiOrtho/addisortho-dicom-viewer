@@ -137,6 +137,52 @@ public final class SegVolumeField implements SegmentField {
     return alphaAt(x, y, texZ);
   }
 
+  @Override
+  public int visibleLabel(Vector3d t) {
+    int sx = labels.sizeX();
+    int sy = labels.sizeY();
+    int sz = labels.sizeZ();
+    int x = (int) Math.round(t.x * sx - 0.5);
+    int y = (int) Math.round(t.y * sy - 0.5);
+    int texZ = (int) Math.round(t.z * sz - 0.5);
+    int id = visibleLabelAt(x, y, texZ);
+    if (id > 0) {
+      return id;
+    }
+    double px = t.x * sx - 0.5;
+    double py = t.y * sy - 0.5;
+    double pz = t.z * sz - 0.5;
+    int bx = (int) Math.floor(px);
+    int by = (int) Math.floor(py);
+    int bz = (int) Math.floor(pz);
+    double best = 4.0;
+    for (int i = 0; i < 8; i++) {
+      int vx = bx + (i & 1);
+      int vy = by + ((i >> 1) & 1);
+      int vz = bz + ((i >> 2) & 1);
+      int label = visibleLabelAt(vx, vy, vz);
+      if (label > 0) {
+        double dx = vx - px;
+        double dy = vy - py;
+        double dz = vz - pz;
+        double dist = dx * dx + dy * dy + dz * dz;
+        if (dist < best) {
+          best = dist;
+          id = label;
+        }
+      }
+    }
+    return id;
+  }
+
+  /** The label at a texture voxel when it is visible, 0 outside or when hidden. */
+  private int visibleLabelAt(int x, int y, int texZ) {
+    if (alphaAt(x, y, texZ) <= 0) {
+      return 0;
+    }
+    return labelSlice(labels.sizeZ() - 1 - texZ)[y * labels.sizeX() + x];
+  }
+
   /** The LUT alpha of the label at a texture voxel, 0 outside or when hidden. */
   private double alphaAt(int x, int y, int texZ) {
     int sx = labels.sizeX();

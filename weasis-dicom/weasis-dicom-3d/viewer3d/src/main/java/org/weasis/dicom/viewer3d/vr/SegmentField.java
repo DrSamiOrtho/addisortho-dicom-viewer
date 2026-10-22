@@ -36,6 +36,15 @@ public interface SegmentField {
     return opacity(texCoord) > 0;
   }
 
+  /**
+   * Storage ID of the visible segment at the texture coordinate, or of the nearest visible one
+   * among the label voxels around it, as a surface point of a segment may lie just outside its
+   * voxels; 0 outside every visible segment.
+   */
+  default int visibleLabel(Vector3d texCoord) {
+    return 0;
+  }
+
   /** No segmentation: nothing is inside. */
   SegmentField NONE = t -> 0;
 }

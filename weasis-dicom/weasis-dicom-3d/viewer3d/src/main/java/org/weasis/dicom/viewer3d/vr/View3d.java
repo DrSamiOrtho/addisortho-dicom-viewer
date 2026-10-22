@@ -2583,10 +2583,15 @@ public class View3d extends VolumeCanvas
       showStatus(Messages.getString("cut.nothing"));
       return;
     }
-    VoxelFlood.Visibility visible = visibilityForSelection();
+    // A click on a selected bone drawn over the anatomy takes that bone alone, whatever touches it.
+    SegmentField segments =
+        segMode() == VolumePicker.SegMode.OVERLAY ? segmentField() : SegmentField.NONE;
+    int bone = segments.visibleLabel(hit.get().texCoord());
+    VoxelFlood.Visibility visible =
+        bone > 0 ? visibilityOfBone(segments, bone) : visibilityForSelection();
     VoxelSampler sampler = voxelSampler();
     Vector3i seed = hit.get().grid();
-    int separation = lightSeparation ? SEPARATION_VOXELS : 0;
+    int separation = bone == 0 && lightSeparation ? SEPARATION_VOXELS : 0;
     runCut(
         mask,
         Messages.getString("cut.selecting"),
@@ -2598,8 +2603,9 @@ public class View3d extends VolumeCanvas
           }
           VoxelFlood.Result r = region.get();
           LOGGER.info(
-              "{} structure of {} voxels (separated {}) in {} ms",
+              "{} {} of {} voxels (separated {}) in {} ms",
               keep ? "Keep" : "Remove",
+              bone > 0 ? "segment " + bone : "structure",
               r.voxels(),
               r.separated(),
               r.millis());
@@ -2608,6 +2614,23 @@ public class View3d extends VolumeCanvas
               : VoxelFlood.remove(mask.bits(), r.region());
         },
         () -> {});
+  }
+
+  /** The voxels of one visible segment, its marrow included, whatever their opacity. */
+  private VoxelFlood.Visibility visibilityOfBone(SegmentField segments, int bone) {
+    VolumeSpace space = volumeSpace();
+    return new VoxelFlood.Visibility() {
+      @Override
+      public boolean visible(int x, int y, int z, double value) {
+        Vector3d t = space.texCoordOfTextureVoxel(x, y, z, new Vector3d());
+        return segments.visibleLabel(t) == bone;
+      }
+
+      @Override
+      public long workingBytes() {
+        return segments.workingBytes();
+      }
+    };
   }
 
   /**
