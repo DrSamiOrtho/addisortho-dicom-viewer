@@ -107,9 +107,9 @@ objdump -T <file>.so | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -1
 ## 6. Shared `--java-options`
 
 `script/launch-options.sh` is the single source of truth for `JDK_MODULES`, `customOptions` (per-OS,
-e.g. the splash screen and Linux-only `-Dsun.awt.disablegrab=true`) and `commonOptions` (identical
-everywhere): `-Dgosh.port=17179`, `--enable-native-access=ALL-UNNAMED`, `-XX:MaxRAMPercentage=25`,
-`-XX:+UseStringDeduplication`,
+e.g. the splash screen, Linux-only `-Dsun.awt.disablegrab=true` and the heap limit
+`-XX:MaxRAMPercentage`, 50 on Windows and 25 on macOS and Linux) and `commonOptions` (identical
+everywhere): `-Dgosh.port=17179`, `--enable-native-access=ALL-UNNAMED`, `-XX:+UseStringDeduplication`,
 `-Djavax.accessibility.assistive_technologies=org.weasis.launcher.EmptyAccessibilityProvider`,
 `-Djavax.accessibility.screen_magnifier_present=false`.
 
