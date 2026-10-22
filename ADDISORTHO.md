@@ -177,8 +177,15 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
   Needs `jdk.httpserver` in the installer runtime (`launch-options.sh`) and `com.sun.net.httpserver` in both `base.json`.
 - `weasis-dicom/weasis-dicom-bones` (3D view tool panels):
   - **Bone STL**: one segment of a shown SEG as a binary STL, mm, DICOM LPS.
-  - **Bone select (region grow)**: seeded HU region grow (default 200-3000 HU) with closing, hole filling and optional
-    separation, written as a SEG (series 902) in the study; for knee bones and fragments without a licence.
+  - **Bones** (rebuilt 22 Oct 2026): a list of the bones selected on the CT and three click tools that stay on and work
+    alike in the 3D view and the MPR views. New bone is the seeded HU region grow (default 200-3000 HU, closing, hole
+    filling, optional separation) with the bones already listed as walls, so no voxel belongs to two bones. Erase piece
+    and Split (`grow/BoneSplit`) erode the clicked bone until the click and the bone's starting point fall apart, then
+    regrow both parts at the same pace, so the cut runs at the narrowest link (a loose piece comes away at once). Each
+    row: Show only and Hide (undoable cuts of the 3D view through `View3d.cutSegment`, one voxel of margin), rename
+    (double-click), colour and Delete. Every step is an `EditHistory` entry of the 3D view, so Ctrl+Z walks through bone
+    steps, cuts and crops together. Bones are immutable (`Bone`, `grow/BoxMask`); the SEG (series 902, segments
+    numbered in list order) is rewritten in the background after each step (`SegWriteWorker`, one at a time).
   - **Make 3D bones**: runs the owner's TotalSegmentator pipeline (`planning/make_3d.sh`, free model: hip, shoulder,
     spine) where it is installed, and opens its results in the study.
 - `viewer3d`: Smooth surfaces for segments, a crop box, and "Save 3D picture to the study" / "Copy 3D picture".

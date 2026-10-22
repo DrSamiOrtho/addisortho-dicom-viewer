@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.joml.Vector3d;
+import org.joml.Vector3i;
 import org.junit.jupiter.api.Test;
 
 /** The CPU segment field against the shader's label and smoothed-occupancy rules. */
@@ -157,6 +158,25 @@ class SegVolumeFieldTest {
     }
     // Beyond the volume the occupancy is the texture's zero border.
     assertEquals(0.0, smooth.occupancy(new Vector3d(1.2, 0.5, 0.5)), 0.0);
+  }
+
+  @Test
+  void regionOfTakesTheSegmentWithAOneVoxelMargin() {
+    SegVolumeField field = new SegVolumeField(LABELS, lut(255), false);
+    VolumeSpace space = VolumeSpace.ofVolume(new Vector3i(N, N, N), new Vector3d(1, 1, 1));
+    boolean[] one = {false, true};
+    VoxelBits region = field.regionOf(space, one);
+    // Texture slice of volume slice z: the texture is uploaded last slice first.
+    int z5 = N - 1 - 5;
+    assertTrue(region.get(7, 7, z5), "inside the wide disc");
+    assertTrue(region.get(13, 7, z5), "next to the disc's edge voxel at x 12");
+    assertFalse(region.get(14, 7, z5), "two voxels out");
+    assertTrue(region.get(7, 7, N - 1 - 3), "the slice next to the disc");
+    assertFalse(region.get(7, 7, N - 1 - 2), "two slices away");
+    assertFalse(region.get(7, 7, N - 1 - 13));
+
+    assertEquals(0, new SegVolumeField(LABELS, lut(0), false).regionOf(space, one).count());
+    assertEquals(0, field.regionOf(space, new boolean[] {false, false}).count());
   }
 
   @Test

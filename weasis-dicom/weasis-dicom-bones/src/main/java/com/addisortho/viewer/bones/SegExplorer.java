@@ -106,7 +106,7 @@ final class SegExplorer {
     }
   }
 
-  private static String sopUID(HiddenSpecialElement element) {
+  static String sopUID(HiddenSpecialElement element) {
     String uid = TagD.getTagValue(element, Tag.SOPInstanceUID, String.class);
     if (uid == null && element.getMediaReader() instanceof DicomMediaIO reader) {
       uid = reader.getDicomObject().getString(Tag.SOPInstanceUID);

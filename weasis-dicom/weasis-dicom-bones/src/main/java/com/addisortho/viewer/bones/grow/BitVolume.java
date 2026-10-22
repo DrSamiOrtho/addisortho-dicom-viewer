@@ -194,6 +194,32 @@ public final class BitVolume {
     }
   }
 
+  /** Clears the voxels set in {@code other}, of the same size. */
+  public void andNot(BitVolume other) {
+    checkSameSize(other);
+    for (int i = 0; i < words.length; i++) {
+      words[i] &= ~other.words[i];
+    }
+  }
+
+  /**
+   * A copy of this volume with {@code margin} clear voxels added on every side, so that an erosion
+   * with clear outside works on its own edges as on any other.
+   */
+  public BitVolume padded(int margin) {
+    BitVolume p = new BitVolume(sizeX + 2 * margin, sizeY + 2 * margin, sizeZ + 2 * margin);
+    for (int z = 0; z < sizeZ; z++) {
+      for (int y = 0; y < sizeY; y++) {
+        for (int x = 0; x < sizeX; x++) {
+          if (get(x, y, z)) {
+            p.set(x + margin, y + margin, z + margin);
+          }
+        }
+      }
+    }
+    return p;
+  }
+
   public boolean sameContent(BitVolume other) {
     checkSameSize(other);
     return Arrays.equals(words, other.words);

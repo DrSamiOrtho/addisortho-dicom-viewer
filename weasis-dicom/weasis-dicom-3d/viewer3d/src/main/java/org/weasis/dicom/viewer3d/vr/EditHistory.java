@@ -48,6 +48,24 @@ public final class EditHistory {
 
   private final Deque<Edit> undo = new ArrayDeque<>();
   private final Deque<Edit> redo = new ArrayDeque<>();
+  private final List<Runnable> listeners = new ArrayList<>();
+
+  /**
+   * Called after every change of the history: a step done, undone, redone or the history cleared.
+   */
+  public void addListener(Runnable listener) {
+    listeners.add(listener);
+  }
+
+  public void removeListener(Runnable listener) {
+    listeners.remove(listener);
+  }
+
+  private void changed() {
+    for (Runnable l : List.copyOf(listeners)) {
+      l.run();
+    }
+  }
 
   /** A step done just now: it becomes the last one to undo, and the redo steps are forgotten. */
   public void push(Edit edit) {
@@ -56,6 +74,7 @@ public final class EditHistory {
       undo.removeLast();
     }
     redo.clear();
+    changed();
   }
 
   public boolean canUndo() {
@@ -80,9 +99,11 @@ public final class EditHistory {
     while ((edit = undo.poll()) != null) {
       if (edit.undo()) {
         redo.push(edit);
+        changed();
         return true;
       }
     }
+    changed();
     return false;
   }
 
@@ -92,15 +113,18 @@ public final class EditHistory {
     while ((edit = redo.poll()) != null) {
       if (edit.redo()) {
         undo.push(edit);
+        changed();
         return true;
       }
     }
+    changed();
     return false;
   }
 
   public void clear() {
     undo.clear();
     redo.clear();
+    changed();
   }
 
   /** A cut already applied to {@code mask}: undo and redo move the mask's own stack. */

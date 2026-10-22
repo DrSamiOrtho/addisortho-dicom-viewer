@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.codec.seg;
 
 import java.io.File;
@@ -1007,6 +1008,21 @@ public final class SegmentationVolume {
     bounds[4] = Math.min(bounds[4], p.z);
     bounds[5] = Math.max(bounds[5], p.z);
     return bounds;
+  }
+
+  /**
+   * The storage IDs holding a segment, alone or overlapping others, as a table indexed by storage
+   * ID; empty when the segment is unknown.
+   */
+  public boolean[] storageIdsOf(int segmentNumber) {
+    synchronized (idLock) {
+      List<Integer>[] table = segmentsByIdTable();
+      boolean[] ids = new boolean[table.length];
+      for (int id = 1; id < table.length; id++) {
+        ids[id] = table[id] != null && table[id].contains(segmentNumber);
+      }
+      return ids;
+    }
   }
 
   /** Snapshots {@link #idToSegments} as an array indexed by storage ID. */

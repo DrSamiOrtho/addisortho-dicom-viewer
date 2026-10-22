@@ -2616,6 +2616,71 @@ public class View3d extends VolumeCanvas
         () -> {});
   }
 
+  /**
+   * Cuts away one segment of a segmentation shown in colour, or keeps it alone, as one undoable
+   * step: what lies behind a bone shows once the bone is cut away. Does nothing, with a message in
+   * the view, while the segmentation is not shown or another cut runs.
+   *
+   * @param segmentation which shown segmentation holds the segment
+   * @param segmentNumber the segment's number in that segmentation
+   * @param keep {@code true} to keep the segment alone, {@code false} to cut it away
+   */
+  public void cutSegment(
+      java.util.function.Predicate<SegSpecialElement> segmentation,
+      int segmentNumber,
+      boolean keep) {
+    if (cutRunning) {
+      return;
+    }
+    String unavailable = keepRemoveUnavailableReason();
+    if (unavailable != null) {
+      showStatus(unavailable);
+      return;
+    }
+    SegVolumeTexture svt = segVolumeTexture;
+    RenderedSeg shown =
+        renderedSegs.stream().filter(rs -> segmentation.test(rs.seg())).findFirst().orElse(null);
+    if (svt == null || shown == null || svt.getSegVolume().isDisposed()) {
+      showStatus(Messages.getString("cut.segment.notShown"));
+      return;
+    }
+    KeptMask mask = getOrCreateKeptMask();
+    if (mask == null) {
+      return;
+    }
+    boolean[] ids = svt.getSegVolume().storageIdsOf(segmentNumber + shown.offset());
+    SegVolumeField field = new SegVolumeField(svt.getSegVolume(), svt.getColorLut(), false);
+    runCut(
+        mask,
+        Messages.getString("cut.selecting"),
+        () -> {
+          long start = System.nanoTime();
+          VoxelBits region = field.regionOf(mask.space(), ids);
+          LOGGER.info(
+              "{} segment {}: {} voxels in {} ms",
+              keep ? "Keep" : "Remove",
+              segmentNumber,
+              region.count(),
+              (System.nanoTime() - start) / 1_000_000);
+          if (region.count() == 0) {
+            return null; // keeping nothing would cut the whole volume away
+          }
+          return keep
+              ? VoxelFlood.keepOnly(mask.bits(), region)
+              : VoxelFlood.remove(mask.bits(), region);
+        },
+        () -> {});
+  }
+
+  /**
+   * Adds a step done outside the view, such as a change of the selected bones, to the view's undo
+   * history, so that Ctrl+Z and Ctrl+Y walk through it with the cuts and crops.
+   */
+  public void pushEdit(EditHistory.Edit edit) {
+    editHistory.push(edit);
+    notifyToolState();
+  }
+
   /** The voxels of one visible segment, its marrow included, whatever their opacity. */
   private VoxelFlood.Visibility visibilityOfBone(SegmentField segments, int bone) {
     VolumeSpace space = volumeSpace();

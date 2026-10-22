@@ -13,34 +13,30 @@ import java.awt.Component;
 import java.awt.Point;
 import java.awt.Toolkit;
 import java.awt.event.AWTEventListener;
+import java.awt.event.InputEvent;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Point2D;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 import javax.swing.SwingUtilities;
 import org.dcm4che3.data.Tag;
 import org.joml.Vector3d;
-import org.joml.Vector3i;
-import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.media.data.MediaSeries;
-import org.weasis.core.ui.editor.image.ViewerPlugin;
 import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.codec.TagD;
-import org.weasis.dicom.viewer2d.EventManager;
-import org.weasis.dicom.viewer2d.mpr.MprContainer;
 import org.weasis.dicom.viewer2d.mpr.MprController;
 import org.weasis.dicom.viewer2d.mpr.MprView;
 import org.weasis.dicom.viewer2d.mpr.Volume;
 import org.weasis.dicom.viewer3d.vr.View3d;
 
 /**
- * Takes the seed of a region grow in patient space: the point clicked once armed, on the bone
- * surface of the 3D view or in an MPR view (axial, coronal, sagittal), or the MPR crosshair.
+ * Takes points of the CT in patient space for the Bones tools: the point clicked while armed, on
+ * the bone surface of the 3D view or in an MPR view (axial, coronal, sagittal).
  */
 final class SeedPicker {
+
+  /** Farthest a click may move between press and release, in pixels; more is a drag. */
+  private static final int CLICK_TOLERANCE = 4;
 
   /**
    * A seed position.
@@ -52,37 +48,59 @@ final class SeedPicker {
   record Seed(Vector3d lps, String frameOfReferenceUID, String plane) {}
 
   private AWTEventListener listener;
+  private Component pressedView;
+  private Point pressedAt;
 
   boolean isArmed() {
     return listener != null;
   }
 
   /**
-   * Waits for the next left click on the bone in a 3D view or in an MPR view and hands its patient
-   * position to {@code onPick}, on the event dispatch thread. A click in the 3D view is taken by
-   * the picker; one in an MPR still reaches the view, which may move its crosshair there. A click
-   * in the 3D view that hits nothing is reported to {@code onMiss} and the picker stays armed.
+   * Hands every left click on a 3D view or an MPR view to {@code onPick} as a patient position, on
+   * the event dispatch thread, until disarmed. A press and release at the same place is a click; a
+   * drag still rotates the 3D view or moves through the MPR as usual. The views receive the click
+   * too, so the 3D view's left button should hold a tool that does nothing on a click, such as
+   * rotation. A click in the 3D view that meets nothing is reported to {@code onMiss}.
    */
   void arm(Consumer<Seed> onPick, Consumer<String> onMiss) {
     disarm();
     listener =
         event -> {
           if (!(event instanceof MouseEvent e)
-              || e.getID() != MouseEvent.MOUSE_PRESSED
-              || !SwingUtilities.isLeftMouseButton(e)) {
+              || !SwingUtilities.isLeftMouseButton(e)
+              || (e.getModifiersEx() & InputEvent.ALT_DOWN_MASK) != 0) {
             return;
           }
-          if (view3dOf(e.getComponent()) instanceof View3d view3d) {
-            e.consume();
-            Point p = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), view3d);
+          Component c = e.getComponent();
+          Component view = view3dOf(c);
+          if (view == null) {
+            view = mprViewOf(c);
+          }
+          if (view == null) {
+            return;
+          }
+          Point p = SwingUtilities.convertPoint(c, e.getPoint(), view);
+          if (e.getID() == MouseEvent.MOUSE_PRESSED) {
+            pressedView = view;
+            pressedAt = p;
+            return;
+          }
+          if (e.getID() != MouseEvent.MOUSE_RELEASED) {
+            return;
+          }
+          boolean click =
+              view == pressedView && pressedAt != null && pressedAt.distance(p) <= CLICK_TOLERANCE;
+          pressedView = null;
+          pressedAt = null;
+          if (!click) {
+            return;
+          }
+          if (view instanceof View3d view3d) {
             pick3d(view3d, p, onPick, onMiss);
-          } else if (mprViewOf(e.getComponent()) instanceof MprView view) {
-            Point p = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), view);
-            Optional<Seed> seed = fromClick(view, p);
-            if (seed.isPresent()) {
-              disarm();
-              onPick.accept(seed.get());
-            }
+          } else if (view instanceof MprView mpr) {
+            fromClick(mpr, p)
+                .ifPresentOrElse(
+                    onPick, () -> onMiss.accept(Messages.getString("BoneGrowTool.missed")));
           }
         };
     Toolkit.getDefaultToolkit().addAWTEventListener(listener, AWTEvent.MOUSE_EVENT_MASK);
@@ -109,7 +127,6 @@ final class SeedPicker {
             onMiss.accept(Messages.getString("BoneGrowTool.missed"));
             return;
           }
-          disarm();
           onPick.accept(new Seed(lps.get(), frameOfReferenceOf(volume), "3D")); // NON-NLS
         });
   }
@@ -128,6 +145,8 @@ final class SeedPicker {
       Toolkit.getDefaultToolkit().removeAWTEventListener(listener);
       listener = null;
     }
+    pressedView = null;
+    pressedAt = null;
   }
 
   private static MprView mprViewOf(Component component) {
@@ -154,50 +173,6 @@ final class SeedPicker {
     }
     Vector3d voxel = scaled.div(volume.getVoxelRatio());
     return seedAt(volume, voxel, view.getPlane().name());
-  }
-
-  /**
-   * The crosshair of an MPR showing a series of the given frame of reference: the selected MPR
-   * first, else the most recent one.
-   */
-  static Optional<Seed> fromCrosshair(String frameOfReferenceUID) {
-    List<MprContainer> containers = new ArrayList<>();
-    if (EventManager.getInstance().getSelectedView2dContainer() instanceof MprContainer selected) {
-      containers.add(selected);
-    }
-    List<ViewerPlugin<?>> plugins = GuiUtils.getUICore().getViewerPlugins();
-    synchronized (plugins) {
-      for (int i = plugins.size() - 1; i >= 0; i--) {
-        if (plugins.get(i) instanceof MprContainer c && !containers.contains(c)) {
-          containers.add(c);
-        }
-      }
-    }
-    for (MprContainer container : containers) {
-      MprController controller = container.getMprController();
-      Volume<?, ?> volume = controller == null ? null : controller.getVolume();
-      Vector3d centre = controller == null ? null : controller.getCrossHairPosition();
-      if (volume == null
-          || centre == null
-          || volume.isBasic()
-          || !Objects.equals(frameOfReferenceUID, frameOfReferenceOf(volume))) {
-        continue;
-      }
-      // Inverse of MprController.toSliceSpace: the crosshair lives in the slice-size cube.
-      int slice = volume.getSliceSize();
-      Vector3i size = volume.getSize();
-      Vector3d ratio = volume.getVoxelRatio();
-      Vector3d voxel =
-          new Vector3d(
-              (centre.x - (slice - size.x * ratio.x) / 2.0) / ratio.x,
-              (centre.y - (slice - size.y * ratio.y) / 2.0) / ratio.y,
-              (centre.z - (slice - size.z * ratio.z) / 2.0) / ratio.z);
-      Optional<Seed> seed = seedAt(volume, voxel, "crosshair"); // NON-NLS
-      if (seed.isPresent()) {
-        return seed;
-      }
-    }
-    return Optional.empty();
   }
 
   private static Optional<Seed> seedAt(Volume<?, ?> volume, Vector3d voxel, String plane) {
