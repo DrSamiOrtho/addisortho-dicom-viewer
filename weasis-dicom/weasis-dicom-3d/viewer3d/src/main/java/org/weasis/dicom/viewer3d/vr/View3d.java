@@ -2631,16 +2631,72 @@ public class View3d extends VolumeCanvas
       showStatus(unavailable);
       return;
     }
-    pickAsync(p, hit -> growAndCut(hit, keep));
+    pickAsync(p, hit -> growAndCut(hit, keep, false));
   }
 
-  private void growAndCut(Optional<Hit> hit, boolean keep) {
+  /**
+   * Cuts away, or keeps alone, the structure at a patient position, as Remove this and Keep only
+   * this do for a click on the 3D view: for a click on a slice of the same CT, in an MPR view. A
+   * slice shows no surface to aim at, so touching bones are always separated at their joint, and a
+   * click in the marrow or just beside the bone finds the bone nearby.
+   */
+  public void cutStructureAt(
+      Vector3d lps, boolean keep, java.util.function.Consumer<String> report) {
+    if (cutRunning) {
+      report.accept(Messages.getString("cut.wait"));
+      return;
+    }
+    String unavailable = keepRemoveUnavailableReason();
+    if (unavailable != null) {
+      showStatus(unavailable);
+      report.accept(unavailable);
+      return;
+    }
+    Volume<?, ?> volume = volTexture == null ? null : volTexture.getVolume();
+    VolumeSpace space = volumeSpace();
+    if (volume == null || space == null) {
+      return;
+    }
+    Vector3d v;
+    try {
+      v = volume.lpsToVoxel(new Vector3d(lps), new Vector3d());
+    } catch (UnsupportedOperationException e) {
+      report.accept(Messages.getString("cut.nothing"));
+      return;
+    }
+    Vector3d t = space.texCoordOfVolume(v.x, v.y, v.z, new Vector3d());
+    if (t.x < 0 || t.y < 0 || t.z < 0 || t.x > 1 || t.y > 1 || t.z > 1) {
+      report.accept(Messages.getString("cut.nothing"));
+      return;
+    }
+    Vector3i grid = space.gridOfTexCoord(t, new Vector3i());
+    cutReport = report;
+    growAndCut(Optional.of(new Hit(t, grid, v, 0)), keep, true);
+  }
+
+  /** Grid voxels searched around a click on a slice for the bone, which may be in the marrow. */
+  private static final int SLICE_SEED_SEARCH = 12;
+
+  /** Where the cut started from a slice reports its outcome, besides the view; {@code null}. */
+  private java.util.function.Consumer<String> cutReport;
+
+  /** Shows the outcome of a cut in the view, and to whoever started it from a slice. */
+  private void reportCut(String message) {
+    showStatus(message);
+    java.util.function.Consumer<String> report = cutReport;
+    cutReport = null;
+    if (report != null) {
+      report.accept(message);
+    }
+  }
+
+  private void growAndCut(Optional<Hit> hit, boolean keep, boolean separate) {
     if (cutRunning) {
       return;
     }
     KeptMask mask = hit.isPresent() ? getOrCreateKeptMask() : null;
     if (mask == null) {
-      showStatus(Messages.getString("cut.nothing"));
+      reportCut(Messages.getString("cut.nothing"));
       return;
     }
     // A click on a selected bone drawn over the anatomy takes that bone alone, whatever touches it.
@@ -2651,13 +2707,22 @@ public class View3d extends VolumeCanvas
         bone > 0 ? visibilityOfBone(segments, bone) : visibilityForSelection();
     VoxelSampler sampler = voxelSampler();
     Vector3i seed = hit.get().grid();
-    int separation = bone == 0 && lightSeparation ? SEPARATION_VOXELS : 0;
+    int separation = bone == 0 && (lightSeparation || separate) ? SEPARATION_VOXELS : 0;
+    int seedSearch = separate ? SLICE_SEED_SEARCH : VoxelFlood.SEED_SEARCH;
     runCut(
         mask,
         Messages.getString("cut.selecting"),
         () -> {
           Optional<VoxelFlood.Result> region =
-              VoxelFlood.grow(mask.space(), mask.bits(), sampler, visible, seed, separation);
+              VoxelFlood.grow(
+                  mask.space(),
+                  mask.bits(),
+                  sampler,
+                  visible,
+                  seed,
+                  separation,
+                  seedSearch,
+                  WorkingMemory.ofFreeHeap());
           if (region.isEmpty()) {
             return null;
           }
@@ -2839,7 +2904,7 @@ public class View3d extends VolumeCanvas
     setCursor(null);
     try {
       if (failure != null) {
-        showStatus(failure);
+        reportCut(failure);
       } else if (result != null && keptMask == mask) {
         mask.apply(result);
         if (!result.isEmpty()) {
@@ -2847,17 +2912,18 @@ public class View3d extends VolumeCanvas
         }
         after.run();
         if (result.isEmpty()) {
-          showStatus(text.nothing());
+          reportCut(text.nothing());
         } else {
-          showStatus(
+          reportCut(
               text.done() != null
                   ? text.done()
                   : String.format(Messages.getString("cut.removed"), result.voxels()));
         }
       } else if (keptMask == mask) {
-        showStatus(text.nothing());
+        reportCut(text.nothing());
       }
     } finally {
+      cutReport = null;
       cutChanged();
     }
   }

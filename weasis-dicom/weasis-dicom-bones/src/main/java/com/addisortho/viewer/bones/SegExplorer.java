@@ -76,10 +76,14 @@ final class SegExplorer {
       remove(model, segSeriesUID, oldSopUID);
     }
     if (newFile == null) {
+      // An earlier version may still be on its way into the explorer: once the loads queued
+      // before now are done (one loading thread), take out whatever of the series is there.
+      DicomModel.LOADING_EXECUTOR.execute(
+          () -> GuiExecutor.execute(() -> removeAllBut(model, segSeriesUID, null)));
       return;
     }
     pendingModel = model;
-    pending = evt -> loaded(evt, ct, newSopUID);
+    pending = evt -> loaded(evt, model, ct, segSeriesUID, newSopUID);
     model.addPropertyChangeListener(pending);
     DicomModel.LOADING_EXECUTOR.execute(
         new LoadLocalDicom(new File[] {newFile.toFile()}, false, model, OpeningViewer.NONE));
@@ -106,6 +110,23 @@ final class SegExplorer {
     }
   }
 
+  /**
+   * Takes out of the explorer every instance of the series but {@code keepSopUID}: versions written
+   * in quick succession may land after the removal meant for them.
+   */
+  private static void removeAllBut(DicomModel model, String segSeriesUID, String keepSopUID) {
+    Set<HiddenSpecialElement> elements =
+        HiddenSeriesManager.getInstance().series2Elements.get(segSeriesUID);
+    if (elements == null) {
+      return;
+    }
+    for (HiddenSpecialElement element : List.copyOf(elements)) {
+      if (element instanceof SegSpecialElement && !Objects.equals(keepSopUID, sopUID(element))) {
+        model.removeHiddenSpecialElement(element);
+      }
+    }
+  }
+
   static String sopUID(HiddenSpecialElement element) {
     String uid = TagD.getTagValue(element, Tag.SOPInstanceUID, String.class);
     if (uid == null && element.getMediaReader() instanceof DicomMediaIO reader) {
@@ -116,7 +137,11 @@ final class SegExplorer {
 
   // The explorer announces a segmentation once its contours are built (UPDATE, off the EDT).
   private void loaded(
-      PropertyChangeEvent evt, MediaSeries<DicomImageElement> ct, String sopInstanceUID) {
+      PropertyChangeEvent evt,
+      DicomModel model,
+      MediaSeries<DicomImageElement> ct,
+      String segSeriesUID,
+      String sopInstanceUID) {
     if (evt instanceof ObservableEvent e
         && e.getActionCommand() == ObservableEvent.BasicAction.UPDATE
         && e.getNewValue() instanceof SegSpecialElement seg
@@ -124,6 +149,7 @@ final class SegExplorer {
       GuiExecutor.execute(
           () -> {
             stopWaiting();
+            removeAllBut(model, segSeriesUID, sopInstanceUID);
             refreshViews(ct);
           });
     }
