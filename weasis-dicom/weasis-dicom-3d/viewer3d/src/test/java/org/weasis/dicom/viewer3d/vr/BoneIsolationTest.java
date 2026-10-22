@@ -15,10 +15,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import org.joml.Vector3d;
 import org.joml.Vector3i;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.weasis.dicom.viewer3d.vr.BoneIsolation.Result;
 
 /**
@@ -34,7 +37,8 @@ class BoneIsolationTest {
   private static final int H = 96;
   private static final int D = 40;
   private static final Vector3i SIZE = new Vector3i(W, H, D);
-  private static final VolumeSpace SPACE = VolumeSpace.ofVolume(SIZE, new Vector3d(1, 1, 1));
+  private static final Vector3d MM1 = new Vector3d(1, 1, 1);
+  private static final VolumeSpace SPACE = VolumeSpace.ofVolume(SIZE, MM1);
   private static final int CX = 40;
   private static final int CY = 40;
 
@@ -110,7 +114,8 @@ class BoneIsolationTest {
     }
 
     Optional<Result> find() {
-      return BoneIsolation.find(SPACE, slices(), 0, 300, () -> false, new WorkingMemory(64L << 20));
+      return BoneIsolation.find(
+          SPACE, slices(), 0, MM1, 300, () -> false, new WorkingMemory(64L << 20));
     }
   }
 
@@ -281,6 +286,316 @@ class BoneIsolationTest {
         () -> assertEquals(0L, dst[2]));
     BoneIsolation.shiftInto(dst, src, 65);
     assertAll(() -> assertEquals(0L, dst[1]), () -> assertEquals(3L, dst[2]));
+  }
+
+  // ---- Pieces by size and nearness: fragments, specks, a marker, a finger ----
+
+  /** A volume of shapes, the first shape holding a voxel giving its value, air elsewhere. */
+  private static final class Scene {
+    interface Shape {
+      boolean holds(int x, int y, int z);
+    }
+
+    private record Part(Shape shape, float hu) {}
+
+    private final Vector3i size;
+    private final Vector3d mm;
+    private final List<Part> parts = new ArrayList<>();
+
+    Scene(int w, int h, int d, Vector3d mm) {
+      this.size = new Vector3i(w, h, d);
+      this.mm = mm;
+    }
+
+    Scene box(int x0, int x1, int y0, int y1, int z0, int z1, float hu) {
+      parts.add(
+          new Part(
+              (x, y, z) -> x >= x0 && x <= x1 && y >= y0 && y <= y1 && z >= z0 && z <= z1, hu));
+      return this;
+    }
+
+    /** A cylinder along z; {@code rx} and {@code ry} are its radii in voxels. */
+    Scene cylinder(int cx, int cy, double rx, double ry, int z0, int z1, float hu) {
+      parts.add(
+          new Part(
+              (x, y, z) -> {
+                double dx = (x - cx) / rx;
+                double dy = (y - cy) / ry;
+                return z >= z0 && z <= z1 && dx * dx + dy * dy <= 1;
+              },
+              hu));
+      return this;
+    }
+
+    float value(int x, int y, int z) {
+      for (Part p : parts) {
+        if (p.shape().holds(x, y, z)) {
+          return p.hu();
+        }
+      }
+      return -1000;
+    }
+
+    Result isolate() {
+      VolumeSpace space = VolumeSpace.ofVolume(size, mm);
+      BoneExtent.SliceSource slices =
+          z -> {
+            float[] s = new float[size.x * size.y];
+            for (int y = 0, i = 0; y < size.y; y++) {
+              for (int x = 0; x < size.x; x++, i++) {
+                s[i] = value(x, y, z);
+              }
+            }
+            return s;
+          };
+      return BoneIsolation.find(
+              space, slices, 0, mm, 300, () -> false, new WorkingMemory(64L << 20))
+          .orElseThrow();
+    }
+
+    long keptIn(VoxelBits kept, int x0, int x1, int y0, int y1, int z0, int z1) {
+      long n = 0;
+      for (int z = z0; z <= z1; z++) {
+        for (int y = y0; y <= y1; y++) {
+          for (int x = x0; x <= x1; x++) {
+            if (kept.get(x, y, z)) {
+              n++;
+            }
+          }
+        }
+      }
+      return n;
+    }
+  }
+
+  /** A bone cylinder of radius 6 mm in soft tissue, 1 mm voxels, no cast. */
+  private static Scene bare() {
+    return new Scene(W, H, D, MM1)
+        .cylinder(CX, CY, 6, 6, 4, 35, 900)
+        .cylinder(CX, CY, 18, 18, 0, D - 1, 40);
+  }
+
+  @Test
+  void aFragmentTwoMillimetresFromTheBoneStaysAFarOneGoes() {
+    // The cortex ends at x = 46; a 27 mm3 cube at x 49..51 is 2 mm away, one at 56..58 is 5 mm
+    // from that one and 10 mm from the cortex.
+    Scene scene =
+        new Scene(W, H, D, MM1)
+            .box(49, 51, 39, 41, 18, 20, 900)
+            .box(56, 58, 39, 41, 18, 20, 900)
+            .cylinder(CX, CY, 6, 6, 4, 35, 900)
+            .cylinder(CX, CY, 18, 18, 0, D - 1, 40);
+    Result r = scene.isolate();
+    VoxelBits kept = r.region();
+    assertAll(
+        () -> assertEquals(1, r.bonePieces()),
+        () -> assertEquals(1, r.joinedPieces(), "the near fragment"),
+        () -> assertEquals(1, r.droppedPieces(), "the far fragment"),
+        () -> assertEquals(0, r.externalPieces()),
+        () -> assertTrue(kept.get(50, 40, 19), "the near fragment"),
+        () -> assertFalse(kept.get(57, 40, 19), "the far fragment"),
+        () -> assertTrue(kept.get(CX, CY, 20), "the bone"));
+  }
+
+  @Test
+  void specksInAFoamPadGoAndLeaveNoSheet() {
+    // Voxels of 0.5 by 0.5 by 2 mm. A pad of foam denser than air lies against the skin at y 70
+    // and up, full of specks of 4 voxels (2 mm3) on a lattice; the bone is 9 mm from the pad.
+    Vector3d mm = new Vector3d(0.5, 0.5, 2);
+    Scene scene = new Scene(W, H, D, mm);
+    for (int z = 1; z < D; z += 2) {
+      for (int y = 72; y < H; y += 4) {
+        for (int x = 2; x < W - 4; x += 6) {
+          scene.box(x, x + 3, y, y, z, z, 600);
+        }
+      }
+    }
+    scene
+        .cylinder(CX, CY, 12, 12, 2, 37, 900)
+        .cylinder(CX, CY, 30, 30, 0, D - 1, 40)
+        .box(0, W - 1, 70, H - 1, 0, D - 1, -200);
+    Result r = scene.isolate();
+    VoxelBits kept = r.region();
+    assertAll(
+        () -> assertEquals(1, r.bonePieces()),
+        () -> assertEquals(0, r.joinedPieces()),
+        () -> assertTrue(r.droppedPieces() > 100, "the specks: " + r.droppedPieces()),
+        () -> assertEquals(0, r.externalPieces(), "the pad is not dense"),
+        () -> assertEquals(0, scene.keptIn(kept, 0, W - 1, 70, H - 1, 0, D - 1), "no sheet"),
+        () -> assertTrue(kept.get(CX, CY, 20), "the bone"),
+        () -> assertTrue(kept.get(CX + 12, CY, 20), "the cortex"));
+  }
+
+  @Test
+  void aMarkerTenMillimetresFromTheBoneGoesWithItsMetal() {
+    // A lead marker (a 9 by 2 by 4 mm core above the metal threshold, a 1 mm shell of partial
+    // volume around it) taped on at y 56..59, 10 mm from the cortex at y = 46, touching no air.
+    Scene scene =
+        new Scene(W, H, D, MM1)
+            .box(36, 44, 57, 58, 18, 21, 3500)
+            .box(35, 45, 56, 59, 17, 22, 1000)
+            .cylinder(CX, CY, 6, 6, 4, 35, 900)
+            .cylinder(CX, CY, 18, 18, 0, D - 1, 40)
+            .box(0, W - 1, 52, 75, 0, D - 1, -200);
+    Result r = scene.isolate();
+    VoxelBits kept = r.region();
+    assertAll(
+        () -> assertEquals(1, r.bonePieces()),
+        () -> assertEquals(0, r.joinedPieces()),
+        () -> assertEquals(1, r.droppedPieces(), "the marker's shell"),
+        () -> assertEquals(0, r.implants(), "the marker's core"),
+        () -> assertFalse(kept.get(40, 57, 19), "the core"),
+        () -> assertFalse(kept.get(35, 56, 17), "the shell"),
+        () -> assertTrue(kept.get(CX, CY, 20), "the bone"));
+  }
+
+  @Test
+  void aChainOfSmallPiecesThreeMillimetresApartStaysLikeAFinger() {
+    // A metacarpal of 1.5 cm3, then three phalanges of under 1 cm3 each, 3 mm gaps between them,
+    // all in soft tissue; 1 mm in plane, 1.5 mm slices.
+    int d = 60;
+    Scene scene =
+        new Scene(W, H, d, new Vector3d(1, 1, 1.5))
+            .cylinder(CX, CY, 5, 5, 2, 14, 900)
+            .cylinder(CX, CY, 3, 3, 17, 22, 900)
+            .cylinder(CX, CY, 3, 3, 25, 29, 900)
+            .cylinder(CX, CY, 2.5, 2.5, 32, 35, 900)
+            .cylinder(CX, CY, 18, 18, 0, d - 1, 40);
+    Result r = scene.isolate();
+    VoxelBits kept = r.region();
+    assertAll(
+        () -> assertEquals(1, r.bonePieces()),
+        () -> assertEquals(3, r.joinedPieces()),
+        () -> assertEquals(0, r.droppedPieces()),
+        () -> assertTrue(kept.get(CX, CY, 20), "proximal"),
+        () -> assertTrue(kept.get(CX, CY, 27), "middle"),
+        () -> assertTrue(kept.get(CX, CY, 34), "distal"),
+        () -> assertFalse(kept.get(CX, CY, 38), "beyond the fingertip"),
+        () -> assertFalse(kept.get(CX, CY + 10, 27), "soft tissue"));
+  }
+
+  @Test
+  void withoutABigPieceTheLargestSmallOneSeedsTheBone() {
+    // A fingertip alone: two phalanges under 1 cm3 and a chip 6 mm off.
+    Scene scene =
+        new Scene(W, H, D, MM1)
+            .cylinder(CX, CY, 3, 3, 4, 14, 900)
+            .cylinder(CX, CY, 3, 3, 17, 22, 900)
+            .box(CX + 10, CX + 11, CY, CY + 1, 8, 10, 900)
+            .cylinder(CX, CY, 18, 18, 0, D - 1, 40);
+    Result r = scene.isolate();
+    assertAll(
+        () -> assertEquals(1, r.bonePieces()),
+        () -> assertEquals(1, r.joinedPieces()),
+        () -> assertEquals(1, r.droppedPieces()),
+        () -> assertTrue(r.region().get(CX, CY, 20)),
+        () -> assertFalse(r.region().get(CX + 10, CY, 9)));
+  }
+
+  @Test
+  void joinStepsFollowTheVoxelSize() {
+    int[] s = BoneIsolation.joinSteps(new Vector3d(0.5, 0.7, 2));
+    assertAll(
+        () -> assertEquals(8, s[0]),
+        () -> assertEquals(6, s[1]),
+        () -> assertEquals(2, s[2]),
+        () -> assertEquals(1, BoneIsolation.joinSteps(new Vector3d(1, 1, 5))[2], "at least one"));
+  }
+
+  /**
+   * Timing on a forearm of 512 by 512 by 600 voxels of 0.4 by 0.4 by 0.6 mm: radius and ulna in
+   * soft tissue in a cast, a table, a pad full of specks and a marker. Run with {@code
+   * -Dbone.bench=true}; the slices are made on the fly and their cost is reported apart.
+   */
+  @Test
+  @EnabledIfSystemProperty(named = "bone.bench", matches = "true")
+  void timingOnALargeGrid() {
+    int w = 512;
+    int h = 512;
+    int d = 600;
+    Vector3d mm = new Vector3d(0.4, 0.4, 0.6);
+    BoneExtent.SliceSource slices =
+        z -> {
+          float[] s = new float[w * h];
+          boolean speckSlice = z % 3 == 0;
+          for (int y = 0, i = 0; y < h; y++) {
+            for (int x = 0; x < w; x++, i++) {
+              int dx = x - 230;
+              int dy = y - 240;
+              int ex = x - 300;
+              int ey = y - 250;
+              int r2 = dx * dx + dy * dy;
+              int e2 = ex * ex + ey * ey;
+              float v;
+              if (x >= 330 && x <= 352 && y >= 395 && y <= 400 && z >= 300 && z <= 316) {
+                v = 3500; // a lead marker on the pad, 15 mm from the ulna
+              } else if (x >= 328 && x <= 354 && y >= 393 && y <= 402 && z >= 298 && z <= 318) {
+                v = 1000; // its partial-volume shell
+              } else if (r2 <= 12 * 12 && z >= 20 && z <= 580) {
+                v = 40; // radius canal
+              } else if (r2 <= 30 * 30 && z >= 20 && z <= 580) {
+                v = 900; // radius
+              } else if (e2 <= 8 * 8 && z >= 20 && z <= 580) {
+                v = 40;
+              } else if (e2 <= 22 * 22 && z >= 20 && z <= 580) {
+                v = 900; // ulna
+              } else if (r2 <= 120 * 120 || e2 <= 110 * 110) {
+                v = 40; // soft tissue
+              } else if (r2 <= 150 * 150) {
+                v = 1200; // plaster
+              } else if (y >= 390 && y <= 470) {
+                // the pad: foam denser than air, a speck of 2 voxels every 6 voxels
+                v = speckSlice && y % 6 == 0 && (x % 6 == 0 || x % 6 == 1) ? 500 : -200;
+              } else if (y >= 471 && y <= 480) {
+                v = 350; // the table board, touching air below
+              } else {
+                v = -1000;
+              }
+              s[i] = v;
+            }
+          }
+          return s;
+        };
+    long t0 = System.nanoTime();
+    long sum = 0;
+    for (int z = 0; z < d; z++) {
+      sum += slices.slice(z).length;
+    }
+    long sliceMillis = (System.nanoTime() - t0) / 1_000_000;
+    VolumeSpace space = VolumeSpace.ofVolume(new Vector3i(w, h, d), mm);
+    Result r =
+        BoneIsolation.find(space, slices, 0, mm, 300, () -> false, new WorkingMemory(1L << 30))
+            .orElseThrow();
+    System.out.printf(
+        "BoneIsolation 512x512x600: %d ms in all, of which the slices %d ms; %d voxels kept, %d"
+            + " bone, %d joined, %d dropped, %d external, %d implants, %d MB peak (%d)%n",
+        r.millis(),
+        sliceMillis,
+        r.voxels(),
+        r.bonePieces(),
+        r.joinedPieces(),
+        r.droppedPieces(),
+        r.externalPieces(),
+        r.implants(),
+        r.peakBytes() >> 20,
+        sum);
+    assertAll(
+        () -> assertEquals(2, r.bonePieces()),
+        () -> assertEquals(0, r.joinedPieces()),
+        () -> assertEquals(0, r.implants()),
+        () -> assertEquals(0, keptInSlice(r, 0, w - 1, 390, 480, 300), "no sheet in the pad"));
+  }
+
+  private static long keptInSlice(Result r, int x0, int x1, int y0, int y1, int z) {
+    long n = 0;
+    for (int y = y0; y <= y1; y++) {
+      for (int x = x0; x <= x1; x++) {
+        if (r.region().get(x, y, z)) {
+          n++;
+        }
+      }
+    }
+    return n;
   }
 
   private static long countDisc(int radius) {

@@ -1922,6 +1922,12 @@ public class View3d extends VolumeCanvas
       return;
     }
     VoxelSampler sampler = voxelSampler();
+    Vector3d spacing = tex.getVolume().getPixelRatio();
+    Vector3i size = tex.getVolume().getSize();
+    Vector3i grid = mask.space().grid();
+    Vector3d gridVoxelMm =
+        new Vector3d(
+            spacing.x * size.x / grid.x, spacing.y * size.y / grid.y, spacing.z * size.z / grid.z);
     runCut(
         mask,
         Messages.getString("isolate.busy"),
@@ -1930,6 +1936,7 @@ public class View3d extends VolumeCanvas
               BoneIsolation.find(
                   mask.space(),
                   sampler,
+                  gridVoxelMm,
                   BoneExtent.DEFAULT_THRESHOLD_HU,
                   () -> volTexture != tex,
                   WorkingMemory.ofFreeHeap());
@@ -1938,10 +1945,12 @@ public class View3d extends VolumeCanvas
           }
           BoneIsolation.Result r = found.get();
           LOGGER.info(
-              "Bone isolated: {} voxels kept, {} bone pieces, {} external pieces, {} implants, in"
-                  + " {} ms ({} MB peak)",
+              "Bone isolated: {} voxels kept, {} bone pieces, {} joined, {} dropped, {} external,"
+                  + " {} implants, in {} ms ({} MB peak)",
               r.voxels(),
               r.bonePieces(),
+              r.joinedPieces(),
+              r.droppedPieces(),
               r.externalPieces(),
               r.implants(),
               r.millis(),

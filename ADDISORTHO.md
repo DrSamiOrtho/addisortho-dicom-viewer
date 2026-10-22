@@ -193,8 +193,12 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
 - `viewer3d`: Smooth surfaces for segments, a crop box, and "Save 3D picture to the study" / "Copy 3D picture".
   A CT opened on the bone is also isolated (22 Oct 2026, `vr/BoneIsolation`, one undoable cut after the crop; the
   crop panel's Isolate bone runs it on demand): a plaster cast, the table, the pad and the soft tissue go because
-  they touch the outside air (found slice by slice in 2D) and bone does not; the bone pieces are hole-filled and
-  widened by 2 voxels, metal touching them without air contact stays whole, a fixator pin only inside the bone.
+  they touch the outside air (found slice by slice in 2D) and bone does not. What touches no air is sorted by real
+  size (anisotropic voxels, mm3): a piece of 1 cm3 or more is bone, one under 5 mm3 is noise, one in between stays
+  only within 4 mm of a kept piece, spreading piece to piece (fragments, sesamoids, carpals and phalanges stay; the
+  specks in a pad, a table board and a side marker go; a fragment displaced over 4 mm or a paediatric ossification
+  centre is lost, Undo or Whole volume restores it). The kept pieces are hole-filled and widened by 2 voxels, metal
+  touching them without air contact stays whole, a fixator pin only inside the bone.
 - `viewer3d` 3D tools bar (14 Oct, evening): the mouse tools rotate, roll, pan, zoom, window/level, scalpel, keep only
   this, remove this, length and arrow; the six anatomical orientations (keys 1 to 6); fit (Ctrl+0) and reset scene
   (Ctrl+R); shading (Ctrl+S); copy (Ctrl+C), JPEG (Ctrl+E), quick movie (F2) and view-state snapshots (K, [ and ]).

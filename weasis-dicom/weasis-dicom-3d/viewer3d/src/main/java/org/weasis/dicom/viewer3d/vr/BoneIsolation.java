@@ -10,7 +10,10 @@
 // Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.vr;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
 import org.joml.Vector3d;
@@ -22,7 +25,10 @@ import org.weasis.dicom.viewer3d.vr.VoxelFlood.IntQueue;
  * Finds the bone of a CT for the 3D view to show it alone, without the plaster cast, the splint,
  * the table, the positioning pad or the clothing, which no threshold can tell from bone: plaster is
  * as dense as bone. The test is contact with outside air. Bone is wrapped in skin and soft tissue,
- * so it hardly ever touches air directly, while a cast, a table or a lead always does.
+ * so it hardly ever touches air directly, while a cast, a table or a lead always does. What does
+ * not touch air either is noise: specks above the threshold inside a pad, a table board or a cast
+ * whose foam or padding is denser than air. Those are told from bone by their size, in real mm
+ * since the voxels are anisotropic, and by their distance to a bone that is big enough.
  *
  * <p>On the grid of the kept mask:
  *
@@ -35,17 +41,32 @@ import org.weasis.dicom.viewer3d.vr.VoxelFlood.IntQueue;
  *       by the field of view stays;
  *   <li>each 6-connected piece of the dense voxels is external when at least {@link
  *       #MIN_AIR_CONTACTS} of its voxels, and {@link #AIR_CONTACT_SHARE} of them, touch outside air
- *       face to face; the other pieces are bone;
- *   <li>the bone region: the bone pieces with their holes filled slice by slice (the marrow canal
+ *       face to face; the other pieces are internal;
+ *   <li>an internal piece of {@link #SEED_MM3} or more is bone; one under {@link #NOISE_MM3} is
+ *       noise and goes; one in between stays only when it lies within {@link #JOIN_MM} of a piece
+ *       that stays, which spreads from piece to piece until nothing changes, so a fracture
+ *       fragment, a chip, a sesamoid, the small carpal bones and the phalanges of a finger stay
+ *       through their joint spaces, while the specks in a pad, the sheet of a table board and the
+ *       marker on a pad go. Without any piece of {@link #SEED_MM3} the largest internal piece
+ *       serves as the seed;
+ *   <li>the bone region: the kept pieces with their holes filled slice by slice (the marrow canal
  *       and a nail inside it stay), widened by {@link #MARGIN_VOXELS} so the smooth surface is not
- *       clipped;
+ *       clipped; the dropped pieces are out before the fill, so they never close a hole or widen
+ *       into a sheet;
  *   <li>metal touching that region without air contact (a plate, a nail, a prosthesis) is kept
  *       whole; of metal touching air (a fixator pin, a wire out of the skin) only the part inside
- *       the region stays.
+ *       the region stays; a lead marker beside the bone has no kept piece around it and goes.
  * </ol>
  *
- * The result is a guess for display, applied as one undoable cut; it changes no voxel. Memory: four
- * bit volumes of the grid plus the scratch of one slice, all taken from the budget up front.
+ * <p>Known losses, put back by Undo or Whole volume: a bone fragment displaced by more than {@link
+ * #JOIN_MM} from any kept bone, a paediatric ossification centre further than that from its shaft,
+ * and any bone smaller than {@link #SEED_MM3} in a volume that holds no bigger bone near it. The
+ * other way round, a marker or a speck of {@link #NOISE_MM3} or more within {@link #JOIN_MM} of the
+ * bone stays, and so does a chain of such specks that starts there.
+ *
+ * <p>The result is a guess for display, applied as one undoable cut; it changes no voxel. Memory:
+ * four bit volumes of the grid plus the scratch of one slice, all taken from the budget up front,
+ * and one record per piece between the two sizes.
  */
 public final class BoneIsolation {
 
@@ -64,10 +85,25 @@ public final class BoneIsolation {
   /** Widening of the bone region, in grid voxels. */
   public static final int MARGIN_VOXELS = 2;
 
+  /** An internal piece of this volume or more, in mm3, is bone on its own. */
+  public static final double SEED_MM3 = 1000;
+
+  /** An internal piece under this volume, in mm3, is noise whatever lies near it. */
+  public static final double NOISE_MM3 = 5;
+
+  /**
+   * An internal piece between the two sizes stays when it lies within this distance, in mm, of a
+   * kept piece. Measured in 6-connected steps of the grid, so along a diagonal the reach is
+   * shorter.
+   */
+  public static final double JOIN_MM = 4;
+
   /**
    * @param region the voxels to keep, on the grid of the kept mask
    * @param voxels how many
-   * @param bonePieces dense pieces kept as bone
+   * @param bonePieces dense pieces kept as bone by their size
+   * @param joinedPieces smaller dense pieces kept for lying near a kept piece
+   * @param droppedPieces internal dense pieces dropped as noise or as too far from the bone
    * @param externalPieces dense pieces cut away for touching outside air
    * @param implants metal pieces kept whole
    */
@@ -75,13 +111,16 @@ public final class BoneIsolation {
       VoxelBits region,
       long voxels,
       int bonePieces,
+      int joinedPieces,
+      int droppedPieces,
       int externalPieces,
       int implants,
       long millis,
       long peakBytes) {}
 
-  /** One connected piece and what the flood learnt about it. */
-  private record Piece(long voxels, long airVoxels, boolean touchesRegion, Box box) {
+  /** One connected piece, what the flood learnt about it, and the voxel it was grown from. */
+  private record Piece(
+      long voxels, long airVoxels, boolean touchesRegion, Box box, int x, int y, int z) {
     boolean isExternal() {
       return airVoxels >= Math.max(MIN_AIR_CONTACTS, AIR_CONTACT_SHARE * voxels);
     }
@@ -100,6 +139,7 @@ public final class BoneIsolation {
   /**
    * @param space the grid of the kept mask over the texture
    * @param sampler CT values of the texture voxels, in HU
+   * @param gridVoxelMm size of one grid voxel in mm, on each axis
    * @param boneHu threshold from which a voxel is dense (bone or something as dense)
    * @param cancelled stops the search early, returning empty
    * @param budget working memory; refused with a {@link VoxelFlood.BudgetException} when short
@@ -108,6 +148,7 @@ public final class BoneIsolation {
   public static Optional<Result> find(
       VolumeSpace space,
       VoxelSampler sampler,
+      Vector3d gridVoxelMm,
       double boneHu,
       BooleanSupplier cancelled,
       WorkingMemory budget) {
@@ -116,6 +157,7 @@ public final class BoneIsolation {
         space,
         BoneExtent.slicesOf(sampler, space.texture()),
         samplerBytes,
+        gridVoxelMm,
         boneHu,
         cancelled,
         budget);
@@ -126,10 +168,16 @@ public final class BoneIsolation {
       VolumeSpace space,
       BoneExtent.SliceSource slices,
       long samplerBytes,
+      Vector3d gridVoxelMm,
       double boneHu,
       BooleanSupplier cancelled,
       WorkingMemory budget) {
     long start = System.nanoTime();
+    if (!(gridVoxelMm.x > 0 && gridVoxelMm.y > 0 && gridVoxelMm.z > 0)) {
+      throw new IllegalArgumentException("Voxel size " + gridVoxelMm);
+    }
+    double voxelMm3 = gridVoxelMm.x * gridVoxelMm.y * gridVoxelMm.z;
+    int[] joinSteps = joinSteps(gridVoxelMm);
     Vector3i g = space.grid();
     int sx = g.x;
     int sy = g.y;
@@ -142,6 +190,7 @@ public final class BoneIsolation {
     VoxelBits region = new VoxelBits(sx, sy, sz);
     byte[] cell = new byte[sliceVoxels];
     IntQueue queue = new IntQueue(1 << 12, budget);
+    IntQueue queue2 = new IntQueue(1 << 12, budget);
     try {
       GridSlices grid = new GridSlices(space, slices);
       for (int z = 0; z < sz; z++) {
@@ -153,9 +202,12 @@ public final class BoneIsolation {
         mark(cell, REACHED, air.sliceWords(z));
       }
 
+      // Every dense piece: external, bone by size, noise, or a candidate between the two sizes.
       int bonePieces = 0;
       int externalPieces = 0;
+      int droppedPieces = 0;
       Box bones = null;
+      List<Piece> candidates = new ArrayList<>();
       for (int z = 0; z < sz; z++) {
         long[] d = dense.sliceWords(z);
         for (int w = 0; w < d.length; w++) {
@@ -167,48 +219,89 @@ public final class BoneIsolation {
             int x = i % sx;
             int y = i / sx;
             Piece p = flood(dense, region, air, null, x, y, z, queue);
-            if (p.isExternal()) {
+            double mm3 = p.voxels() * voxelMm3;
+            if (p.isExternal() || mm3 < NOISE_MM3) {
               // Its voxels alone are reached through the region: no other piece touches them.
               flood(region, null, air, null, x, y, z, queue);
-              externalPieces++;
-            } else {
+              if (p.isExternal()) {
+                externalPieces++;
+              } else {
+                droppedPieces++;
+              }
+            } else if (mm3 >= SEED_MM3) {
               bones = bones == null ? p.box() : union(bones, p.box());
               bonePieces++;
+            } else {
+              candidates.add(p);
             }
           }
         }
       }
       if (bonePieces == 0) {
+        Piece largest = null;
+        for (Piece p : candidates) {
+          if (largest == null || p.voxels() > largest.voxels()) {
+            largest = p;
+          }
+        }
+        if (largest == null) {
+          return Optional.empty();
+        }
+        candidates.remove(largest);
+        bones = largest.box();
+        bonePieces = 1;
+      }
+
+      // The metal pieces and their air contact, while the air is known; their bits move into the
+      // dense volume, which the floods above have emptied.
+      List<Piece> metals = new ArrayList<>();
+      for (int z = 0; z < sz; z++) {
+        long[] m = metal.sliceWords(z);
+        for (int w = 0; w < m.length; w++) {
+          while (m[w] != 0) {
+            int i = (w << 6) + Long.numberOfTrailingZeros(m[w]);
+            metals.add(flood(metal, dense, air, null, i % sx, i / sx, z, queue));
+          }
+        }
+      }
+      VoxelBits metalBits = dense;
+      // The candidates leave the region for the emptied metal volume.
+      VoxelBits cand = metal;
+      for (Piece p : candidates) {
+        flood(region, cand, null, null, p.x(), p.y(), p.z(), queue);
+      }
+      // The air has served: its volume is the scratch from here on.
+      VoxelBits scratch = air;
+      scratch.fill(false);
+
+      Join join =
+          join(region, cand, scratch, candidates, joinSteps, bones, queue, queue2, cancelled);
+      if (join == null) {
         return Optional.empty();
       }
+      droppedPieces += candidates.size();
+      bones = join.box();
 
       Box box = bones.grow(1, region);
       fillHoles(region, box, cell, queue);
       if (cancelled.getAsBoolean()) {
         return Optional.empty();
       }
-      // The dense bits are all clear by now: the volume serves as the scratch of the widening.
-      dilate(region, dense, MARGIN_VOXELS, box);
+      dilate(region, scratch, MARGIN_VOXELS, box);
 
       int implants = 0;
-      for (int z = 0; z < sz; z++) {
-        long[] m = metal.sliceWords(z);
-        for (int w = 0; w < m.length; w++) {
-          while (m[w] != 0) {
-            int i = (w << 6) + Long.numberOfTrailingZeros(m[w]);
-            Piece p = flood(metal, dense, air, region, i % sx, i / sx, z, queue);
-            boolean keep = p.touchesRegion() && !p.isExternal();
-            for (int k = p.box().z0(); k <= p.box().z1(); k++) {
-              long[] scratch = dense.sliceWords(k);
-              if (keep) {
-                or(region.sliceWords(k), scratch);
-              }
-              Arrays.fill(scratch, 0L);
-            }
-            if (keep) {
-              implants++;
-            }
+      for (Piece p : metals) {
+        Piece q = flood(metalBits, scratch, null, region, p.x(), p.y(), p.z(), queue);
+        boolean keep = q.touchesRegion() && !p.isExternal();
+        for (int k = p.box().z0(); k <= p.box().z1(); k++) {
+          long[] s = scratch.sliceWords(k);
+          if (keep) {
+            or(region.sliceWords(k), s);
           }
+          Arrays.fill(s, 0L);
+        }
+        if (keep) {
+          implants++;
         }
       }
       return Optional.of(
@@ -216,12 +309,15 @@ public final class BoneIsolation {
               region,
               region.count(),
               bonePieces,
+              join.joined(),
+              droppedPieces,
               externalPieces,
               implants,
               (System.nanoTime() - start) / 1_000_000,
               budget.peak()));
     } finally {
       queue.free();
+      queue2.free();
     }
   }
 
@@ -231,6 +327,178 @@ public final class BoneIsolation {
     long sliceVoxels = (long) g.x * g.y;
     long sliceWords = (sliceVoxels + 63) >>> 6;
     return 4 * 8L * sliceWords * g.z + sliceVoxels + 3 * 8L * sliceWords;
+  }
+
+  /** Steps of {@link #JOIN_MM} on each axis of the grid, at least one. */
+  static int[] joinSteps(Vector3d voxelMm) {
+    return new int[] {
+      Math.max(1, (int) Math.round(JOIN_MM / voxelMm.x)),
+      Math.max(1, (int) Math.round(JOIN_MM / voxelMm.y)),
+      Math.max(1, (int) Math.round(JOIN_MM / voxelMm.z))
+    };
+  }
+
+  /** What the spread over the candidates gave: the pieces joined and the box of all kept pieces. */
+  private record Join(int joined, Box box) {}
+
+  /**
+   * Moves into {@code region} every candidate within the join steps of it, again and again until
+   * none is, taking the joined pieces out of {@code pending}; {@code null} when cancelled.
+   */
+  private static Join join(
+      VoxelBits region,
+      VoxelBits cand,
+      VoxelBits scratch,
+      List<Piece> pending,
+      int[] steps,
+      Box box,
+      IntQueue a,
+      IntQueue b,
+      BooleanSupplier cancelled) {
+    int joined = 0;
+    // Only a candidate whose reach meets a piece kept in the last round can have come near.
+    List<Box> fresh = List.of(box);
+    while (!fresh.isEmpty() && !pending.isEmpty()) {
+      List<Box> next = new ArrayList<>();
+      Iterator<Piece> it = pending.iterator();
+      while (it.hasNext()) {
+        Piece p = it.next();
+        Box reach = grow(p.box(), steps, cand);
+        if (!meetsAny(reach, fresh)) {
+          continue;
+        }
+        if (cancelled.getAsBoolean()) {
+          return null;
+        }
+        if (nearRegion(p, cand, region, scratch, steps, reach, a, b)) {
+          flood(cand, region, null, null, p.x(), p.y(), p.z(), a);
+          it.remove();
+          joined++;
+          box = union(box, p.box());
+          next.add(p.box());
+        }
+      }
+      fresh = next;
+    }
+    return new Join(joined, box);
+  }
+
+  /**
+   * Whether any voxel of {@code region} lies within the join steps of the candidate piece grown
+   * from the seed voxel over {@code cand}: a breadth-first search outwards from the piece, one step
+   * per level, along each axis only up to its steps. {@code visited} must be clear within {@code
+   * reach} and is clear again on return; the queues are empty on return.
+   */
+  private static boolean nearRegion(
+      Piece p,
+      VoxelBits cand,
+      VoxelBits region,
+      VoxelBits visited,
+      int[] steps,
+      Box reach,
+      IntQueue level,
+      IntQueue nextLevel) {
+    int sx = cand.sizeX();
+    int sy = cand.sizeY();
+    int sz = cand.sizeZ();
+    int seed = p.x() + sx * (p.y() + sy * p.z());
+    visited.set(p.x(), p.y(), p.z());
+    level.add(seed);
+    // Level 0: the piece itself, left in place.
+    while (!level.isEmpty()) {
+      int i = level.poll();
+      nextLevel.add(i);
+      int x = i % sx;
+      int y = (i / sx) % sy;
+      int z = i / sx / sy;
+      for (int[] n : NEIGHBOURS) {
+        int nx = x + n[0];
+        int ny = y + n[1];
+        int nz = z + n[2];
+        if (nx < 0 || ny < 0 || nz < 0 || nx >= sx || ny >= sy || nz >= sz) {
+          continue;
+        }
+        if (cand.get(nx, ny, nz) && visited.testAndSet(nx, ny, nz)) {
+          level.add(nx + sx * (ny + sy * nz));
+        }
+      }
+    }
+    boolean found = false;
+    int maxStep = Math.max(steps[0], Math.max(steps[1], steps[2]));
+    for (int k = 1; k <= maxStep && !found; k++) {
+      IntQueue t = level;
+      level = nextLevel;
+      nextLevel = t;
+      while (!level.isEmpty() && !found) {
+        int i = level.poll();
+        int x = i % sx;
+        int y = (i / sx) % sy;
+        int z = i / sx / sy;
+        for (int[] n : NEIGHBOURS) {
+          int axis = n[0] != 0 ? 0 : n[1] != 0 ? 1 : 2;
+          if (steps[axis] < k) {
+            continue;
+          }
+          int nx = x + n[0];
+          int ny = y + n[1];
+          int nz = z + n[2];
+          if (nx < 0 || ny < 0 || nz < 0 || nx >= sx || ny >= sy || nz >= sz) {
+            continue;
+          }
+          if (region.get(nx, ny, nz)) {
+            found = true;
+            break;
+          }
+          if (visited.testAndSet(nx, ny, nz)) {
+            nextLevel.add(nx + sx * (ny + sy * nz));
+          }
+        }
+      }
+    }
+    while (!level.isEmpty()) {
+      level.poll();
+    }
+    while (!nextLevel.isEmpty()) {
+      nextLevel.poll();
+    }
+    clearBox(visited, reach);
+    return found;
+  }
+
+  private static Box grow(Box b, int[] steps, VoxelBits v) {
+    return new Box(
+        Math.max(0, b.x0() - steps[0]),
+        Math.min(v.sizeX() - 1, b.x1() + steps[0]),
+        Math.max(0, b.y0() - steps[1]),
+        Math.min(v.sizeY() - 1, b.y1() + steps[1]),
+        Math.max(0, b.z0() - steps[2]),
+        Math.min(v.sizeZ() - 1, b.z1() + steps[2]));
+  }
+
+  private static boolean meetsAny(Box a, List<Box> boxes) {
+    for (Box b : boxes) {
+      if (a.x0() <= b.x1()
+          && b.x0() <= a.x1()
+          && a.y0() <= b.y1()
+          && b.y0() <= a.y1()
+          && a.z0() <= b.z1()
+          && b.z0() <= a.z1()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Clears the words holding the rows of the box; the words may reach beyond the box's columns. */
+  private static void clearBox(VoxelBits v, Box box) {
+    int sx = v.sizeX();
+    for (int z = box.z0(); z <= box.z1(); z++) {
+      long[] words = v.sliceWords(z);
+      for (int y = box.y0(); y <= box.y1(); y++) {
+        int row = y * sx;
+        Arrays.fill(words, (row + box.x0()) >>> 6, ((row + box.x1()) >>> 6) + 1, 0L);
+      }
+    }
   }
 
   /** Dense and metal bits of a slice; the cells open to the air flood are the air voxels. */
@@ -317,7 +585,8 @@ public final class BoneIsolation {
   /**
    * Grows the 6-connected piece of {@code from} holding the start voxel, clearing its voxels from
    * {@code from} and setting them in {@code into} (when given), and tells how many of them touch
-   * {@code air}, whether any lies in or beside {@code region} (when given), and their bounds.
+   * {@code air} (when given), whether any lies in or beside {@code region} (when given), and their
+   * bounds.
    */
   private static Piece flood(
       VoxelBits from,
@@ -364,7 +633,7 @@ public final class BoneIsolation {
         if (nx < 0 || ny < 0 || nz < 0 || nx >= sx || ny >= sy || nz >= sz) {
           continue;
         }
-        if (air.get(nx, ny, nz)) {
+        if (air != null && air.get(nx, ny, nz)) {
           nearAir = true;
         } else if (from.testAndClear(nx, ny, nz)) {
           if (into != null) {
@@ -381,7 +650,13 @@ public final class BoneIsolation {
       }
     }
     return new Piece(
-        voxels, airVoxels, touches, new Box(min[0], max[0], min[1], max[1], min[2], max[2]));
+        voxels,
+        airVoxels,
+        touches,
+        new Box(min[0], max[0], min[1], max[1], min[2], max[2]),
+        x0,
+        y0,
+        z0);
   }
 
   private static Box union(Box a, Box b) {
