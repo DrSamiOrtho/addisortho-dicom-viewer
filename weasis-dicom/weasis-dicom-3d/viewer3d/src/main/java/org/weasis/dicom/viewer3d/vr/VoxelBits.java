@@ -83,6 +83,16 @@ public final class VoxelBits {
     return (old & bit) == 0;
   }
 
+  /** Clears the voxel and tells whether it was set before. */
+  public boolean testAndClear(int x, int y, int z) {
+    int i = y * sizeX + x;
+    long[] s = slices[z];
+    long bit = 1L << i;
+    long old = s[i >>> 6];
+    s[i >>> 6] = old & ~bit;
+    return (old & bit) != 0;
+  }
+
   /** Whether voxel {@code i} of slice {@code z} is set, in row-major slice order. */
   public boolean getInSlice(int z, int i) {
     return (slices[z][i >>> 6] & (1L << i)) != 0;

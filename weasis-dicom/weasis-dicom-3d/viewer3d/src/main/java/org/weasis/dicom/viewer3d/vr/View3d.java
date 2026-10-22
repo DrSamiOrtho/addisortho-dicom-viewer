@@ -1886,12 +1886,72 @@ public class View3d extends VolumeCanvas
             });
         notifyCropListeners();
         showStatus(Messages.getString("crop.auto.done"));
+        if (!asked) {
+          startIsolateBone(false);
+        }
       } else if (asked) {
         showStatus(Messages.getString("crop.auto.none"));
       }
     } finally {
       notifyToolState();
     }
+  }
+
+  // ---- Bone isolated from the cast, the table and the rest (Addis Ortho) ----
+
+  /** Whether {@link #isolateBone} can run: a fully loaded CT, no cut and no crop search running. */
+  public boolean canIsolateBone() {
+    return canAutoCropToBone() && !cutRunning;
+  }
+
+  /**
+   * Keeps only the bone, as one undoable cut: the cast, the splint, the table, the clothing and the
+   * soft tissue are cut away, an implant in or on the bone stays. See {@link BoneIsolation}.
+   */
+  public void isolateBone() {
+    startIsolateBone(true);
+  }
+
+  private void startIsolateBone(boolean asked) {
+    DicomVolTexture tex = volTexture;
+    if (!canIsolateBone()) {
+      return;
+    }
+    KeptMask mask = getOrCreateKeptMask();
+    if (mask == null) {
+      return;
+    }
+    VoxelSampler sampler = voxelSampler();
+    runCut(
+        mask,
+        Messages.getString("isolate.busy"),
+        () -> {
+          Optional<BoneIsolation.Result> found =
+              BoneIsolation.find(
+                  mask.space(),
+                  sampler,
+                  BoneExtent.DEFAULT_THRESHOLD_HU,
+                  () -> volTexture != tex,
+                  WorkingMemory.ofFreeHeap());
+          if (found.isEmpty()) {
+            return null;
+          }
+          BoneIsolation.Result r = found.get();
+          LOGGER.info(
+              "Bone isolated: {} voxels kept, {} bone pieces, {} external pieces, {} implants, in"
+                  + " {} ms ({} MB peak)",
+              r.voxels(),
+              r.bonePieces(),
+              r.externalPieces(),
+              r.implants(),
+              r.millis(),
+              r.peakBytes() >> 20);
+          return VoxelFlood.keepOnly(mask.bits(), r.region());
+        },
+        () -> {},
+        new CutText(
+            Messages.getString(asked ? "isolate.none" : "crop.auto.done"),
+            Messages.getString("isolate.done")));
   }
 
   // ---- Seed marker and threshold preview of the Bones panel (Addis Ortho) ----
@@ -2728,8 +2788,21 @@ public class View3d extends VolumeCanvas
     };
   }
 
+  /**
+   * What a cut says when it is over: {@code nothing} when it found nothing to cut, {@code done}
+   * when it cut something ({@code null} counts the voxels).
+   */
+  private record CutText(String nothing, String done) {
+    static final CutText DEFAULT = new CutText(Messages.getString("cut.nothing"), null);
+  }
+
   /** Computes a cut on the worker thread and applies it on the event dispatch thread. */
   private void runCut(KeptMask mask, String message, Supplier<MaskDiff> work, Runnable after) {
+    runCut(mask, message, work, after, CutText.DEFAULT);
+  }
+
+  private void runCut(
+      KeptMask mask, String message, Supplier<MaskDiff> work, Runnable after, CutText text) {
     cutRunning = true;
     statusMessage = message;
     setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
@@ -2753,13 +2826,14 @@ public class View3d extends VolumeCanvas
           } finally {
             MaskDiff result = diff;
             String why = failure;
-            GuiExecutor.execute(() -> finishCut(mask, result, why, after));
+            GuiExecutor.execute(() -> finishCut(mask, result, why, after, text));
           }
         });
   }
 
   /** EDT part of {@link #runCut}: always clears the running state, then applies the result. */
-  private void finishCut(KeptMask mask, MaskDiff result, String failure, Runnable after) {
+  private void finishCut(
+      KeptMask mask, MaskDiff result, String failure, Runnable after, CutText text) {
     cutRunning = false;
     statusMessage = null;
     setCursor(null);
@@ -2772,12 +2846,16 @@ public class View3d extends VolumeCanvas
           editHistory.push(EditHistory.cut(mask));
         }
         after.run();
-        showStatus(
-            result.isEmpty()
-                ? Messages.getString("cut.nothing")
-                : String.format(Messages.getString("cut.removed"), result.voxels()));
+        if (result.isEmpty()) {
+          showStatus(text.nothing());
+        } else {
+          showStatus(
+              text.done() != null
+                  ? text.done()
+                  : String.format(Messages.getString("cut.removed"), result.voxels()));
+        }
       } else if (keptMask == mask) {
-        showStatus(Messages.getString("cut.nothing"));
+        showStatus(text.nothing());
       }
     } finally {
       cutChanged();
