@@ -85,7 +85,7 @@ public final class VoxelFlood {
   };
 
   /** How far from the clicked voxel a shown voxel is looked for. */
-  private static final int SEED_SEARCH = 3;
+  static final int SEED_SEARCH = 3;
 
   /**
    * Whether a texture voxel is shown by the renderer: the opacity of its value through the preset
@@ -145,9 +145,26 @@ public final class VoxelFlood {
       Vector3i seed,
       int separation,
       WorkingMemory budget) {
+    return grow(space, kept, sampler, visible, seed, separation, SEED_SEARCH, budget);
+  }
+
+  /**
+   * As {@link #grow(VolumeSpace, VoxelBits, VoxelSampler, Visibility, Vector3i, int,
+   * WorkingMemory)}, looking for a shown voxel up to {@code seedSearch} grid voxels from the seed:
+   * further for a click on a slice, which may land in the marrow, than for a picked surface.
+   */
+  public static Optional<Result> grow(
+      VolumeSpace space,
+      VoxelBits kept,
+      VoxelSampler sampler,
+      Visibility visible,
+      Vector3i seed,
+      int separation,
+      int seedSearch,
+      WorkingMemory budget) {
     long start = System.nanoTime();
     budget.reserve(reservationBytes(kept, separation, sampler, visible));
-    Vector3i s = findSeed(space, kept, sampler, visible, seed);
+    Vector3i s = findSeed(space, kept, sampler, visible, seed, seedSearch);
     if (s == null) {
       return Optional.empty();
     }
@@ -251,16 +268,21 @@ public final class VoxelFlood {
   }
 
   private static Vector3i findSeed(
-      VolumeSpace space, VoxelBits kept, VoxelSampler sampler, Visibility visible, Vector3i seed) {
+      VolumeSpace space,
+      VoxelBits kept,
+      VoxelSampler sampler,
+      Visibility visible,
+      Vector3i seed,
+      int radius) {
     if (inside(kept, seed.x, seed.y, seed.z)
         && qualifies(space, kept, sampler, visible, seed.x, seed.y, seed.z)) {
       return new Vector3i(seed);
     }
     Vector3i best = null;
     int bestDistance = Integer.MAX_VALUE;
-    for (int dz = -SEED_SEARCH; dz <= SEED_SEARCH; dz++) {
-      for (int dy = -SEED_SEARCH; dy <= SEED_SEARCH; dy++) {
-        for (int dx = -SEED_SEARCH; dx <= SEED_SEARCH; dx++) {
+    for (int dz = -radius; dz <= radius; dz++) {
+      for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
           int d = dx * dx + dy * dy + dz * dz;
           int x = seed.x + dx;
           int y = seed.y + dy;

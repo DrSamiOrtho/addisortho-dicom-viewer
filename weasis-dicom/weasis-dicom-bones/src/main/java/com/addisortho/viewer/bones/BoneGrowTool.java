@@ -186,6 +186,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   private static View3d lastView;
   private static String statusHtml = " ";
   private static boolean indeterminate;
+  private static boolean previewShown;
 
   static {
     FILL.setSelected(true);
@@ -196,11 +197,12 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       model.addActionListener(_ -> chooseTool(model.isSelected() ? t : null));
       TOOLS.put(t, model);
     }
+    // Filled before the listeners, so loading the class touches no view.
+    fillBones();
     REGION.addListDataListener(onSelection(BoneGrowTool::fillBones));
     BONE.addListDataListener(onSelection(BoneGrowTool::applyPreset));
     LOWER.addChangeListener(_ -> updatePreview());
     PREVIEW.addActionListener(_ -> updatePreview());
-    fillBones();
   }
 
   /** Runs {@code action} when the selected item of a combo box model changes. */
@@ -425,11 +427,15 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   /** Shows or ends the threshold preview on the 3D view. */
   private static void updatePreview() {
+    if (!PREVIEW.isSelected() && !previewShown) {
+      return;
+    }
     Optional<View3d> view = selectedView();
     if (view.isEmpty()) {
       return;
     }
-    if (PREVIEW.isSelected()) {
+    previewShown = PREVIEW.isSelected();
+    if (previewShown) {
       view.get().previewThreshold(((Number) LOWER.getValue()).doubleValue());
     } else if (view.get().isPreviewingThreshold()) {
       view.get().previewThreshold(null);
@@ -569,7 +575,10 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         case NEW -> startGrow(view.get(), ct, session, voxel);
         case ERASE -> startSplit(ct, session, voxel, SplitWorker.Kind.ERASE);
         case SPLIT -> startSplit(ct, session, voxel, SplitWorker.Kind.SPLIT);
-        case HIDE -> view.get().cutStructureAt(seed.lps(), false);
+        case HIDE -> {
+          status(Messages.getString("BoneGrowTool.hiding"));
+          view.get().cutStructureAt(seed.lps(), false, BoneGrowTool::status);
+        }
       }
     } catch (Problem e) {
       warn(e.getMessage());
@@ -746,27 +755,31 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
    * and writes them.
    */
   private static void apply(CtSource ct, GrowSession session, List<Bone> after) {
+    Optional<View3d> view = selectedView();
+    if (view.isEmpty() || view.get().getVolTexture().getVolume() != ct.volume()) {
+      // Without the 3D view of this CT the step could not be undone.
+      warn(Messages.getString("BoneGrowTool.noCt"));
+      return;
+    }
     List<Bone> before = session.bones();
     session.set(after);
-    selectedView()
-        .ifPresent(
-            v ->
-                v.pushEdit(
-                    new EditHistory.Edit() {
-                      @Override
-                      public boolean undo() {
-                        session.set(before);
-                        bonesChanged(ct, session);
-                        return true;
-                      }
+    view.get()
+        .pushEdit(
+            new EditHistory.Edit() {
+              @Override
+              public boolean undo() {
+                session.set(before);
+                bonesChanged(ct, session);
+                return true;
+              }
 
-                      @Override
-                      public boolean redo() {
-                        session.set(after);
-                        bonesChanged(ct, session);
-                        return true;
-                      }
-                    }));
+              @Override
+              public boolean redo() {
+                session.set(after);
+                bonesChanged(ct, session);
+                return true;
+              }
+            });
     bonesChanged(ct, session);
   }
 
@@ -811,7 +824,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       LOGGER.error("Writing the bones segmentation", e);
       warn(String.format(Messages.getString("BoneGrowTool.failed"), e.getCause()));
     }
-    if (!session.isWritten()) {
+    // Written again only when the list changed during the write: a write that failed is not
+    // retried until the next step, so a full disk does not loop.
+    if (session.version() != done.version()) {
       TO_WRITE.putIfAbsent(session, done.ct());
     }
     if (!TO_WRITE.isEmpty()) {
@@ -921,16 +936,22 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
             JOptionPane.PLAIN_MESSAGE);
     Object chosen = names.getEditor().getItem();
     String label = chosen == null ? "" : chosen.toString().trim();
-    if (answer == JOptionPane.OK_OPTION && !label.isEmpty() && !label.equals(bone.label())) {
-      apply(ct, session, session.replaced(bone.id(), bone.withLabel(label), null));
+    // The bone may have changed (an erase finishing) or gone while the dialog was open.
+    Optional<Bone> now = session.bone(bone.id());
+    if (answer == JOptionPane.OK_OPTION
+        && now.isPresent()
+        && !label.isEmpty()
+        && !label.equals(now.get().label())) {
+      apply(ct, session, session.replaced(bone.id(), now.get().withLabel(label), null));
     }
   }
 
   private void recolour(CtSource ct, GrowSession session, Bone bone) {
     Color chosen =
         JColorChooser.showDialog(WinUtil.getParentWindow(this), bone.label(), bone.color());
-    if (chosen != null && !chosen.equals(bone.color())) {
-      apply(ct, session, session.replaced(bone.id(), bone.withColor(chosen), null));
+    Optional<Bone> now = session.bone(bone.id());
+    if (chosen != null && now.isPresent() && !chosen.equals(now.get().color())) {
+      apply(ct, session, session.replaced(bone.id(), now.get().withColor(chosen), null));
     }
   }
 

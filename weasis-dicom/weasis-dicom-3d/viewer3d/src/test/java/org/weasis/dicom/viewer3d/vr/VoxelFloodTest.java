@@ -110,6 +110,20 @@ class VoxelFloodTest {
   }
 
   @Test
+  void aClickOnASliceSearchesFurtherForTheBone() {
+    // Only cube A's face at z 10 is shown, as the cortex of a hollow bone: a click in the marrow
+    // 6 voxels away is beyond the picked surface's search, within a slice click's.
+    VoxelFlood.Visibility cortex = (x, y, z, v) -> v >= 200 && z == 10;
+    Vector3i marrow = gridOf(6, 14, 16);
+    assertTrue(VoxelFlood.grow(SPACE, allKept(), VOLUME, cortex, marrow, 0).isEmpty());
+    Optional<Result> r =
+        VoxelFlood.grow(
+            SPACE, allKept(), VOLUME, cortex, marrow, 0, 12, WorkingMemory.ofFreeHeap());
+    assertTrue(r.isPresent());
+    assertEquals(64, r.get().voxels(), "the face of cube A");
+  }
+
+  @Test
   void nothingNearTheClickSelectsNothing() {
     Optional<Result> r = VoxelFlood.grow(SPACE, allKept(), VOLUME, ABOVE_200, gridOf(28, 2, 2), 0);
     assertTrue(r.isEmpty());
