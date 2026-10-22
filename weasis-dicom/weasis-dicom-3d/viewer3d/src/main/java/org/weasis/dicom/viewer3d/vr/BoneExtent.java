@@ -80,19 +80,23 @@ public final class BoneExtent {
       double thresholdHu,
       double marginMm,
       BooleanSupplier cancelled) {
-    SliceSource slices =
-        sampler instanceof TextureField field
-            ? field::textureSlice
-            : z -> {
-              float[] slice = new float[texture.x * texture.y];
-              for (int y = 0, i = 0; y < texture.y; y++) {
-                for (int x = 0; x < texture.x; x++, i++) {
-                  slice[i] = (float) sampler.valueAt(x, y, z);
-                }
-              }
-              return slice;
-            };
-    return find(slices, texture, texelMm, thresholdHu, marginMm, cancelled);
+    return find(slicesOf(sampler, texture), texture, texelMm, thresholdHu, marginMm, cancelled);
+  }
+
+  /** The sampler read slice by slice: a {@link TextureField} gives its slices as they are. */
+  static SliceSource slicesOf(VoxelSampler sampler, Vector3i texture) {
+    if (sampler instanceof TextureField field) {
+      return field::textureSlice;
+    }
+    return z -> {
+      float[] slice = new float[texture.x * texture.y];
+      for (int y = 0, i = 0; y < texture.y; y++) {
+        for (int x = 0; x < texture.x; x++, i++) {
+          slice[i] = (float) sampler.valueAt(x, y, z);
+        }
+      }
+      return slice;
+    };
   }
 
   /** As above, from whole slices. */
