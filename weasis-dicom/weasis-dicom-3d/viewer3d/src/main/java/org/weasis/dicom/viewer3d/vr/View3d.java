@@ -2631,10 +2631,46 @@ public class View3d extends VolumeCanvas
       showStatus(unavailable);
       return;
     }
-    pickAsync(p, hit -> growAndCut(hit, keep));
+    pickAsync(p, hit -> growAndCut(hit, keep, false));
   }
 
-  private void growAndCut(Optional<Hit> hit, boolean keep) {
+  /**
+   * Cuts away, or keeps alone, the structure at a patient position, as Remove this and Keep only
+   * this do for a click on the 3D view: for a click on a slice of the same CT, in an MPR view. A
+   * slice shows no surface to aim at, so touching bones are always separated at their joint, and a
+   * click in the marrow or just beside the bone finds the bone nearby.
+   */
+  public void cutStructureAt(Vector3d lps, boolean keep) {
+    if (cutRunning) {
+      return;
+    }
+    String unavailable = keepRemoveUnavailableReason();
+    if (unavailable != null) {
+      showStatus(unavailable);
+      return;
+    }
+    Volume<?, ?> volume = volTexture == null ? null : volTexture.getVolume();
+    VolumeSpace space = volumeSpace();
+    if (volume == null || space == null) {
+      return;
+    }
+    Vector3d v;
+    try {
+      v = volume.lpsToVoxel(new Vector3d(lps), new Vector3d());
+    } catch (UnsupportedOperationException e) {
+      showStatus(Messages.getString("cut.nothing"));
+      return;
+    }
+    Vector3d t = space.texCoordOfVolume(v.x, v.y, v.z, new Vector3d());
+    if (t.x < 0 || t.y < 0 || t.z < 0 || t.x > 1 || t.y > 1 || t.z > 1) {
+      showStatus(Messages.getString("cut.nothing"));
+      return;
+    }
+    Vector3i grid = space.gridOfTexCoord(t, new Vector3i());
+    growAndCut(Optional.of(new Hit(t, grid, v, 0)), keep, true);
+  }
+
+  private void growAndCut(Optional<Hit> hit, boolean keep, boolean separate) {
     if (cutRunning) {
       return;
     }
@@ -2651,7 +2687,7 @@ public class View3d extends VolumeCanvas
         bone > 0 ? visibilityOfBone(segments, bone) : visibilityForSelection();
     VoxelSampler sampler = voxelSampler();
     Vector3i seed = hit.get().grid();
-    int separation = bone == 0 && lightSeparation ? SEPARATION_VOXELS : 0;
+    int separation = bone == 0 && (lightSeparation || separate) ? SEPARATION_VOXELS : 0;
     runCut(
         mask,
         Messages.getString("cut.selecting"),

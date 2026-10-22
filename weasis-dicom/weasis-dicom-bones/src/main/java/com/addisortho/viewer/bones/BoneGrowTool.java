@@ -26,6 +26,9 @@ import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Insets;
 import java.beans.PropertyChangeEvent;
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,6 +41,8 @@ import java.util.concurrent.ExecutionException;
 import javax.swing.AbstractButton;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultBoundedRangeModel;
+import javax.swing.DefaultComboBoxModel;
 import javax.swing.Icon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -51,9 +56,12 @@ import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JToggleButton;
+import javax.swing.JToggleButton.ToggleButtonModel;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingWorker;
 import javax.swing.SwingWorker.StateValue;
+import javax.swing.event.ListDataEvent;
+import javax.swing.event.ListDataListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.weasis.core.api.gui.Insertable;
@@ -67,15 +75,19 @@ import org.weasis.core.ui.editor.SeriesViewerEvent;
 import org.weasis.core.ui.editor.SeriesViewerEvent.EVENT;
 import org.weasis.core.ui.editor.SeriesViewerListener;
 import org.weasis.core.ui.editor.image.MouseActions;
+import org.weasis.core.ui.editor.image.ViewCanvas;
+import org.weasis.core.ui.editor.image.ViewerPlugin;
 import org.weasis.core.util.StringUtil;
+import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.viewer3d.ActionVol;
 import org.weasis.dicom.viewer3d.EventManager;
+import org.weasis.dicom.viewer3d.View3DContainer;
 import org.weasis.dicom.viewer3d.vr.EditHistory;
 import org.weasis.dicom.viewer3d.vr.View3d;
 
 /**
- * The Bones panel of the 3D view: the bones selected on the CT as a list, and three click tools
- * that work alike in the 3D view and in the MPR views of the CT.
+ * The Bones panel, beside the 3D view and beside the MPR views: the bones selected on the CT as a
+ * list, and click tools that work alike in the 3D view and in the MPR views of the CT.
  *
  * <ul>
  *   <li>New bone: a click on a bone grows it from there (region grow) and adds it to the list. The
@@ -84,6 +96,8 @@ import org.weasis.dicom.viewer3d.vr.View3d;
  *       it off at its narrowest link and erases it.
  *   <li>Split: a click on a part of a bone makes that part a bone of its own, cut off at the
  *       narrowest link (the femoral head grown with the acetabulum).
+ *   <li>Hide in 3D: a click on a bone, on a slice or in 3D, takes it out of the 3D picture, cut at
+ *       the joint from its neighbours (the scaphoid off the radius), without selecting it.
  * </ul>
  *
  * <p>Each bone of the list can be shown alone or hidden in the 3D picture, renamed, recoloured and
@@ -91,6 +105,10 @@ import org.weasis.dicom.viewer3d.vr.View3d;
  * (Ctrl+Z) walks back through all of them. The bones are written as one DICOM Segmentation of the
  * CT in the background after each step, so the segmentation display, smooth surfaces and the Bone
  * STL export work on them. The grow settings stay under More settings.
+ *
+ * <p>The 3D viewer and the 2D viewer (whose tools the MPR shares) each hold a panel. The bones, the
+ * armed tool, the settings and the messages are held once, here, and every panel shows them: the
+ * panels share their Swing models, and what is not a model is sent to each live panel.
  */
 public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
@@ -117,7 +135,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   private enum Tool {
     NEW("BoneGrowTool.new", "BoneGrowTool.new.hint"),
     ERASE("BoneGrowTool.erase", "BoneGrowTool.erase.hint"),
-    SPLIT("BoneGrowTool.split", "BoneGrowTool.split.hint");
+    SPLIT("BoneGrowTool.split", "BoneGrowTool.split.hint"),
+    HIDE("BoneGrowTool.hideTool", "BoneGrowTool.hideTool.hint");
 
     final String label;
     final String hint;
@@ -128,56 +147,107 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
-  private final JComboBox<BoneNames.Region> regionBox =
-      new JComboBox<>(BoneNames.REGIONS.toArray(BoneNames.Region[]::new));
-  private final JComboBox<BoneNames.Name> boneBox = new JComboBox<>();
-  private final JComboBox<BoneNames.Side> sideBox = new JComboBox<>(BoneNames.Side.values());
-  private final Map<Tool, JToggleButton> toolButtons = new LinkedHashMap<>();
+  // ---- Shared by every panel ----
+
+  private static final DefaultComboBoxModel<BoneNames.Region> REGION =
+      new DefaultComboBoxModel<>(BoneNames.REGIONS.toArray(BoneNames.Region[]::new));
+  private static final DefaultComboBoxModel<BoneNames.Name> BONE = new DefaultComboBoxModel<>();
+  private static final DefaultComboBoxModel<BoneNames.Side> SIDE =
+      new DefaultComboBoxModel<>(BoneNames.Side.values());
+  private static final SpinnerNumberModel LOWER =
+      new SpinnerNumberModel((int) GrowOptions.DEFAULT_LOWER_HU, -1024, 30_000, 10);
+  private static final SpinnerNumberModel UPPER =
+      new SpinnerNumberModel((int) GrowOptions.DEFAULT_UPPER_HU, -1024, 30_000, 10);
+  private static final SpinnerNumberModel CLOSING =
+      new SpinnerNumberModel(1, 0, GrowOptions.MAX_RADIUS, 1);
+  private static final SpinnerNumberModel SEPARATION =
+      new SpinnerNumberModel(0, 0, GrowOptions.MAX_RADIUS, 1);
+  private static final SpinnerNumberModel MIN_PIECE = new SpinnerNumberModel(100, 0, 1_000_000, 50);
+  private static final ToggleButtonModel FILL = new ToggleButtonModel();
+  private static final ToggleButtonModel CROP = new ToggleButtonModel();
+  private static final ToggleButtonModel PREVIEW = new ToggleButtonModel();
+  private static final ToggleButtonModel MORE = new ToggleButtonModel();
+  private static final Map<Tool, ToggleButtonModel> TOOLS = new EnumMap<>(Tool.class);
+  private static final DefaultBoundedRangeModel PROGRESS =
+      new DefaultBoundedRangeModel(0, 0, 0, 100);
+
+  private static final List<WeakReference<BoneGrowTool>> PANELS = new ArrayList<>();
+  private static final SeedPicker PICKER = new SeedPicker();
+  private static final SegExplorer EXPLORER = new SegExplorer();
+  private static final Map<String, GrowSession> SESSIONS = new HashMap<>();
+
+  /** Sessions to write once the running write is done, with their CT. */
+  private static final Map<GrowSession, CtSource> TO_WRITE = new LinkedHashMap<>();
+
+  private static Tool tool;
+  private static CtSource source;
+  private static SwingWorker<?, ?> worker;
+  private static SegWriteWorker writer;
+  private static View3d lastView;
+  private static String statusHtml = " ";
+  private static boolean indeterminate;
+
+  static {
+    FILL.setSelected(true);
+    CROP.setSelected(true);
+    for (Tool t : Tool.values()) {
+      ToggleButtonModel model = new ToggleButtonModel();
+      // Once on the model: every panel's button shares it, so this runs once per click.
+      model.addActionListener(_ -> chooseTool(model.isSelected() ? t : null));
+      TOOLS.put(t, model);
+    }
+    REGION.addListDataListener(onSelection(BoneGrowTool::fillBones));
+    BONE.addListDataListener(onSelection(BoneGrowTool::applyPreset));
+    LOWER.addChangeListener(_ -> updatePreview());
+    PREVIEW.addActionListener(_ -> updatePreview());
+    fillBones();
+  }
+
+  /** Runs {@code action} when the selected item of a combo box model changes. */
+  private static ListDataListener onSelection(Runnable action) {
+    return new ListDataListener() {
+      @Override
+      public void contentsChanged(ListDataEvent e) {
+        if (e.getIndex0() == -1 && e.getIndex1() == -1) {
+          action.run();
+        }
+      }
+
+      @Override
+      public void intervalAdded(ListDataEvent e) {
+        // the selection event follows
+      }
+
+      @Override
+      public void intervalRemoved(ListDataEvent e) {
+        // the selection event follows
+      }
+    };
+  }
+
+  // ---- This panel ----
+
+  private final JComboBox<BoneNames.Side> sideBox = new JComboBox<>(SIDE);
   private final JLabel toolHint = new JLabel();
-  private final JProgressBar progressBar = new JProgressBar(0, 100);
+  private final JProgressBar progressBar = new JProgressBar(PROGRESS);
   private final JButton cancelButton = new JButton(Messages.getString("BoneGrowTool.cancel"));
   private final JLabel statusLabel = new JLabel(" ");
   private final JPanel boneRows = GuiUtils.getVerticalBoxLayoutPanel();
   private final JButton undoButton = new JButton(Messages.getString("BoneGrowTool.undo"));
   private final JButton redoButton = new JButton(Messages.getString("BoneGrowTool.redo"));
   private final JButton wholeButton = new JButton(Messages.getString("BoneGrowTool.whole"));
-  private final JCheckBox moreBox = new JCheckBox(Messages.getString("BoneGrowTool.more"));
   private final JPanel morePanel = GuiUtils.getVerticalBoxLayoutPanel();
-  private final JCheckBox previewBox = new JCheckBox(Messages.getString("BoneGrowTool.preview"));
-  private final JSpinner lowerSpinner =
-      new JSpinner(new SpinnerNumberModel((int) GrowOptions.DEFAULT_LOWER_HU, -1024, 30_000, 10));
-  private final JSpinner upperSpinner =
-      new JSpinner(new SpinnerNumberModel((int) GrowOptions.DEFAULT_UPPER_HU, -1024, 30_000, 10));
-  private final JSpinner closingSpinner =
-      new JSpinner(new SpinnerNumberModel(1, 0, GrowOptions.MAX_RADIUS, 1));
-  private final JSpinner separationSpinner =
-      new JSpinner(new SpinnerNumberModel(0, 0, GrowOptions.MAX_RADIUS, 1));
-  private final JCheckBox fillBox = new JCheckBox(Messages.getString("BoneGrowTool.fill"), true);
-  private final JSpinner minPieceSpinner =
-      new JSpinner(new SpinnerNumberModel(100, 0, 1_000_000, 50));
-  private final JCheckBox cropBox = new JCheckBox(Messages.getString("BoneGrowTool.crop"), true);
   private final JScrollPane rootPane = new JScrollPane();
-
-  private final SeedPicker picker = new SeedPicker();
-  private final SegExplorer explorer = new SegExplorer();
-  private final Map<String, GrowSession> sessions = new HashMap<>();
-
-  /** Sessions to write once the running write is done, with their CT. */
-  private final Map<GrowSession, CtSource> toWrite = new LinkedHashMap<>();
-
   private final Runnable historyListener = this::refreshUndo;
-  private Tool tool;
-  private CtSource source;
-  private SwingWorker<?, ?> worker;
-  private SegWriteWorker writer;
   private View3d historyView;
-  private View3d lastView;
 
   public BoneGrowTool() {
     super(BUTTON_NAME, Insertable.Type.TOOL, 41);
     dockable.setTitleIcon(ResourceUtil.getIcon(OtherIcon.VIEW_3D));
     setDockableWidth(320);
     initGui();
+    PANELS.add(new WeakReference<>(this));
+    showState();
     viewChanged();
   }
 
@@ -194,13 +264,13 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     int gap = 7;
 
     panel.add(GuiUtils.getFlowLayoutPanel(new JLabel(Messages.getString("BoneGrowTool.how"))));
+    JComboBox<BoneNames.Region> regionBox = new JComboBox<>(REGION);
+    JComboBox<BoneNames.Name> boneBox = new JComboBox<>(BONE);
     regionBox.setMaximumRowCount(12);
     boneBox.setMaximumRowCount(20);
     regionBox.setToolTipText(Messages.getString("BoneGrowTool.region.tip"));
     boneBox.setToolTipText(Messages.getString("BoneGrowTool.preset.tip"));
     sideBox.setToolTipText(Messages.getString("BoneGrowTool.side.tip"));
-    regionBox.addActionListener(_ -> fillBones());
-    boneBox.addActionListener(_ -> applyPreset());
     panel.add(row(Messages.getString("BoneGrowTool.region"), regionBox));
     panel.add(GuiUtils.boxVerticalStrut(3));
     panel.add(row(Messages.getString("BoneGrowTool.preset"), boneBox));
@@ -211,9 +281,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     JPanel tools = GuiUtils.getFlowLayoutPanel();
     for (Tool t : Tool.values()) {
       JToggleButton b = new JToggleButton(Messages.getString(t.label));
+      b.setModel(TOOLS.get(t));
       b.setToolTipText(Messages.getString(t.hint));
-      b.addActionListener(_ -> chooseTool(b.isSelected() ? t : null));
-      toolButtons.put(t, b);
       tools.add(b);
     }
     panel.add(tools);
@@ -239,118 +308,197 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     panel.add(GuiUtils.getFlowLayoutPanel(undoButton, redoButton, wholeButton));
     panel.add(GuiUtils.boxVerticalStrut(gap));
 
-    moreBox.addActionListener(_ -> morePanel.setVisible(moreBox.isSelected()));
+    JCheckBox moreBox = checkBox("BoneGrowTool.more", MORE);
+    MORE.addItemListener(_ -> morePanel.setVisible(MORE.isSelected()));
     panel.add(GuiUtils.getFlowLayoutPanel(moreBox));
     String rangeTip = Messages.getString("BoneGrowTool.range.tip");
+    JSpinner lowerSpinner = new JSpinner(LOWER);
+    JSpinner upperSpinner = new JSpinner(UPPER);
     lowerSpinner.setToolTipText(rangeTip);
     upperSpinner.setToolTipText(rangeTip);
-    lowerSpinner.addChangeListener(_ -> updatePreview());
     morePanel.add(row(Messages.getString("BoneGrowTool.lower"), lowerSpinner));
+    JCheckBox previewBox = checkBox("BoneGrowTool.preview", PREVIEW);
     previewBox.setToolTipText(Messages.getString("BoneGrowTool.preview.tip"));
-    previewBox.addActionListener(_ -> updatePreview());
     morePanel.add(GuiUtils.getFlowLayoutPanel(previewBox));
     morePanel.add(GuiUtils.boxVerticalStrut(gap));
     morePanel.add(row(Messages.getString("BoneGrowTool.upper"), upperSpinner));
     morePanel.add(GuiUtils.boxVerticalStrut(gap));
+    JSpinner closingSpinner = new JSpinner(CLOSING);
     closingSpinner.setToolTipText(Messages.getString("BoneGrowTool.closing.tip"));
     morePanel.add(row(Messages.getString("BoneGrowTool.closing"), closingSpinner));
     morePanel.add(GuiUtils.boxVerticalStrut(gap));
+    JSpinner separationSpinner = new JSpinner(SEPARATION);
     separationSpinner.setToolTipText(Messages.getString("BoneGrowTool.separation.tip"));
     morePanel.add(row(Messages.getString("BoneGrowTool.separation"), separationSpinner));
     morePanel.add(GuiUtils.boxVerticalStrut(gap));
-    morePanel.add(GuiUtils.getFlowLayoutPanel(fillBox));
+    morePanel.add(GuiUtils.getFlowLayoutPanel(checkBox("BoneGrowTool.fill", FILL)));
+    JSpinner minPieceSpinner = new JSpinner(MIN_PIECE);
     minPieceSpinner.setToolTipText(Messages.getString("BoneGrowTool.minPiece.tip"));
     morePanel.add(row(Messages.getString("BoneGrowTool.minPiece"), minPieceSpinner));
     morePanel.add(GuiUtils.boxVerticalStrut(gap));
-    morePanel.add(GuiUtils.getFlowLayoutPanel(cropBox));
-    morePanel.setVisible(false);
+    morePanel.add(GuiUtils.getFlowLayoutPanel(checkBox("BoneGrowTool.crop", CROP)));
+    morePanel.setVisible(MORE.isSelected());
     panel.add(morePanel);
     panel.add(GuiUtils.getFlowLayoutPanel(new JLabel(Messages.getString("BoneGrowTool.note"))));
     add(panel);
     add(GuiUtils.boxYLastElement(3));
-    regionBox.setSelectedIndex(0);
-    fillBones();
-    setRunning(false);
-    showHint();
   }
 
-  /** Lists the bones of the chosen region. */
-  private void fillBones() {
-    BoneNames.Region region = (BoneNames.Region) regionBox.getSelectedItem();
-    boneBox.removeAllItems();
-    if (region != null) {
-      region.bones().forEach(boneBox::addItem);
-    }
-    if (boneBox.getItemCount() > 0) {
-      boneBox.setSelectedIndex(0);
-    }
-    applyPreset();
-  }
-
-  private BoneNames.Name selectedName() {
-    return (BoneNames.Name) boneBox.getSelectedItem();
-  }
-
-  private BonePreset selectedPreset() {
-    BoneNames.Name name = selectedName();
-    return name == null ? BonePreset.OTHER : name.preset();
-  }
-
-  /** Puts the settings of the chosen bone in every field; the side only for a paired bone. */
-  private void applyPreset() {
-    BoneNames.Name name = selectedName();
-    sideBox.setEnabled(name != null && name.paired());
-    BonePreset p = selectedPreset();
-    lowerSpinner.setValue((int) p.lowerHu());
-    upperSpinner.setValue((int) GrowOptions.DEFAULT_UPPER_HU);
-    closingSpinner.setValue(p.closingRadius());
-    separationSpinner.setValue(p.separationVoxels());
-    fillBox.setSelected(true);
-    minPieceSpinner.setValue((int) p.minPieceMm3());
-  }
-
-  /** Shows or ends the threshold preview on the 3D view. */
-  private void updatePreview() {
-    Optional<View3d> view = selectedView();
-    if (view.isEmpty()) {
-      return;
-    }
-    if (previewBox.isSelected()) {
-      view.get().previewThreshold(((Number) lowerSpinner.getValue()).doubleValue());
-    } else if (view.get().isPreviewingThreshold()) {
-      view.get().previewThreshold(null);
-    }
+  private static JCheckBox checkBox(String key, ToggleButtonModel model) {
+    JCheckBox box = new JCheckBox(Messages.getString(key));
+    box.setModel(model);
+    return box;
   }
 
   private static JPanel row(String title, JComponent field) {
     return GuiUtils.getHorizontalBoxLayoutPanel(5, new JLabel(title + StringUtil.COLON), field);
   }
 
+  /** The live panels; the ones the garbage collector took are dropped. */
+  private static List<BoneGrowTool> panels() {
+    List<BoneGrowTool> live = new ArrayList<>();
+    PANELS.removeIf(
+        ref -> {
+          BoneGrowTool p = ref.get();
+          if (p == null) {
+            return true;
+          }
+          live.add(p);
+          return false;
+        });
+    return live;
+  }
+
+  /** Shows the shared state that is not a Swing model: hint, side, progress and message. */
+  private void showState() {
+    toolHint.setText(
+        html(Messages.getString(tool == null ? "BoneGrowTool.pickTool" : tool.hint), null));
+    BoneNames.Name name = selectedName();
+    sideBox.setEnabled(name != null && name.paired());
+    boolean running = worker != null;
+    progressBar.setVisible(running);
+    cancelButton.setVisible(running);
+    progressBar.setIndeterminate(running && indeterminate);
+    statusLabel.setText(statusHtml);
+    revalidate();
+  }
+
+  private static void showStateEverywhere() {
+    panels().forEach(BoneGrowTool::showState);
+  }
+
+  // ---- Bone and settings ----
+
+  /** Lists the bones of the chosen region. */
+  private static void fillBones() {
+    BoneNames.Region region = (BoneNames.Region) REGION.getSelectedItem();
+    BONE.removeAllElements();
+    if (region != null) {
+      region.bones().forEach(BONE::addElement);
+    }
+    if (BONE.getSize() > 0) {
+      BONE.setSelectedItem(BONE.getElementAt(0));
+    }
+    applyPreset();
+  }
+
+  private static BoneNames.Name selectedName() {
+    return (BoneNames.Name) BONE.getSelectedItem();
+  }
+
+  private static BonePreset selectedPreset() {
+    BoneNames.Name name = selectedName();
+    return name == null ? BonePreset.OTHER : name.preset();
+  }
+
+  /** Puts the settings of the chosen bone in every field; the side only for a paired bone. */
+  private static void applyPreset() {
+    BonePreset p = selectedPreset();
+    LOWER.setValue((int) p.lowerHu());
+    UPPER.setValue((int) GrowOptions.DEFAULT_UPPER_HU);
+    CLOSING.setValue(p.closingRadius());
+    SEPARATION.setValue(p.separationVoxels());
+    FILL.setSelected(true);
+    MIN_PIECE.setValue((int) p.minPieceMm3());
+    showStateEverywhere();
+  }
+
+  /** Shows or ends the threshold preview on the 3D view. */
+  private static void updatePreview() {
+    Optional<View3d> view = selectedView();
+    if (view.isEmpty()) {
+      return;
+    }
+    if (PREVIEW.isSelected()) {
+      view.get().previewThreshold(((Number) LOWER.getValue()).doubleValue());
+    } else if (view.get().isPreviewingThreshold()) {
+      view.get().previewThreshold(null);
+    }
+  }
+
+  /** The settings in the fields, which a bone fills and More settings lets one change. */
+  private static GrowOptions options(CtSource ct) {
+    int lower = ((Number) LOWER.getValue()).intValue();
+    int upper = ((Number) UPPER.getValue()).intValue();
+    double mm3 = ((Number) MIN_PIECE.getValue()).doubleValue();
+    return GrowOptions.defaults()
+        .withRange(Math.min(lower, upper), Math.max(lower, upper))
+        .withClosingRadius(((Number) CLOSING.getValue()).intValue())
+        .withSeparation(((Number) SEPARATION.getValue()).intValue())
+        .withFillHoles(FILL.isSelected())
+        .withMinPieceVoxels(Math.round(mm3 / ct.grid().voxelVolumeMm3()));
+  }
+
+  // ---- The 3D view and its CT ----
+
   /**
-   * The 3D view holding a volume: the selected view when it is one, else the last one selected, as
-   * a click in an MPR view may take the selection away from the 3D view.
+   * The 3D view holding a volume: the selected one; else the last one selected, as a click in an
+   * MPR view takes the selection away from the 3D view; else any 3D view on screen, for a panel
+   * beside the MPR when no 3D view was selected yet.
    */
-  private Optional<View3d> selectedView() {
+  private static Optional<View3d> selectedView() {
     if (EventManager.getInstance().getSelectedViewPane() instanceof View3d view
         && view.getVolTexture() != null) {
       lastView = view;
       return Optional.of(view);
     }
     View3d last = lastView;
-    return last != null && last.getVolTexture() != null && last.isShowing()
-        ? Optional.of(last)
-        : Optional.empty();
+    if (last != null && last.getVolTexture() != null && last.isShowing()) {
+      return Optional.of(last);
+    }
+    Optional<View3d> open = openView();
+    open.ifPresent(v -> lastView = v);
+    return open;
+  }
+
+  /** A 3D view on screen showing a volume, if any. */
+  private static Optional<View3d> openView() {
+    List<ViewerPlugin<?>> plugins = GuiUtils.getUICore().getViewerPlugins();
+    List<ViewerPlugin<?>> copy;
+    synchronized (plugins) {
+      copy = List.copyOf(plugins);
+    }
+    for (ViewerPlugin<?> plugin : copy) {
+      if (plugin instanceof View3DContainer container) {
+        for (ViewCanvas<DicomImageElement> canvas : container.getImagePanels()) {
+          if (canvas instanceof View3d view && view.getVolTexture() != null && view.isShowing()) {
+            return Optional.of(view);
+          }
+        }
+      }
+    }
+    return Optional.empty();
   }
 
   /** The CT of the view, read again only when the view shows another volume. */
-  private CtSource source(View3d view) throws Problem {
+  private static CtSource source(View3d view) throws Problem {
     if (source == null || source.volume() != view.getVolTexture().getVolume()) {
       source = CtSource.of(view);
     }
     return source;
   }
 
-  private Optional<CtSource> currentSource() {
+  private static Optional<CtSource> currentSource() {
     Optional<View3d> view = selectedView();
     if (view.isEmpty()) {
       return Optional.empty();
@@ -362,24 +510,24 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
-  private GrowSession session(CtSource ct) {
-    return sessions.computeIfAbsent(ct.seriesUID(), GrowSession::new);
+  private static GrowSession session(CtSource ct) {
+    return SESSIONS.computeIfAbsent(ct.seriesUID(), GrowSession::new);
   }
 
   // ---- Tools ----
 
   /** Arms a click tool, or none; the tool stays on for many clicks until turned off. */
-  private void chooseTool(Tool chosen) {
+  private static void chooseTool(Tool chosen) {
     tool = chosen;
-    toolButtons.forEach((t, b) -> b.setSelected(t == chosen));
+    TOOLS.forEach((t, model) -> model.setSelected(t == chosen));
     if (chosen == null) {
-      picker.disarm();
+      PICKER.disarm();
       selectedView().ifPresent(v -> v.setSeedMarker(null));
     } else {
       leaveClickTool();
-      picker.arm(this::picked, this::status);
+      PICKER.arm(BoneGrowTool::picked, BoneGrowTool::status);
     }
-    showHint();
+    showStateEverywhere();
   }
 
   /** Puts rotation back on the 3D view's left button when a click tool is there. */
@@ -391,13 +539,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
-  private void showHint() {
-    toolHint.setText(
-        html(Messages.getString(tool == null ? "BoneGrowTool.pickTool" : tool.hint), null));
-  }
-
   /** A click of the armed tool, as a patient position. */
-  private void picked(Seed seed) {
+  private static void picked(Seed seed) {
     if (tool == null) {
       return;
     }
@@ -426,13 +569,14 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         case NEW -> startGrow(view.get(), ct, session, voxel);
         case ERASE -> startSplit(ct, session, voxel, SplitWorker.Kind.ERASE);
         case SPLIT -> startSplit(ct, session, voxel, SplitWorker.Kind.SPLIT);
+        case HIDE -> view.get().cutStructureAt(seed.lps(), false);
       }
     } catch (Problem e) {
       warn(e.getMessage());
     }
   }
 
-  private void startGrow(View3d view, CtSource ct, GrowSession session, int[] voxel)
+  private static void startGrow(View3d view, CtSource ct, GrowSession session, int[] voxel)
       throws Problem {
     // A click on a coloured bone's surface may land a voxel outside it.
     Optional<Found> taken = session.boneNear(voxel, 1);
@@ -440,11 +584,12 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       warn(String.format(Messages.getString("BoneGrowTool.alreadyIn"), taken.get().bone().label()));
       return;
     }
-    VoxelBox crop = cropBox.isSelected() ? ct.cropBox(view).orElse(null) : null;
+    VoxelBox crop = CROP.isSelected() ? ct.cropBox(view).orElse(null) : null;
     start(new BoneGrowWorker(ct, new Request(voxel, crop, options(ct)), session.masksExcept(-1)));
   }
 
-  private void startSplit(CtSource ct, GrowSession session, int[] voxel, SplitWorker.Kind kind) {
+  private static void startSplit(
+      CtSource ct, GrowSession session, int[] voxel, SplitWorker.Kind kind) {
     Optional<Found> found = session.boneNear(voxel, NEAR_BONE_VOXELS);
     if (found.isEmpty()) {
       warn(
@@ -455,53 +600,33 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     start(new SplitWorker(kind, found.get().bone(), found.get().voxel()));
   }
 
-  /** The settings in the fields, which a bone type fills and More settings lets one change. */
-  private GrowOptions options(CtSource ct) {
-    int lower = ((Number) lowerSpinner.getValue()).intValue();
-    int upper = ((Number) upperSpinner.getValue()).intValue();
-    double mm3 = ((Number) minPieceSpinner.getValue()).doubleValue();
-    return GrowOptions.defaults()
-        .withRange(Math.min(lower, upper), Math.max(lower, upper))
-        .withClosingRadius(((Number) closingSpinner.getValue()).intValue())
-        .withSeparation(((Number) separationSpinner.getValue()).intValue())
-        .withFillHoles(fillBox.isSelected())
-        .withMinPieceVoxels(Math.round(mm3 / ct.grid().voxelVolumeMm3()));
-  }
-
-  private void start(SwingWorker<?, ?> w) {
+  private static void start(SwingWorker<?, ?> w) {
     worker = w;
-    worker.addPropertyChangeListener(this::workerChanged);
+    worker.addPropertyChangeListener(BoneGrowTool::workerChanged);
+    indeterminate = !(w instanceof BoneGrowWorker);
+    PROGRESS.setValue(0);
     status(
         Messages.getString(
             w instanceof SplitWorker s && s.kind() == SplitWorker.Kind.ERASE
                 ? "BoneGrowTool.erasing"
                 : w instanceof SplitWorker ? "BoneGrowTool.splitting" : "BoneGrowTool.growing"));
-    setRunning(true);
     worker.execute();
   }
 
-  private void cancel() {
+  private static void cancel() {
     if (worker != null) {
       worker.cancel(true);
     }
   }
 
-  private void setRunning(boolean running) {
-    progressBar.setVisible(running);
-    cancelButton.setVisible(running);
-    progressBar.setIndeterminate(running && !(worker instanceof BoneGrowWorker));
-    progressBar.setValue(0);
-    revalidate();
-  }
-
-  private void workerChanged(PropertyChangeEvent evt) {
+  private static void workerChanged(PropertyChangeEvent evt) {
     switch (evt.getPropertyName()) {
-      case "progress" -> progressBar.setValue((Integer) evt.getNewValue()); // NON-NLS
+      case "progress" -> PROGRESS.setValue((Integer) evt.getNewValue()); // NON-NLS
       case BoneGrowWorker.STAGE -> {
         String text = (String) evt.getNewValue();
-        status(text);
         // The grow cannot know how far the region will reach.
-        progressBar.setIndeterminate(Messages.getString("BoneGrowTool.stage.GROWING").equals(text));
+        indeterminate = Messages.getString("BoneGrowTool.stage.GROWING").equals(text);
+        status(text);
       }
       case "state" -> { // NON-NLS
         if (evt.getNewValue() == StateValue.DONE && evt.getSource() == worker) {
@@ -514,9 +639,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
-  private void finished(SwingWorker<?, ?> done) {
+  private static void finished(SwingWorker<?, ?> done) {
     worker = null;
-    setRunning(false);
+    showStateEverywhere();
     try {
       if (done instanceof BoneGrowWorker grow) {
         grown(grow, grow.get());
@@ -546,7 +671,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
-  private void grown(BoneGrowWorker done, Result result) {
+  private static void grown(BoneGrowWorker done, Result result) {
     CtSource ct = done.ct();
     GrowSession session = session(ct);
     // The bones may have changed during the grow (an undo): keep out the ones there now.
@@ -561,7 +686,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     String name =
         chosen == null
             ? Messages.getString("bone.other") + " " + id
-            : BoneNames.label(chosen, (BoneNames.Side) sideBox.getSelectedItem(), taken);
+            : BoneNames.label(chosen, (BoneNames.Side) SIDE.getSelectedItem(), taken);
     Bone bone =
         new Bone(
             id,
@@ -584,10 +709,10 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
-  private void splitDone(SplitWorker done, Split split) {
+  private static void splitDone(SplitWorker done, Split split) {
     Optional<CtSource> ct = currentSource();
     Bone bone = done.bone();
-    GrowSession session = ct.map(this::session).orElse(null);
+    GrowSession session = ct.map(BoneGrowTool::session).orElse(null);
     if (session == null || session.bone(bone.id()).filter(b -> b.mask() == bone.mask()).isEmpty()) {
       warn(Messages.getString("BoneGrowTool.changedMeanwhile"));
       return;
@@ -620,7 +745,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
    * Makes {@code after} the bones of the session as one undoable step of the 3D view, then shows
    * and writes them.
    */
-  private void apply(CtSource ct, GrowSession session, List<Bone> after) {
+  private static void apply(CtSource ct, GrowSession session, List<Bone> after) {
     List<Bone> before = session.bones();
     session.set(after);
     selectedView()
@@ -645,15 +770,15 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     bonesChanged(ct, session);
   }
 
-  private void bonesChanged(CtSource ct, GrowSession session) {
-    refreshList();
+  private static void bonesChanged(CtSource ct, GrowSession session) {
+    refreshLists();
     write(ct, session);
   }
 
   /** Writes the session's bones now, or once the running write is done. */
-  private void write(CtSource ct, GrowSession session) {
+  private static void write(CtSource ct, GrowSession session) {
     if (writer != null) {
-      toWrite.put(session, ct);
+      TO_WRITE.put(session, ct);
       return;
     }
     writer = new SegWriteWorker(ct, session);
@@ -667,14 +792,14 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     writer.execute();
   }
 
-  private void written(SegWriteWorker done) {
+  private static void written(SegWriteWorker done) {
     writer = null;
     GrowSession session = done.session();
     try {
       SegWriteWorker.Outcome outcome = done.get();
       String oldSop = session.sopInstanceUID();
       session.written(done.bones(), done.version(), outcome.sopInstanceUID());
-      explorer.replace(
+      EXPLORER.replace(
           done.ct().series(),
           session.segSeriesUID(),
           oldSop,
@@ -687,21 +812,25 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       warn(String.format(Messages.getString("BoneGrowTool.failed"), e.getCause()));
     }
     if (!session.isWritten()) {
-      toWrite.putIfAbsent(session, done.ct());
+      TO_WRITE.putIfAbsent(session, done.ct());
     }
-    if (!toWrite.isEmpty()) {
-      Map.Entry<GrowSession, CtSource> next = toWrite.entrySet().iterator().next();
-      toWrite.remove(next.getKey());
+    if (!TO_WRITE.isEmpty()) {
+      Map.Entry<GrowSession, CtSource> next = TO_WRITE.entrySet().iterator().next();
+      TO_WRITE.remove(next.getKey());
       write(next.getValue(), next.getKey());
     }
-    refreshList();
+    refreshLists();
+  }
+
+  private static void refreshLists() {
+    panels().forEach(BoneGrowTool::refreshList);
   }
 
   /** The rows of the bones of the shown CT. */
   private void refreshList() {
     boneRows.removeAll();
     Optional<CtSource> ct = currentSource();
-    List<Bone> bones = ct.map(this::session).map(GrowSession::bones).orElse(List.of());
+    List<Bone> bones = ct.map(BoneGrowTool::session).map(GrowSession::bones).orElse(List.of());
     if (bones.isEmpty()) {
       boneRows.add(
           GuiUtils.getFlowLayoutPanel(new JLabel(Messages.getString("BoneGrowTool.none"))));
@@ -766,7 +895,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   }
 
   /** Shows the bone alone, or hides it, in the 3D picture: an undoable cut of the 3D view. */
-  private void cutInView(GrowSession session, Bone bone, boolean keep) {
+  private static void cutInView(GrowSession session, Bone bone, boolean keep) {
     Optional<View3d> view = selectedView();
     int number = session.writtenNumber(bone);
     if (view.isEmpty() || number == 0) {
@@ -805,7 +934,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
-  /** Follows the undo history of the selected 3D view, for the Undo and Redo buttons. */
+  /** Follows the undo history of the 3D view, for the Undo and Redo buttons. */
   private void followHistory() {
     View3d view = selectedView().orElse(null);
     if (view != historyView) {
@@ -834,12 +963,14 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   // ---- Messages ----
 
-  private void status(String message) {
-    statusLabel.setText(html(message, null));
+  private static void status(String message) {
+    statusHtml = html(message, null);
+    showStateEverywhere();
   }
 
-  private void warn(String message) {
-    statusLabel.setText(html(message, "#d9822b")); // NON-NLS
+  private static void warn(String message) {
+    statusHtml = html(message, "#d9822b"); // NON-NLS
+    showStateEverywhere();
   }
 
   /** Wrapped text of the panel's width, in a colour when given. */
