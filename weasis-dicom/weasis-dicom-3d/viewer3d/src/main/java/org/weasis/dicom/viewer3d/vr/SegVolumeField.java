@@ -199,6 +199,105 @@ public final class SegVolumeField implements SegmentField {
     return id > 0 && id < alpha.length ? alpha[id] : 0;
   }
 
+  /**
+   * The voxels of a grid that lie in a visible segment of the storage IDs {@code ids}, or touch
+   * one: the nearest label voxel of the grid voxel's centre, or one of its six face neighbours,
+   * holds one of the IDs. The one-voxel margin takes the blurred edge of the bone with it, which
+   * the renderer would otherwise still draw as a thin shell. Hidden segments hold no voxel. Reads
+   * the label slices in order and skips the grid slices near none of the IDs.
+   *
+   * @param ids table by storage ID of the IDs wanted
+   */
+  public VoxelBits regionOf(VolumeSpace space, boolean[] ids) {
+    int gx = space.grid().x;
+    int gy = space.grid().y;
+    int gz = space.grid().z;
+    int sx = labels.sizeX();
+    int sy = labels.sizeY();
+    int sz = labels.sizeZ();
+    VoxelBits region = new VoxelBits(gx, gy, gz);
+    // Texture coordinates are separable, (i + 0.5) / size along each axis, and the nearest label
+    // voxel is round(texCoord * labelSize - 0.5) as in segVoxel().
+    int[] nx = new int[gx];
+    for (int x = 0; x < gx; x++) {
+      nx[x] = (int) Math.round((x + 0.5) / gx * sx - 0.5);
+    }
+    int[] ny = new int[gy];
+    for (int y = 0; y < gy; y++) {
+      ny[y] = (int) Math.round((y + 0.5) / gy * sy - 0.5);
+    }
+    Boolean[] holds = new Boolean[sz];
+    for (int z = 0; z < gz; z++) {
+      int nz = (int) Math.round((z + 0.5) / gz * sz - 0.5);
+      if (!holdsAny(nz - 1, ids, holds)
+          && !holdsAny(nz, ids, holds)
+          && !holdsAny(nz + 1, ids, holds)) {
+        continue;
+      }
+      int[] below = sliceOfTexZ(nz - 1);
+      int[] at = sliceOfTexZ(nz);
+      int[] above = sliceOfTexZ(nz + 1);
+      for (int y = 0; y < gy; y++) {
+        int ly = ny[y];
+        for (int x = 0; x < gx; x++) {
+          int lx = nx[x];
+          if (wanted(at, lx, ly, sx, sy, ids)
+              || wanted(at, lx - 1, ly, sx, sy, ids)
+              || wanted(at, lx + 1, ly, sx, sy, ids)
+              || wanted(at, lx, ly - 1, sx, sy, ids)
+              || wanted(at, lx, ly + 1, sx, sy, ids)
+              || wanted(below, lx, ly, sx, sy, ids)
+              || wanted(above, lx, ly, sx, sy, ids)) {
+            region.set(x, y, z);
+          }
+        }
+      }
+    }
+    return region;
+  }
+
+  /** Whether a label voxel holds one of the IDs and is visible. */
+  private boolean wanted(int[] slice, int x, int y, int sx, int sy, boolean[] ids) {
+    int id = visibleIn(slice, x, y, sx, sy);
+    return id > 0 && id < ids.length && ids[id];
+  }
+
+  /** Whether texture slice {@code texZ} holds one of the IDs; cached in {@code holds}. */
+  private boolean holdsAny(int texZ, boolean[] ids, Boolean[] holds) {
+    if (texZ < 0 || texZ >= holds.length) {
+      return false;
+    }
+    if (holds[texZ] == null) {
+      int[] slice = sliceOfTexZ(texZ);
+      boolean any = false;
+      if (slice != null) {
+        for (int id : slice) {
+          if (id > 0 && id < ids.length && ids[id]) {
+            any = true;
+            break;
+          }
+        }
+      }
+      holds[texZ] = any;
+    }
+    return holds[texZ];
+  }
+
+  /** The label slice drawn at texture slice {@code texZ}, {@code null} outside or unavailable. */
+  private int[] sliceOfTexZ(int texZ) {
+    int sz = labels.sizeZ();
+    return texZ < 0 || texZ >= sz ? null : labelSlice(sz - 1 - texZ);
+  }
+
+  /** The label of a voxel of a slice when it is visible, 0 outside or when hidden. */
+  private int visibleIn(int[] slice, int x, int y, int sx, int sy) {
+    if (slice == null || x < 0 || y < 0 || x >= sx || y >= sy) {
+      return 0;
+    }
+    int id = slice[y * sx + x];
+    return id > 0 && id < alpha.length && alpha[id] > 0 ? id : 0;
+  }
+
   /** segSurfaceColor(): the closest visible one among the eight label voxels around the point. */
   private double nearestVisibleAlpha(Vector3d t) {
     double px = t.x * labels.sizeX() - 0.5;

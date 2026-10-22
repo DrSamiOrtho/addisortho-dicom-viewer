@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.joml.Vector3d;
 import org.joml.Vector3i;
@@ -56,6 +57,48 @@ class EditHistoryTest {
     assertTrue(history.redo());
     assertTrue(history.redo());
     assertEquals(box(0.2), shown.get());
+  }
+
+  @Test
+  void listenersHearEveryChangeAndOutsideStepsUndoInOrder() {
+    EditHistory history = new EditHistory();
+    AtomicInteger heard = new AtomicInteger();
+    Runnable listener = heard::incrementAndGet;
+    history.addListener(listener);
+    AtomicReference<String> bones = new AtomicReference<>("none");
+    history.push(step(bones, "none", "femur"));
+    bones.set("femur");
+    history.push(step(bones, "femur", "femur and pelvis"));
+    bones.set("femur and pelvis");
+    assertEquals(2, heard.get());
+
+    assertTrue(history.undo());
+    assertEquals("femur", bones.get());
+    assertTrue(history.redo());
+    assertEquals("femur and pelvis", bones.get());
+    history.clear();
+    assertEquals(5, heard.get());
+
+    history.removeListener(listener);
+    history.push(step(bones, "a", "b"));
+    assertEquals(5, heard.get());
+  }
+
+  /** A step done outside the view, such as a change of the selected bones. */
+  private static EditHistory.Edit step(AtomicReference<String> state, String before, String after) {
+    return new EditHistory.Edit() {
+      @Override
+      public boolean undo() {
+        state.set(before);
+        return true;
+      }
+
+      @Override
+      public boolean redo() {
+        state.set(after);
+        return true;
+      }
+    };
   }
 
   @Test
