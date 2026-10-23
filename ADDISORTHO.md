@@ -206,7 +206,8 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
     depth, at least 1 mm shallower, with 0.2 cm³ above it; pieces under 1 cm³ join the bone they touch most or lie
     within 10 mm of. A CT over 16 M voxels in the crop is worked on a 2x (or coarser) grid. The 3D view then shows
     Bones in colour (`SegmentationTool.Type.BONES`: the CT itself, only inside visible segments, tinted with the
-    segment colour, `segTint` in `vrFunctions.glsl`). A click on a bone in 3D, on a slice or in the list selects it
+    segment colour, `segTint` in `vrFunctions.glsl`). A click on a bone in 3D, on an MPR or plain 2D slice (`SeedPicker.fromSliceClick`: the slice's own
+    geometry, as the cross-hair) or in the list selects it
     (Shift, Ctrl or Cmd adds); Hide, Show only, Show all, Join, Split, Name and Delete act on the selection. Hidden and
     selected are colour-table styles (`View3d.setSegmentStyles`, static, keyed by SEG instance, so a rebuilt 3D view
     keeps them), not cuts and not a SEG rewrite. Split takes two clicks on one bone and floods the bone's distance map

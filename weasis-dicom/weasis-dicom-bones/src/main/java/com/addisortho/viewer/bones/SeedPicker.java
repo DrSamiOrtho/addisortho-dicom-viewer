@@ -24,6 +24,8 @@ import org.joml.Vector3d;
 import org.weasis.core.api.media.data.MediaSeries;
 import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.codec.TagD;
+import org.weasis.dicom.codec.geometry.GeometryOfSlice;
+import org.weasis.dicom.viewer2d.View2d;
 import org.weasis.dicom.viewer2d.mpr.MprController;
 import org.weasis.dicom.viewer2d.mpr.MprView;
 import org.weasis.dicom.viewer2d.mpr.Volume;
@@ -31,7 +33,8 @@ import org.weasis.dicom.viewer3d.vr.View3d;
 
 /**
  * Takes points of the CT in patient space for the Bones tools: the point clicked while armed, on
- * the bone surface of the 3D view or in an MPR view (axial, coronal, sagittal).
+ * the bone surface of the 3D view, in an MPR view (axial, coronal, sagittal) or on a slice of the
+ * plain 2D viewer.
  */
 final class SeedPicker {
 
@@ -87,6 +90,9 @@ final class SeedPicker {
             view = mprViewOf(c);
           }
           if (view == null) {
+            view = view2dOf(c);
+          }
+          if (view == null) {
             return;
           }
           Point p = SwingUtilities.convertPoint(c, e.getPoint(), view);
@@ -116,6 +122,10 @@ final class SeedPicker {
             pick3d(view3d, p, pick, onMiss);
           } else if (view instanceof MprView mpr) {
             fromClick(mpr, p)
+                .ifPresentOrElse(
+                    pick, () -> onMiss.accept(Messages.getString("BoneGrowTool.missed")));
+          } else if (view instanceof View2d slice) {
+            fromSliceClick(slice, p)
                 .ifPresentOrElse(
                     pick, () -> onMiss.accept(Messages.getString("BoneGrowTool.missed")));
           }
@@ -173,6 +183,33 @@ final class SeedPicker {
     return component == null
         ? null
         : (MprView) SwingUtilities.getAncestorOfClass(MprView.class, component);
+  }
+
+  /** The plain 2D view holding the component; an MPR view is not one (it has its own volume). */
+  private static View2d view2dOf(Component component) {
+    View2d view =
+        component instanceof View2d v
+            ? v
+            : component == null
+                ? null
+                : (View2d) SwingUtilities.getAncestorOfClass(View2d.class, component);
+    return view instanceof MprView ? null : view;
+  }
+
+  /**
+   * Patient position of a point of a slice of the plain 2D viewer, through the slice's own geometry
+   * (Image Position and Orientation), as the cross-hair does.
+   */
+  static Optional<Seed> fromSliceClick(View2d view, Point point) {
+    DicomImageElement image = view.getImage();
+    GeometryOfSlice geometry = image == null ? null : image.getSliceGeometry();
+    Point2D pixel = view.getImageCoordinatesFromMouse(point.x, point.y);
+    if (geometry == null || pixel == null || Double.isNaN(pixel.getX())) {
+      return Optional.empty();
+    }
+    Vector3d lps = geometry.getPosition(pixel);
+    String frame = TagD.getTagValue(image, Tag.FrameOfReferenceUID, String.class);
+    return Optional.of(new Seed(lps, frame, "2D")); // NON-NLS
   }
 
   /** Patient position of a point of an MPR view, through the transform the view draws with. */
