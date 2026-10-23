@@ -98,8 +98,9 @@ import org.weasis.dicom.viewer3d.vr.View3d;
  * is isolated from the cast and the table, every bone is found at once and listed, each in its own
  * colour (see {@link AutoSplit}); the 3D view then shows the CT only inside the bones, tinted.
  *
- * <p>One way of working, alike in the 3D view and on the slices: click a bone to select it (Shift,
- * Ctrl or Cmd adds to the selection), then act on the selection:
+ * <p>One way of working, alike in the 3D view and on the slices: click a bone to select it (Add and
+ * Take out make every click add to the selection or take out of it; Shift, Ctrl or Cmd toggles
+ * one), then act on the selection:
  *
  * <ul>
  *   <li>Hide, Show only, Show all: what the 3D picture shows. A hidden bone stays in the list.
@@ -152,6 +153,10 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   private enum Tool {
     /** Selects the bone; the tool on whenever no other is. */
     SELECT(null, "BoneGrowTool.pickTool"),
+    /** Every click adds the bone to the selection, no key held. */
+    ADD("BoneGrowTool.add", "BoneGrowTool.add.hint"),
+    /** Every click takes the bone out of the selection. */
+    TAKE("BoneGrowTool.take", "BoneGrowTool.take.hint"),
     SPLIT("BoneGrowTool.split", "BoneGrowTool.splitFirst"),
     NEW("BoneGrowTool.new", "BoneGrowTool.new.hint"),
     ERASE("BoneGrowTool.erase", "BoneGrowTool.erase.hint");
@@ -163,6 +168,25 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       this.label = label;
       this.hint = hint;
     }
+  }
+
+  /** What a click does to the selection. */
+  private enum Pick {
+    /** The bone alone. */
+    ONE,
+    /** Shift, Ctrl or Cmd held: in if it was out, out if it was in. */
+    TOGGLE,
+    ADD,
+    TAKE
+  }
+
+  /** What a click on a bone does to the selection with the tool that is on. */
+  private static Pick pickOf(boolean keyHeld) {
+    return switch (tool) {
+      case ADD -> Pick.ADD;
+      case TAKE -> Pick.TAKE;
+      default -> keyHeld ? Pick.TOGGLE : Pick.ONE;
+    };
   }
 
   // ---- Shared by every panel ----
@@ -268,6 +292,10 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       small(new JButton(Messages.getString("BoneGrowTool.delete")));
   private final JToggleButton splitButton =
       small(new JToggleButton(Messages.getString("BoneGrowTool.split")));
+  private final JToggleButton addButton =
+      small(new JToggleButton(Messages.getString("BoneGrowTool.add")));
+  private final JToggleButton takeButton =
+      small(new JToggleButton(Messages.getString("BoneGrowTool.take")));
   private final JButton findButton = new JButton(Messages.getString("BoneGrowTool.find"));
   private final JButton undoButton = new JButton(Messages.getString("BoneGrowTool.undo"));
   private final JButton redoButton = new JButton(Messages.getString("BoneGrowTool.redo"));
@@ -322,12 +350,19 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     nameButton.setToolTipText(Messages.getString("BoneGrowTool.name.tip"));
     deleteButton.setToolTipText(Messages.getString("BoneGrowTool.delete.tip"));
     splitButton.setModel(TOOLS.get(Tool.SPLIT));
+    addButton.setModel(TOOLS.get(Tool.ADD));
+    takeButton.setModel(TOOLS.get(Tool.TAKE));
+    addButton.setToolTipText(Messages.getString("BoneGrowTool.add.tip"));
+    takeButton.setToolTipText(Messages.getString("BoneGrowTool.take.tip"));
     hideButton.addActionListener(_ -> onSelected(BoneGrowTool::hideSelected));
     onlyButton.addActionListener(_ -> onSelected(BoneGrowTool::showOnlySelected));
     allButton.addActionListener(_ -> onSession(BoneGrowTool::showAll));
     joinButton.addActionListener(_ -> onSelected(BoneGrowTool::joinSelected));
     nameButton.addActionListener(_ -> onSelected(this::renameSelected));
     deleteButton.addActionListener(_ -> onSelected(BoneGrowTool::deleteSelected));
+    panel.add(
+        GuiUtils.getFlowLayoutPanel(
+            new JLabel(Messages.getString("BoneGrowTool.selection")), addButton, takeButton));
     panel.add(GuiUtils.getFlowLayoutPanel(hideButton, onlyButton, allButton));
     panel.add(GuiUtils.getFlowLayoutPanel(joinButton, splitButton, nameButton, deleteButton));
     JCheckBox naturalBox = checkBox("BoneGrowTool.natural", NATURAL);
@@ -471,6 +506,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     allButton.setEnabled(bones > 0);
     joinButton.setEnabled(selected > 1);
     splitButton.setEnabled(bones > 0);
+    addButton.setEnabled(bones > 0);
+    takeButton.setEnabled(bones > 0);
     nameButton.setEnabled(selected == 1);
     deleteButton.setEnabled(selected > 0);
     revalidate();
@@ -775,7 +812,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   /** A click in the 3D view that met nothing. */
   private static void missed(String message) {
     if (tool == Tool.SELECT && !CLICK_TOOLS.contains(leftTool())) {
-      currentSource().map(BoneGrowTool::session).ifPresent(s -> select(s, null, false));
+      currentSource().map(BoneGrowTool::session).ifPresent(s -> select(s, null, Pick.ONE));
     }
     status(message);
   }
@@ -815,7 +852,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
           seed.additive(),
           session.boneNear(voxel, NEAR_BONE_VOXELS).map(f -> f.bone().label()).orElse("no bone"));
       switch (tool) {
-        case SELECT -> clickToSelect(session, voxel, seed.additive());
+        case SELECT, ADD, TAKE -> clickToSelect(session, voxel, pickOf(seed.additive()));
         case SPLIT -> clickToSplit(view.get(), ct, session, voxel, seed);
         case NEW -> {
           view.get().setSeedMarker(seed.lps());
@@ -831,36 +868,43 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
-  private static void clickToSelect(GrowSession session, int[] voxel, boolean additive) {
+  private static void clickToSelect(GrowSession session, int[] voxel, Pick pick) {
     Optional<Found> found = session.boneNear(voxel, NEAR_BONE_VOXELS);
     if (found.isEmpty()) {
       if (!session.bones().isEmpty()) {
-        select(session, null, additive);
+        select(session, null, pick);
         status(Messages.getString("BoneGrowTool.nothingThere"));
       }
       return;
     }
-    select(session, found.get().bone(), additive);
+    select(session, found.get().bone(), pick);
   }
 
   /**
-   * Selects {@code bone} alone, or adds it to the selection (takes it out again when it was in);
-   * {@code null} clears the selection unless {@code additive}.
+   * Selects {@code bone} alone, adds it to the selection, takes it out, or toggles it, as {@code
+   * pick} says; {@code null} clears the selection when the pick is {@link Pick#ONE}.
    */
-  private static void select(GrowSession session, Bone bone, boolean additive) {
+  private static void select(GrowSession session, Bone bone, Pick pick) {
     Set<Integer> selected = session.selected();
     if (bone == null) {
-      if (additive || selected.isEmpty()) {
+      if (pick != Pick.ONE || selected.isEmpty()) {
         return;
       }
       selected.clear();
-    } else if (additive) {
-      if (!selected.remove(bone.id())) {
-        selected.add(bone.id());
-      }
     } else {
-      selected.clear();
-      selected.add(bone.id());
+      switch (pick) {
+        case ONE -> {
+          selected.clear();
+          selected.add(bone.id());
+        }
+        case TOGGLE -> {
+          if (!selected.remove(bone.id())) {
+            selected.add(bone.id());
+          }
+        }
+        case ADD -> selected.add(bone.id());
+        case TAKE -> selected.remove(bone.id());
+      }
     }
     showBonesIfPlain();
     List<Bone> now = session.selectedBones();
@@ -889,7 +933,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         || session.bone(splitStart.bone().id()).filter(b -> b == splitStart.bone()).isEmpty()) {
       // First click: the fragment.
       splitStart = found.get();
-      select(session, found.get().bone(), false);
+      select(session, found.get().bone(), Pick.ONE);
       String label = found.get().bone().label();
       status(String.format(Messages.getString("BoneGrowTool.splitFragment"), label));
       return;
@@ -1408,7 +1452,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
             if (e.getClickCount() == 2) {
               rename(ct, session, bone);
             } else {
-              select(session, bone, e.isShiftDown() || e.isControlDown() || e.isMetaDown());
+              select(session, bone, pickOf(e.isShiftDown() || e.isControlDown() || e.isMetaDown()));
             }
           }
         };
