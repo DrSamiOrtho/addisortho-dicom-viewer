@@ -173,6 +173,39 @@ class BoneIsolationTest {
     return false;
   }
 
+  /**
+   * A standard (smooth) kernel: the air beside the plaster and the table reads -100 HU, neither air
+   * nor dense, so they touch the outside air only through that blurred layer.
+   */
+  @Test
+  void theCastAndTheTableGoBehindTheBlurredEdgeOfASmoothKernel() {
+    BoneExtent.SliceSource sharp = Forearm.plain().slices();
+    BoneExtent.SliceSource smooth =
+        z -> {
+          float[] s = sharp.slice(z);
+          float[] out = s.clone();
+          for (int y = 1; y < H - 1; y++) {
+            for (int x = 1; x < W - 1; x++) {
+              int i = y * W + x;
+              boolean nextToDense =
+                  s[i - 1] >= 300 || s[i + 1] >= 300 || s[i - W] >= 300 || s[i + W] >= 300;
+              if (s[i] < -400 && nextToDense) {
+                out[i] = -100;
+              }
+            }
+          }
+          return out;
+        };
+    Result r =
+        BoneIsolation.find(SPACE, smooth, 0, MM1, 300, () -> false, new WorkingMemory(64L << 20))
+            .orElseThrow();
+    assertAll(
+        () -> assertEquals(2, r.externalPieces(), "the cast and the table"),
+        () -> assertEquals(1, r.bonePieces()),
+        () -> assertTrue(r.region().get(CX + 6, CY, 20), "cortex"),
+        () -> assertFalse(r.region().get(CX + 20, CY, 20), "plaster"));
+  }
+
   @Test
   void aNailInTheCanalAndAPlateOnTheBoneStayWhole() {
     Result r = new Forearm(true, 4, 35, true, true, false, false).isolate();

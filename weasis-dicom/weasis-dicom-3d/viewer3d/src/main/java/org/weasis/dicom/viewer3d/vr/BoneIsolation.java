@@ -38,7 +38,8 @@ import org.weasis.dicom.viewer3d.vr.VoxelFlood.IntQueue;
  *   <li>outside air: the voxels below {@link #AIR_HU} joined, within their own axial slice, to the
  *       slice's border; in two dimensions the lungs, the bowel and an air gap under a cast never
  *       count as outside, and the volume's own edge is not air, so a bone cut by the first slice or
- *       by the field of view stays;
+ *       by the field of view stays. That air then reaches {@link #AIR_REACH_MM} further through
+ *       what is neither air nor dense, across the blurred edge of a standard kernel;
  *   <li>each 6-connected piece of the dense voxels is external when at least {@link
  *       #MIN_AIR_CONTACTS} of its voxels, and {@link #AIR_CONTACT_SHARE} of them, touch outside air
  *       face to face; the other pieces are internal;
@@ -75,6 +76,15 @@ public final class BoneIsolation {
 
   /** Voxels below this are air. */
   public static final double AIR_HU = -400;
+
+  /**
+   * How far, in mm, the outside air reaches into what is neither air nor dense: the blurred layer
+   * that a smooth (standard) reconstruction kernel leaves between a cast or a table and the air,
+   * about one voxel of -100 HU where a bone kernel goes straight from dense to air. Without it a
+   * cast on a standard-kernel series never touches the air and stays. Bone lies deeper than this
+   * under the skin.
+   */
+  public static final double AIR_REACH_MM = 1.0;
 
   /** Fewest voxels touching outside air that make a dense piece external. */
   public static final int MIN_AIR_CONTACTS = 50;
@@ -129,6 +139,7 @@ public final class BoneIsolation {
   private static final byte BLOCKED = 0;
   private static final byte OPEN = 1;
   private static final byte REACHED = 2;
+  private static final byte WIDENED = 3;
 
   private static final int[][] NEIGHBOURS = {
     {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
@@ -178,6 +189,8 @@ public final class BoneIsolation {
     }
     double voxelMm3 = gridVoxelMm.x * gridVoxelMm.y * gridVoxelMm.z;
     int[] joinSteps = joinSteps(gridVoxelMm);
+    int airSteps =
+        Math.max(1, (int) Math.round(AIR_REACH_MM / Math.min(gridVoxelMm.x, gridVoxelMm.y)));
     Vector3i g = space.grid();
     int sx = g.x;
     int sy = g.y;
@@ -197,8 +210,10 @@ public final class BoneIsolation {
         if (cancelled.getAsBoolean()) {
           return Optional.empty();
         }
-        classify(grid.slice(z), boneHu, dense.sliceWords(z), metal.sliceWords(z), cell);
+        float[] values = grid.slice(z);
+        classify(values, boneHu, dense.sliceWords(z), metal.sliceWords(z), cell);
         floodFromBorder(cell, sx, sy, queue);
+        widenAir(cell, values, boneHu, sx, sy, airSteps);
         mark(cell, REACHED, air.sliceWords(z));
       }
 
@@ -560,6 +575,39 @@ public final class BoneIsolation {
       }
       if (y < h - 1) {
         seedRow(cell, row + w, x0, x1, queue);
+      }
+    }
+  }
+
+  /**
+   * Lets the outside air of a slice reach {@code steps} cells further, 4-connected, through cells
+   * that are neither air nor dense, so a dense piece behind the blurred edge of a smooth kernel
+   * touches it.
+   */
+  static void widenAir(byte[] cell, float[] values, double boneHu, int w, int h, int steps) {
+    for (int s = 0; s < steps; s++) {
+      boolean grew = false;
+      for (int i = 0; i < cell.length; i++) {
+        if (cell[i] == REACHED || values[i] >= boneHu) {
+          continue;
+        }
+        int x = i % w;
+        int y = i / w;
+        if ((x > 0 && cell[i - 1] == REACHED)
+            || (x < w - 1 && cell[i + 1] == REACHED)
+            || (y > 0 && cell[i - w] == REACHED)
+            || (y < h - 1 && cell[i + w] == REACHED)) {
+          cell[i] = WIDENED;
+          grew = true;
+        }
+      }
+      if (!grew) {
+        return;
+      }
+      for (int i = 0; i < cell.length; i++) {
+        if (cell[i] == WIDENED) {
+          cell[i] = REACHED;
+        }
       }
     }
   }
