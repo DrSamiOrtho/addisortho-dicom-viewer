@@ -330,7 +330,10 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     PANELS.add(new WeakReference<>(this));
     if (!PICKER.isArmed()) {
       PICKER.arm(
-          BoneGrowTool::picked, BoneGrowTool::stroked, BoneGrowTool::isBrush, BoneGrowTool::missed);
+          BoneGrowTool::picked,
+          BoneGrowTool::stroked,
+          BoneGrowTool::isBrushOnSlices,
+          BoneGrowTool::missed);
     }
     showState();
     viewChanged();
@@ -833,9 +836,23 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     showStateEverywhere();
   }
 
-  /** Add here or Take out here is on: a drag on a slice paints a stroke. */
+  /** Add here or Take out here is on. */
   private static boolean isBrush() {
     return tool == Tool.PAINT || tool == Tool.RUB;
+  }
+
+  /**
+   * The brush is on and holds the slices' left button: a click or drag on a slice paints. Once the
+   * user picks another left tool (window, pan...), the slices do that instead, not both.
+   */
+  private static boolean isBrushOnSlices() {
+    return isBrush()
+        && ActionW.NO_ACTION
+            .cmd()
+            .equals(
+                org.weasis.dicom.viewer2d.EventManager.getInstance()
+                    .getMouseActions()
+                    .getAction(MouseActions.T_LEFT));
   }
 
   /** The left button of the slices before the brush took it, or {@code null}. */
@@ -896,6 +913,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     if (tool == Tool.SELECT && CLICK_TOOLS.contains(leftTool())) {
       return; // the click is the 3D tool's: keep only this, remove this, a length...
     }
+    if (isBrush() && !"3D".equals(seed.plane()) && !isBrushOnSlices()) { // NON-NLS
+      return; // another left tool holds the slices: the click is that tool's
+    }
     if (worker != null) {
       status(Messages.getString("BoneGrowTool.busy"));
       return;
@@ -947,7 +967,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   /** A drag on a slice with the brush on: one Add here or Take out here along the whole stroke. */
   private static void stroked(List<Seed> seeds) {
-    if (!isBrush() || seeds.isEmpty()) {
+    if (!isBrushOnSlices() || seeds.isEmpty()) {
       return;
     }
     if (worker != null) {
@@ -1575,11 +1595,64 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   private static void bonesChanged(CtSource ct, GrowSession session) {
     refreshLists();
-    styleViews(session);
+    styleViews(session); // shows the live bones when there are some
+    if (!LiveBones.isLive(session)) {
+      showLive(ct, session); // the first time: makes them
+    }
     if (!session.isWritten()) {
-      write(ct, session);
+      scheduleWrite(ct, session);
     }
     showStateEverywhere();
+  }
+
+  /**
+   * Shows the bones at once on the MPR and 3D views, from memory: only the voxels of the bones that
+   * changed are written, and the views redraw only the slices they lie in.
+   */
+  private static void showLive(CtSource ct, GrowSession session) {
+    if (ct.volume() == null) {
+      return;
+    }
+    LiveBones.sync(ct, session, SELECTED_COLOR)
+        .ifPresent(change -> SegExplorer.liveChanged(ct.series(), change.z0(), change.z1()));
+  }
+
+  /** How long after the last change the bones are written as a DICOM SEG file, in ms. */
+  private static final int WRITE_DELAY_MS = 2500;
+
+  /** Sessions whose SEG file is to be written once the edits pause, with their CT. */
+  private static final Map<GrowSession, CtSource> WRITE_LATER = new LinkedHashMap<>();
+
+  private static final javax.swing.Timer WRITE_TIMER =
+      new javax.swing.Timer(WRITE_DELAY_MS, _ -> writeLater());
+
+  static {
+    WRITE_TIMER.setRepeats(false);
+  }
+
+  /**
+   * Writes the SEG file (for saving, the Segmentation panel and the STL export) once the edits
+   * pause; the views show the live bones meanwhile. Without live bones it is written at once, as
+   * the views show the bones from it.
+   */
+  private static void scheduleWrite(CtSource ct, GrowSession session) {
+    if (!LiveBones.isLive(session)) {
+      write(ct, session);
+      return;
+    }
+    WRITE_LATER.put(session, ct);
+    WRITE_TIMER.restart();
+  }
+
+  private static void writeLater() {
+    Map<GrowSession, CtSource> due = new LinkedHashMap<>(WRITE_LATER);
+    WRITE_LATER.clear();
+    due.forEach(
+        (session, ct) -> {
+          if (!session.isWritten()) {
+            write(ct, session);
+          }
+        });
   }
 
   /**
@@ -1587,6 +1660,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
    * selection colour. Only the colour table of the views changes.
    */
   private static void styleViews(GrowSession session) {
+    if (LiveBones.isLive(session)) {
+      currentSource().filter(ct -> session(ct) == session).ifPresent(ct -> showLive(ct, session));
+    }
     String sop = session.sopInstanceUID();
     if (sop == null) {
       return;

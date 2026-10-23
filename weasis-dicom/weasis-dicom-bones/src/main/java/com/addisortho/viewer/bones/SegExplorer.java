@@ -173,7 +173,10 @@ final class SegExplorer {
     String ctUID = TagD.getTagValue(ct, Tag.SeriesInstanceUID, String.class);
     for (ViewerPlugin<?> plugin : copy) {
       if (plugin instanceof MprContainer mpr) {
-        refreshMpr(mpr, ctUID);
+        // Live bones are drawn from memory: the file just loaded needs no rebuild of the MPR.
+        if (org.weasis.dicom.codec.seg.LiveSegmentation.of(ctUID).isEmpty()) {
+          refreshMpr(mpr, ctUID);
+        }
         continue;
       }
       if (!(plugin instanceof View3DContainer container)) {
@@ -232,6 +235,51 @@ final class SegExplorer {
           && ctUID.equals(
               TagD.getTagValue(view.getSeries(), Tag.SeriesInstanceUID, String.class))) {
         view.requestSegmentationUpdate();
+      }
+    }
+  }
+
+  /**
+   * The live bones of the CT changed in slices {@code z0} to {@code z1} of its image volume ({@code
+   * z0 > z1}: only their look): the MPR views draw them again, the 3D views upload those slices.
+   */
+  static void liveChanged(MediaSeries<DicomImageElement> ct, int z0, int z1) {
+    String ctUID = TagD.getTagValue(ct, Tag.SeriesInstanceUID, String.class);
+    if (ctUID == null) {
+      return;
+    }
+    List<ViewerPlugin<?>> plugins = GuiUtils.getUICore().getViewerPlugins();
+    List<ViewerPlugin<?>> copy;
+    synchronized (plugins) {
+      copy = List.copyOf(plugins);
+    }
+    for (ViewerPlugin<?> plugin : copy) {
+      if (plugin instanceof MprContainer mpr) {
+        MprController controller = mpr.getMprController();
+        Volume<?, ?> volume = controller == null ? null : controller.getVolume();
+        if (volume == null
+            || volume.getStack() == null
+            || !ctUID.equals(
+                TagD.getTagValue(
+                    volume.getStack().getSeries(), Tag.SeriesInstanceUID, String.class))) {
+          continue;
+        }
+        for (org.weasis.dicom.viewer2d.mpr.MprView.Plane plane :
+            org.weasis.dicom.viewer2d.mpr.MprView.Plane.values()) {
+          org.weasis.dicom.viewer2d.mpr.MprView view = mpr.getMprView(plane);
+          if (view != null) {
+            view.updateSegmentation();
+            view.repaint();
+          }
+        }
+      } else if (plugin instanceof View3DContainer container) {
+        for (ViewCanvas<DicomImageElement> canvas : container.getImagePanels()) {
+          if (canvas instanceof View3d view
+              && view.getVolTexture() != null
+              && ct.equals(view.getVolTexture().getSeries())) {
+            view.liveSegmentationChanged(z0, z1);
+          }
+        }
       }
     }
   }

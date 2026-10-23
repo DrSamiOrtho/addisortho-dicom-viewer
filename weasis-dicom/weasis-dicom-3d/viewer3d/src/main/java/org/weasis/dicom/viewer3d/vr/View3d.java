@@ -108,6 +108,7 @@ import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.SpecialElementRegion;
 import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.codec.geometry.PatientOrientation;
+import org.weasis.dicom.codec.seg.LiveSegmentation;
 import org.weasis.dicom.codec.seg.SegBuildScheduler;
 import org.weasis.dicom.codec.seg.SegSpecialElement;
 import org.weasis.dicom.codec.seg.SegmentationVolume;
@@ -1252,13 +1253,26 @@ public class View3d extends VolumeCanvas
     Type currentType = getSegType();
     DicomVolTexture tex = volTexture;
     Volume<?, ?> volume = tex == null ? null : tex.getVolume();
+    // Addis Ortho: labels edited in memory (the Bones tools) are shown straight from their volume,
+    // in place of the SEG file they stand for.
+    Optional<LiveSegmentation> live =
+        currentType.requiresSegTexture() && volume != null
+            ? liveSegmentation(volume)
+            : Optional.empty();
+    if (live.isPresent()) {
+      showLive(live.get());
+      return;
+    }
     // Only the SEG files actually shown are resampled. Each one costs a full copy of the displayed
     // volume's grid (one byte per image voxel, hundreds of MB for a thin-slice CT), and a study may
     // carry dozens; building the hidden ones exhausts the heap for overlays nobody asked for.
     // Ticking one back on is caught by hasUnrenderedVisibleSeg() and rebuilds the texture.
     List<SpecialElementRegion> segList =
         currentType.requiresSegTexture() && volume != null
-            ? tex.getSegmentations().stream().filter(SpecialElementRegion::isVisible).toList()
+            ? tex.getSegmentations().stream()
+                .filter(SpecialElementRegion::isVisible)
+                .filter(seg -> !LiveSegmentation.isReplaced(seg))
+                .toList()
             : null;
     if (segList == null || segList.isEmpty()) {
       segBuildGeneration.incrementAndGet(); // invalidate any in-flight build
@@ -1464,6 +1478,108 @@ public class View3d extends VolumeCanvas
     return new AlignedSeg(segElement, segVol);
   }
 
+  // ---- Live labels (Addis Ortho) ----
+
+  /** The live labels of the volume's series, when they lie on this volume's grid. */
+  private static Optional<LiveSegmentation> liveSegmentation(Volume<?, ?> volume) {
+    if (volume.getStack() == null) {
+      return Optional.empty();
+    }
+    String uid =
+        TagD.getTagValue(volume.getStack().getSeries(), Tag.SeriesInstanceUID, String.class);
+    return LiveSegmentation.of(uid)
+        .filter(
+            live ->
+                live.fits(
+                    volume.getSizeX(),
+                    volume.getSizeY(),
+                    volume.getSizeZ(),
+                    (x, y, z) -> volume.voxelToLps(x, y, z, new Vector3d())));
+  }
+
+  /**
+   * Shows the live labels: their colours at once when their texture is already in use, else a
+   * texture made from them, uploaded once in the background.
+   */
+  private void showLive(LiveSegmentation live) {
+    SegVolumeTexture svt = segVolumeTexture;
+    if (svt != null && svt.getSegVolume() == live.volume()) {
+      if (!segBuildRunning) {
+        svt.setPendingColorLut(live.volume().buildSegmentColorLUT());
+        display();
+      }
+      return;
+    }
+    int generation = segBuildGeneration.incrementAndGet();
+    setSegBuildRunning(true);
+    CompletableFuture.runAsync(
+            () -> {
+              SegVolumeTexture newSvt =
+                  new SegVolumeTexture(live.volume(), new Vector3d(1.0, 1.0, 1.0));
+              newSvt.uploadVolumeDataAsync();
+              GuiExecutor.execute(() -> installLiveTexture(generation, newSvt, live));
+            })
+        .exceptionally(
+            e -> {
+              LOGGER.error("Building the live segmentation texture", e);
+              GuiExecutor.execute(
+                  () -> {
+                    if (generation == segBuildGeneration.get()) {
+                      setSegBuildRunning(false);
+                    }
+                  });
+              return null;
+            });
+  }
+
+  private void installLiveTexture(int generation, SegVolumeTexture newSvt, LiveSegmentation live) {
+    if (generation != segBuildGeneration.get()) {
+      GL2ES2 gl = OpenglUtils.getGL();
+      if (gl != null) {
+        newSvt.destroy(gl);
+      }
+      return;
+    }
+    this.renderedSegs = List.of();
+    newSvt.setPendingColorLut(live.volume().buildSegmentColorLUT());
+    newSvt.setOccupancyListener(this::display);
+    newSvt.setSmoothSurfaces(segSmooth);
+    SegVolumeTexture old = this.segVolumeTexture;
+    this.segVolumeTexture = newSvt;
+    if (old != null) {
+      GL2ES2 gl = OpenglUtils.getGL();
+      if (gl != null) {
+        old.destroy(gl);
+      }
+    }
+    setSegBuildRunning(false);
+    display();
+  }
+
+  /**
+   * Addis Ortho: the live labels of this view's CT changed in slices {@code z0} to {@code z1} of
+   * the volume ({@code z0 > z1}: only their colours or visibility). Uploads just those slices at
+   * the next frame, or shows the labels when the view does not show them yet.
+   */
+  public void liveSegmentationChanged(int z0, int z1) {
+    DicomVolTexture tex = volTexture;
+    Volume<?, ?> volume = tex == null ? null : tex.getVolume();
+    if (volume == null || !getSegType().requiresSegTexture()) {
+      return;
+    }
+    Optional<LiveSegmentation> live = liveSegmentation(volume);
+    SegVolumeTexture svt = segVolumeTexture;
+    if (live.isEmpty() || svt == null || svt.getSegVolume() != live.get().volume()) {
+      updateSegmentation();
+      return;
+    }
+    if (z0 <= z1) {
+      svt.markDirtySlices(z0, z1);
+    }
+    svt.setPendingColorLut(live.get().volume().buildSegmentColorLUT());
+    display();
+  }
+
   /** EDT part of the asynchronous build: swaps the new texture in and refreshes the view. */
   private void installSegTexture(
       int generation, SegVolumeTexture newSvt, List<RenderedSeg> rendered) {
@@ -1535,6 +1651,16 @@ public class View3d extends VolumeCanvas
       return;
     }
     SegVolumeTexture svt = segVolumeTexture;
+    DicomVolTexture liveTex = volTexture;
+    Optional<LiveSegmentation> live =
+        liveTex == null || liveTex.getVolume() == null
+            ? Optional.empty()
+            : liveSegmentation(liveTex.getVolume());
+    if (live.isPresent()) {
+      // Live labels carry their own colours and visibility.
+      updateSegmentation();
+      return;
+    }
     if (svt == null || hasUnrenderedVisibleSeg()) {
       // No texture yet, or the user enabled a SEG file that is not part of the current texture
       // (e.g. its volume could not be built when the texture was created): rebuild it fully.

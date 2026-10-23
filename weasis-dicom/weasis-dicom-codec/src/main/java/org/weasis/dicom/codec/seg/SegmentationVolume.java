@@ -448,6 +448,48 @@ public final class SegmentationVolume {
   }
 
   /**
+   * Addis Ortho, for live editing of non-overlapping labels: makes voxel (x, y, z) hold {@code
+   * segmentNumber} alone, whatever it held, or nothing when {@code segmentNumber} is 0. A segment
+   * number this volume was not created with is ignored.
+   */
+  public void setLabel(int x, int y, int z, int segmentNumber) {
+    if (x < 0 || x >= size.x || y < 0 || y >= size.y || z < 0 || z >= size.z) {
+      return;
+    }
+    long index = linearIndex(x, y, z);
+    if (segmentNumber <= 0) {
+      writeId(index, 0);
+      return;
+    }
+    if (segmentNumber >= segNumToSoloId.length || segNumToSoloId[segmentNumber] == 0) {
+      return;
+    }
+    markOccupied(x, y, z);
+    writeId(index, segNumToSoloId[segmentNumber]);
+  }
+
+  /**
+   * Addis Ortho: whether voxel (x, y, z) holds {@code segmentNumber} alone, as {@link #setLabel}
+   * leaves it.
+   */
+  public boolean hasLabel(int x, int y, int z, int segmentNumber) {
+    if (x < 0 || x >= size.x || y < 0 || y >= size.y || z < 0 || z >= size.z) {
+      return false;
+    }
+    if (segmentNumber <= 0
+        || segmentNumber >= segNumToSoloId.length
+        || segNumToSoloId[segmentNumber] == 0) {
+      return false;
+    }
+    return readId(linearIndex(x, y, z)) == segNumToSoloId[segmentNumber];
+  }
+
+  /** Addis Ortho: the largest segment number this volume can hold. */
+  public int maxSegmentNumber() {
+    return segNumToSoloId.length - 1;
+  }
+
+  /**
    * Grows the labelled-voxel bounding box. Not atomic: like {@link #segStampCount}, stamping a
    * given volume runs on a single thread. The parallel writers ({@link #resampleInto}, {@link
    * #mergeInto}) bypass this and turn tracking off instead.

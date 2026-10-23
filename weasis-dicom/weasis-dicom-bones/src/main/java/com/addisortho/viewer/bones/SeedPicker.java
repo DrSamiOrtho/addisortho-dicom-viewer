@@ -75,6 +75,9 @@ final class SeedPicker {
 
   private Point strokeLast;
 
+  /** The press has moved beyond a click since it went down: a drag, even if it ends near it. */
+  private boolean dragged;
+
   boolean isArmed() {
     return listener != null;
   }
@@ -129,6 +132,7 @@ final class SeedPicker {
           if (e.getID() == MouseEvent.MOUSE_PRESSED) {
             pressedView = view;
             pressedAt = p;
+            dragged = false;
             stroke = null;
             if (onStroke != null && strokes.getAsBoolean() && !(view instanceof View3d)) {
               stroke = new ArrayList<>();
@@ -141,8 +145,14 @@ final class SeedPicker {
             return;
           }
           boolean click =
-              view == pressedView && pressedAt != null && pressedAt.distance(p) <= CLICK_TOLERANCE;
+              view == pressedView
+                  && pressedAt != null
+                  && !dragged
+                  && pressedAt.distance(p) <= CLICK_TOLERANCE;
           List<Seed> drawn = stroke;
+          if (drawn != null && view == pressedView) {
+            sliceSeed(view, p).ifPresent(drawn::add); // the stroke ends where it is released
+          }
           pressedView = null;
           pressedAt = null;
           stroke = null;
@@ -179,10 +189,16 @@ final class SeedPicker {
 
   /** Adds the point dragged over to the stroke being drawn, on the slice it started on. */
   private void followStroke(MouseEvent e) {
-    if (stroke == null || pressedView == null || !SwingUtilities.isLeftMouseButton(e)) {
+    if (pressedView == null || !SwingUtilities.isLeftMouseButton(e)) {
       return;
     }
     Point p = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), pressedView);
+    if (pressedAt != null && pressedAt.distance(p) > CLICK_TOLERANCE) {
+      dragged = true;
+    }
+    if (stroke == null) {
+      return;
+    }
     if (strokeLast != null && strokeLast.distance(p) < STROKE_STEP) {
       return;
     }
@@ -244,6 +260,7 @@ final class SeedPicker {
     pressedAt = null;
     stroke = null;
     strokeLast = null;
+    dragged = false;
   }
 
   private static MprView mprViewOf(Component component) {

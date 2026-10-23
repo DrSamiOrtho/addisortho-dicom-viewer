@@ -309,4 +309,22 @@ class SegmentationVolumeTest {
     }
     assertFalse(volume.exportSliceInto(SIZE, buffer));
   }
+
+  // Addis Ortho: live editing of non-overlapping labels.
+  @Test
+  void setLabelReplacesWhatAVoxelHeldAndClearsIt() {
+    SegmentationVolume v = newVolume();
+    v.setLabel(1, 2, 3, 1);
+    assertTrue(v.hasLabel(1, 2, 3, 1));
+    assertFalse(v.hasLabel(1, 2, 3, 2));
+    v.setLabel(1, 2, 3, 2); // moves to the other segment, no overlap combination
+    assertTrue(v.hasLabel(1, 2, 3, 2));
+    assertFalse(v.hasLabel(1, 2, 3, 1));
+    v.setLabel(1, 2, 3, 0);
+    assertFalse(v.hasLabel(1, 2, 3, 2));
+    v.setLabel(1, 2, 3, 9); // not a segment of this volume: ignored
+    assertFalse(v.hasLabel(1, 2, 3, 9));
+    v.setLabel(-1, 0, 0, 1); // outside: ignored
+    assertEquals(2, v.maxSegmentNumber());
+  }
 }

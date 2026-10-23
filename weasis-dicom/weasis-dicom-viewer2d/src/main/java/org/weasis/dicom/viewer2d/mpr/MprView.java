@@ -764,21 +764,6 @@ public class MprView extends View2d implements SliceCanvas, ViewProgress {
       // Render what is currently built; the async completion refreshes every plane when done.
     }
 
-    // Addis Ortho: copies, as the controller's lists are rebuilt on another thread when a SEG is
-    // replaced; reading them live while they are cleared threw IndexOutOfBoundsException. A copy
-    // taken mid-rebuild is drawn once, and the rebuild's completion refreshes every plane.
-    List<SegmentationVolume> segVolumes;
-    List<SegSpecialElement> segElements;
-    try {
-      segVolumes = new ArrayList<>(mprController.getSegVolumes());
-      segElements = new ArrayList<>(mprController.getSegElements());
-    } catch (RuntimeException e) {
-      return; // the lists are being rebuilt
-    }
-    if (segVolumes.isEmpty() || segElements.isEmpty()) {
-      return;
-    }
-
     MprAxis axis = getMprAxis();
     if (axis == null || axis.getRawIO() == null) {
       return;
@@ -792,25 +777,55 @@ public class MprView extends View2d implements SliceCanvas, ViewProgress {
     int sliceSize = imageVolume.getSliceSize();
     Vector3d voxelRatio = imageVolume.getVoxelRatio();
 
-    int n = Math.min(segVolumes.size(), segElements.size());
-    for (int i = 0; i < n; i++) {
-      SegSpecialElement seg = segElements.get(i);
-      if (!seg.isVisible()) {
+    // Addis Ortho: the SEGs and their volumes are taken together, as the controller publishes a
+    // rebuild in one step on another thread.
+    for (MprController.BuiltSeg built : mprController.getBuiltSegs()) {
+      SegSpecialElement seg = built.seg();
+      if (!seg.isVisible()
+          || built.volume() == null
+          || org.weasis.dicom.codec.seg.LiveSegmentation.isReplaced(seg)) {
         continue;
       }
-      SegmentationVolume segVolume = segVolumes.get(i);
-      if (segVolume == null) {
-        continue;
-      }
-      Map<Integer, List<SegContour>> contourMap =
-          segVolume.getSliceContours(combinedTransform, sliceSize, voxelRatio);
-      if (contourMap == null || contourMap.isEmpty()) {
-        continue;
-      }
-      for (List<SegContour> contours : contourMap.values()) {
-        addSegContours(contours);
-      }
+      addContours(built.volume().getSliceContours(combinedTransform, sliceSize, voxelRatio));
     }
+
+    // Addis Ortho: labels edited in memory (the Bones tools) are drawn straight from their volume,
+    // which lies on this image volume's grid, so every edit shows at once.
+    liveSegmentation(imageVolume)
+        .ifPresent(
+            live ->
+                addContours(
+                    live.volume().getSliceContours(combinedTransform, sliceSize, voxelRatio)));
+  }
+
+  private void addContours(Map<Integer, List<SegContour>> contourMap) {
+    if (contourMap == null || contourMap.isEmpty()) {
+      return;
+    }
+    for (List<SegContour> contours : contourMap.values()) {
+      addSegContours(contours);
+    }
+  }
+
+  /** The live labels of the image volume's series, when they lie on this volume's grid. */
+  static java.util.Optional<org.weasis.dicom.codec.seg.LiveSegmentation> liveSegmentation(
+      Volume<?, ?> imageVolume) {
+    if (imageVolume.getStack() == null) {
+      return java.util.Optional.empty();
+    }
+    String uid =
+        org.weasis.dicom.codec.TagD.getTagValue(
+            imageVolume.getStack().getSeries(),
+            org.dcm4che3.data.Tag.SeriesInstanceUID,
+            String.class);
+    return org.weasis.dicom.codec.seg.LiveSegmentation.of(uid)
+        .filter(
+            live ->
+                live.fits(
+                    imageVolume.getSizeX(),
+                    imageVolume.getSizeY(),
+                    imageVolume.getSizeZ(),
+                    (x, y, z) -> imageVolume.voxelToLps(x, y, z, new Vector3d())));
   }
 
   /**
