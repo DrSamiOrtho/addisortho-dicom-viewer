@@ -164,4 +164,46 @@ class AutoSplitTest {
         voxels >= 20 * 20 * 10 && voxels <= 20 * 20 * 11,
         "the whole fragment, z 13 to 22, with at most the line: " + voxels);
   }
+
+  /**
+   * Two bones pressed together over a broad face, with a fracture line of 250 HU at z 12, whose
+   * border was drawn at z 15 (three voxels into the fragment). Drawn again from a click in each, it
+   * moves to the line; and a click in the dark cannot let one bone take the other's body.
+   */
+  @Test
+  void theBorderOfTwoBonesMovesToTheFractureLine() throws Exception {
+    Phantom ct =
+        new Phantom(
+            30,
+            30,
+            30,
+            (x, y, z) -> {
+              boolean inBlock = x >= 5 && x <= 24 && y >= 5 && y <= 24 && z >= 3 && z <= 22;
+              if (!inBlock) {
+                return 0;
+              }
+              return z == 14 ? 250 : 1000;
+            });
+    BoxMask lower = block(3, 15);
+    BoxMask upper = block(16, 22);
+    BoneSplit.Split split =
+        AutoSplit.splitBorder(
+            lower, upper, new int[] {15, 15, 6}, new int[] {15, 15, 20}, 1, 1, 1, ct, 3);
+    int z0 = split.cut().box().z0();
+    assertTrue(z0 == 14 || z0 == 15, "the upper bone now starts at the line, not at " + z0);
+    assertEquals(lower.count() + upper.count(), split.kept().count() + split.cut().count());
+  }
+
+  /** A 20 by 20 block from z0 to z1. */
+  private static BoxMask block(int z0, int z1) {
+    BitVolume bits = new BitVolume(30, 30, 30);
+    for (int z = z0; z <= z1; z++) {
+      for (int y = 5; y <= 24; y++) {
+        for (int x = 5; x <= 24; x++) {
+          bits.set(x, y, z);
+        }
+      }
+    }
+    return BoxMask.trimmed(VoxelBox.of(30, 30, 30), bits);
+  }
 }

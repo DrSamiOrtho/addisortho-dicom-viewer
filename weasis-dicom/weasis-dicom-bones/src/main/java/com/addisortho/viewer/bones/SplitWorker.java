@@ -12,9 +12,7 @@ import com.addisortho.viewer.bones.grow.AutoSplit;
 import com.addisortho.viewer.bones.grow.BoneSplit;
 import com.addisortho.viewer.bones.grow.BoneSplit.Split;
 import com.addisortho.viewer.bones.grow.BoneSplit.SplitException;
-import com.addisortho.viewer.bones.grow.BoxMask;
 import com.addisortho.viewer.bones.grow.HuSource;
-import java.util.List;
 import javax.swing.SwingWorker;
 
 /**
@@ -30,6 +28,9 @@ final class SplitWorker extends SwingWorker<Split, Void> {
     /** a bone of its own */
     SPLIT
   }
+
+  /** How deep into each of two bones their border may move when it is drawn again. */
+  static final double BORDER_BAND_MM = 3;
 
   private final Kind kind;
   private final Bone bone;
@@ -103,11 +104,12 @@ final class SplitWorker extends SwingWorker<Split, Void> {
   protected Split doInBackground() throws SplitException {
     if (keep != null) {
       // The neighbour's side is kept, the fragment's side is cut.
-      BoxMask whole =
-          neighbour.id() == bone.id()
-              ? bone.mask()
-              : BoxMask.union(List.of(neighbour.mask(), bone.mask()));
-      return AutoSplit.splitBetween(whole, keep, voxel, mm[0], mm[1], mm[2], hu);
+      if (neighbour.id() == bone.id()) {
+        return AutoSplit.splitBetween(bone.mask(), keep, voxel, mm[0], mm[1], mm[2], hu);
+      }
+      // Two bones: only the band along their contact is decided again.
+      return AutoSplit.splitBorder(
+          neighbour.mask(), bone.mask(), keep, voxel, mm[0], mm[1], mm[2], hu, BORDER_BAND_MM);
     }
     return BoneSplit.split(bone.mask(), bone.anchor(), voxel, BoneSplit.MAX_DEPTH);
   }

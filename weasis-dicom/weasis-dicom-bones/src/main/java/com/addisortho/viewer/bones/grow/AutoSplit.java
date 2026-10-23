@@ -801,6 +801,88 @@ public final class AutoSplit {
   public static BoneSplit.Split splitBetween(
       BoxMask bone, int[] keep, int[] cut, double mmX, double mmY, double mmZ, HuSource hu)
       throws BoneSplit.SplitException {
+    return flood(bone, keep, cut, null, null, mmX, mmY, mmZ, hu);
+  }
+
+  /**
+   * Draws the border between two bones again, along the darkest surface between two clicks, one on
+   * each. Each bone keeps for certain what lies more than {@code bandMm} from the other: only the
+   * band along their contact is decided again, so neither can lose its body to the other.
+   *
+   * @param keepBone the bone clicked at {@code keep}, which keeps the other side
+   * @param cutBone the bone clicked at {@code cut}
+   * @return the new {@code keepBone} as {@code kept}, the new {@code cutBone} as {@code cut}
+   */
+  public static BoneSplit.Split splitBorder(
+      BoxMask keepBone,
+      BoxMask cutBone,
+      int[] keep,
+      int[] cut,
+      double mmX,
+      double mmY,
+      double mmZ,
+      HuSource hu,
+      double bandMm)
+      throws BoneSplit.SplitException {
+    BoxMask union = BoxMask.union(List.of(keepBone, cutBone));
+    BoxMask keepCore = farFrom(keepBone, cutBone, bandMm, mmX, mmY, mmZ);
+    BoxMask cutCore = farFrom(cutBone, keepBone, bandMm, mmX, mmY, mmZ);
+    return flood(union, keep, cut, keepCore, cutCore, mmX, mmY, mmZ, hu);
+  }
+
+  /** The voxels of {@code a} farther than {@code mm} from every voxel of {@code b}, or null. */
+  static BoxMask farFrom(BoxMask a, BoxMask b, double mm, double mmX, double mmY, double mmZ) {
+    VoxelBox box = a.box();
+    int px = (int) Math.ceil(mm / mmX) + 1;
+    int py = (int) Math.ceil(mm / mmY) + 1;
+    int pz = (int) Math.ceil(mm / mmZ) + 1;
+    int nx = box.sizeX() + 2 * px;
+    int ny = box.sizeY() + 2 * py;
+    int nz = box.sizeZ() + 2 * pz;
+    float[] g = new float[nx * ny * nz];
+    Arrays.fill(g, INF);
+    VoxelBox bb = b.box();
+    for (int z = 0; z < nz; z++) {
+      int gz = box.z0() - pz + z;
+      if (gz < bb.z0() || gz > bb.z1()) {
+        continue;
+      }
+      for (int y = 0; y < ny; y++) {
+        int gy = box.y0() - py + y;
+        for (int x = 0; x < nx; x++) {
+          int gx = box.x0() - px + x;
+          if (b.contains(gx, gy, gz)) {
+            g[(z * ny + y) * nx + x] = 0;
+          }
+        }
+      }
+    }
+    squaredDistance(g, nx, ny, nz, mmX, mmY, mmZ, Thread.currentThread());
+    BitVolume far = new BitVolume(box.sizeX(), box.sizeY(), box.sizeZ());
+    double limit = mm * mm;
+    for (int z = 0; z < box.sizeZ(); z++) {
+      for (int y = 0; y < box.sizeY(); y++) {
+        for (int x = 0; x < box.sizeX(); x++) {
+          if (a.bits().get(x, y, z) && g[((z + pz) * ny + y + py) * nx + x + px] > limit) {
+            far.set(x, y, z);
+          }
+        }
+      }
+    }
+    return BoxMask.trimmed(box, far);
+  }
+
+  private static BoneSplit.Split flood(
+      BoxMask bone,
+      int[] keep,
+      int[] cut,
+      BoxMask keepSeeds,
+      BoxMask cutSeeds,
+      double mmX,
+      double mmY,
+      double mmZ,
+      HuSource hu)
+      throws BoneSplit.SplitException {
     Thread caller = Thread.currentThread();
     VoxelBox box = bone.box();
     // One clear voxel around the bone, so its faces on the block's edges are surface too.
@@ -852,6 +934,8 @@ public final class AutoSplit {
     // while the other part floods across the fracture.
     push(buckets, ia, levels - 1);
     push(buckets, ib, levels - 1);
+    seed(keepSeeds, (byte) 1, box, nx, ny, side, buckets, levels - 1);
+    seed(cutSeeds, (byte) 2, box, nx, ny, side, buckets, levels - 1);
     int[] step = {1, -1, nx, -nx, nx * ny, -nx * ny};
     long visited = 0;
     for (int lv = levels - 1; lv >= 0; ) {
@@ -898,9 +982,9 @@ public final class AutoSplit {
   private static final double BRIGHT_HU = 1500;
 
   /**
-   * Replaces the bone voxels of {@code g} (INF) with their brightness: the lowest CT value of the
-   * voxel and its six neighbours, from -100 to {@link #BRIGHT_HU} HU, as 0.01 to 8 so that one
-   * flood step is 10 HU. The voxels around the bone stay 0.
+   * Replaces the bone voxels of {@code g} (INF) with their brightness: the CT value of the voxel,
+   * from -100 to {@link #BRIGHT_HU} HU, as 0.01 to 8 so that one flood step is 10 HU. The voxels
+   * around the bone stay 0.
    */
   private static void brightness(float[] g, VoxelBox box, int nx, int ny, int nz, HuSource hu) {
     for (int z = 1; z < nz - 1; z++) {
@@ -913,16 +997,10 @@ public final class AutoSplit {
             continue;
           }
           int gx = box.x0() + x - 1;
-          // The darkest of the voxel and its six neighbours: a fracture gap one voxel wide stays
-          // dark across, where a mean would bridge it.
-          double darkest = Double.POSITIVE_INFINITY;
-          for (int[] d : SEVEN) {
-            double v = hu.huAt(gx + d[0], gy + d[1], gz + d[2]);
-            if (!Double.isNaN(v)) {
-              darkest = Math.min(darkest, v);
-            }
-          }
-          double value = Double.isInfinite(darkest) ? 0 : darkest;
+          // The voxel's own value: a mean of the neighbours bridges a fracture gap one voxel
+          // wide, their minimum makes a thin fragment as dark as the gap.
+          double v = hu.huAt(gx, gy, gz);
+          double value = Double.isNaN(v) ? 0 : v;
           double clamped = Math.max(-100, Math.min(BRIGHT_HU, value));
           g[i] = (float) Math.max(0.01, (clamped + 100) / 200);
         }
@@ -930,12 +1008,42 @@ public final class AutoSplit {
     }
   }
 
-  private static final int[][] SEVEN = {
-    {0, 0, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
-  };
-
   private static int level(float depth) {
     return (int) (depth * 20);
+  }
+
+  /** Gives the voxels of {@code seeds} to {@code who} before the flood, on the padded grid. */
+  private static void seed(
+      BoxMask seeds,
+      byte who,
+      VoxelBox box,
+      int nx,
+      int ny,
+      byte[] side,
+      IntQueue[] buckets,
+      int level) {
+    if (seeds == null) {
+      return;
+    }
+    VoxelBox sb = seeds.box();
+    for (int z = 0; z < sb.sizeZ(); z++) {
+      for (int y = 0; y < sb.sizeY(); y++) {
+        for (int x = 0; x < sb.sizeX(); x++) {
+          if (seeds.bits().get(x, y, z)) {
+            int i =
+                ((sb.z0() + z - box.z0() + 1) * ny + sb.y0() + y - box.y0() + 1) * nx
+                    + sb.x0()
+                    + x
+                    - box.x0()
+                    + 1;
+            if (side[i] == 0) {
+              side[i] = who;
+              push(buckets, i, level);
+            }
+          }
+        }
+      }
+    }
   }
 
   private static void push(IntQueue[] buckets, int voxel, int level) {
