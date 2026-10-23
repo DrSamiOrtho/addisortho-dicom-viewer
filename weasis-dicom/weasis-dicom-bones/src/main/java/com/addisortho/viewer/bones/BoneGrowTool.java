@@ -133,6 +133,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   /** How far from a bone, in voxels, a click on its surface still counts as on it. */
   private static final int NEAR_BONE_VOXELS = 3;
 
+  /** Separate makes no part smaller than this, in mm³: two clicks on one spot make nothing. */
+  private static final double MIN_PIECE_MM3 = 20;
+
   /** Colour of the selected bones in the 3D picture. */
   private static final Color SELECTED_COLOR = new Color(255, 214, 0);
 
@@ -1071,6 +1074,16 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
     Bone neighbour = done.neighbour();
     double keptCm3 = split.kept().count() * voxelMm3 / 1000.0;
+    if (Math.min(cm3, keptCm3) * 1000 < MIN_PIECE_MM3) {
+      // Two clicks almost on one spot, or on one side of the fracture: nothing worth keeping.
+      LOGGER.info(
+          "Separate refused: {} cm3 against {} cm3", // NON-NLS
+          String.format("%.3f", cm3), // NON-NLS
+          String.format("%.3f", keptCm3)); // NON-NLS
+      chooseTool(Tool.SELECT);
+      warn(Messages.getString("BoneGrowTool.separateEmpty"));
+      return;
+    }
     int fragmentId;
     String fragmentName;
     List<Bone> after;
