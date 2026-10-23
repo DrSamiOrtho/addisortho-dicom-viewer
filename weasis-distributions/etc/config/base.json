@@ -347,7 +347,7 @@
     },
     {
       "code": "weasis.show.disclaimer",
-      "value": true,
+      "value": false,
       "description": "Show a disclaimer at the first launch of Weasis (requires to be accepted to start the application)",
       "type": "A",
       "javaType": "BOOLEAN",

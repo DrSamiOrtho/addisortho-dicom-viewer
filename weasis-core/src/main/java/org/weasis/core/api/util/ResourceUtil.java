@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.core.api.util;
 
 import com.formdev.flatlaf.extras.FlatSVGIcon;
@@ -29,7 +30,8 @@ public class ResourceUtil {
   public enum LogoIcon implements ResourceIconPath {
     LARGE("svg/logo/WeasisAbout.svg"), // NON-NLS
     SMALL("svg/logo/Weasis.svg"), // NON-NLS
-    SMALL_DICOMIZER("svg/logo/Dicomizer.svg"); // NON-NLS
+    SMALL_DICOMIZER("svg/logo/Dicomizer.svg"), // NON-NLS
+    WORDMARK("svg/logo/AddisOrthoWordmark.svg"); // NON-NLS
 
     private final String path;
 
