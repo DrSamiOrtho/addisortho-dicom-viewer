@@ -20,6 +20,7 @@ import com.addisortho.viewer.bones.grow.BoneSplit.Split;
 import com.addisortho.viewer.bones.grow.BoneSplit.SplitException;
 import com.addisortho.viewer.bones.grow.BoxMask;
 import com.addisortho.viewer.bones.grow.GrowOptions;
+import com.addisortho.viewer.bones.grow.MaskEdit;
 import com.addisortho.viewer.bones.grow.RegionGrow.Result;
 import com.addisortho.viewer.bones.grow.VoxelBox;
 import java.awt.Color;
@@ -158,6 +159,10 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     /** Every click takes the bone out of the selection. */
     TAKE("BoneGrowTool.take", "BoneGrowTool.take.hint"),
     SPLIT("BoneGrowTool.split", "BoneGrowTool.splitFirst"),
+    /** A brush: the bone-dense voxels around the click go into the bone. */
+    PAINT("BoneGrowTool.paint", "BoneGrowTool.paint.hint"),
+    /** A brush: the bone's voxels around the click are taken out of it. */
+    RUB("BoneGrowTool.rub", "BoneGrowTool.rub.hint"),
     NEW("BoneGrowTool.new", "BoneGrowTool.new.hint"),
     ERASE("BoneGrowTool.erase", "BoneGrowTool.erase.hint");
 
@@ -205,6 +210,10 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   private static final SpinnerNumberModel SEPARATION =
       new SpinnerNumberModel(0, 0, GrowOptions.MAX_RADIUS, 1);
   private static final SpinnerNumberModel MIN_PIECE = new SpinnerNumberModel(100, 0, 1_000_000, 50);
+
+  /** Size of the brush of Add here and Take out here, mm. */
+  private static final SpinnerNumberModel BRUSH = new SpinnerNumberModel(5, 1, 40, 1);
+
   private static final ToggleButtonModel FILL = new ToggleButtonModel();
   private static final ToggleButtonModel CROP = new ToggleButtonModel();
   private static final ToggleButtonModel PREVIEW = new ToggleButtonModel();
@@ -296,6 +305,12 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       small(new JToggleButton(Messages.getString("BoneGrowTool.add")));
   private final JToggleButton takeButton =
       small(new JToggleButton(Messages.getString("BoneGrowTool.take")));
+  private final JToggleButton paintButton =
+      small(new JToggleButton(Messages.getString("BoneGrowTool.paint")));
+  private final JToggleButton rubButton =
+      small(new JToggleButton(Messages.getString("BoneGrowTool.rub")));
+  private final JButton smoothButton =
+      small(new JButton(Messages.getString("BoneGrowTool.smooth")));
   private final JButton findButton = new JButton(Messages.getString("BoneGrowTool.find"));
   private final JButton undoButton = new JButton(Messages.getString("BoneGrowTool.undo"));
   private final JButton redoButton = new JButton(Messages.getString("BoneGrowTool.redo"));
@@ -354,6 +369,12 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     takeButton.setModel(TOOLS.get(Tool.TAKE));
     addButton.setToolTipText(Messages.getString("BoneGrowTool.add.tip"));
     takeButton.setToolTipText(Messages.getString("BoneGrowTool.take.tip"));
+    paintButton.setModel(TOOLS.get(Tool.PAINT));
+    rubButton.setModel(TOOLS.get(Tool.RUB));
+    paintButton.setToolTipText(Messages.getString("BoneGrowTool.paint.tip"));
+    rubButton.setToolTipText(Messages.getString("BoneGrowTool.rub.tip"));
+    smoothButton.setToolTipText(Messages.getString("BoneGrowTool.smooth.tip"));
+    smoothButton.addActionListener(_ -> onSelected(BoneGrowTool::smoothSelected));
     hideButton.addActionListener(_ -> onSelected(BoneGrowTool::hideSelected));
     onlyButton.addActionListener(_ -> onSelected(BoneGrowTool::showOnlySelected));
     allButton.addActionListener(_ -> onSession(BoneGrowTool::showAll));
@@ -365,6 +386,16 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
             new JLabel(Messages.getString("BoneGrowTool.selection")), addButton, takeButton));
     panel.add(GuiUtils.getFlowLayoutPanel(hideButton, onlyButton, allButton));
     panel.add(GuiUtils.getFlowLayoutPanel(joinButton, splitButton, nameButton, deleteButton));
+    JSpinner brushSpinner = new JSpinner(BRUSH);
+    brushSpinner.setToolTipText(Messages.getString("BoneGrowTool.brush.tip"));
+    panel.add(
+        GuiUtils.getFlowLayoutPanel(
+            new JLabel(Messages.getString("BoneGrowTool.edge")), paintButton, rubButton));
+    panel.add(
+        GuiUtils.getFlowLayoutPanel(
+            new JLabel(Messages.getString("BoneGrowTool.brush") + StringUtil.COLON),
+            brushSpinner,
+            smoothButton));
     JCheckBox naturalBox = checkBox("BoneGrowTool.natural", NATURAL);
     naturalBox.setToolTipText(Messages.getString("BoneGrowTool.natural.tip"));
     panel.add(GuiUtils.getFlowLayoutPanel(naturalBox));
@@ -508,6 +539,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     splitButton.setEnabled(bones > 0);
     addButton.setEnabled(bones > 0);
     takeButton.setEnabled(bones > 0);
+    paintButton.setEnabled(bones > 0);
+    rubButton.setEnabled(bones > 0);
+    smoothButton.setEnabled(selected > 0 && !running);
     nameButton.setEnabled(selected == 1);
     deleteButton.setEnabled(selected > 0);
     revalidate();
@@ -853,6 +887,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
           session.boneNear(voxel, NEAR_BONE_VOXELS).map(f -> f.bone().label()).orElse("no bone"));
       switch (tool) {
         case SELECT, ADD, TAKE -> clickToSelect(session, voxel, pickOf(seed.additive()));
+        case PAINT -> paint(ct, session, voxel);
+        case RUB -> rub(ct, session, voxel);
         case SPLIT -> clickToSplit(view.get(), ct, session, voxel, seed);
         case NEW -> {
           view.get().setSeedMarker(seed.lps());
@@ -917,6 +953,145 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
     styleViews(session);
     refreshLists();
+  }
+
+  // ---- The brush ----
+
+  /** The brush as voxel radii per axis: its size in mm over the voxel spacing. */
+  private static double[] brushRadius(CtSource ct) {
+    double mm = ((Number) BRUSH.getValue()).doubleValue();
+    return new double[] {
+      mm / ct.grid().columnSpacing(), mm / ct.grid().rowSpacing(), mm / ct.grid().sliceSpacing()
+    };
+  }
+
+  private static VoxelBox gridBox(CtSource ct) {
+    return VoxelBox.of(ct.grid().columns(), ct.grid().rows(), ct.grid().sliceCount());
+  }
+
+  /** The bone a brush click works on: the one selected, else the one under the click. */
+  private static Optional<Bone> brushTarget(GrowSession session, int[] voxel) {
+    List<Bone> selected = session.selectedBones();
+    if (selected.size() == 1) {
+      return Optional.of(selected.getFirst());
+    }
+    if (selected.isEmpty()) {
+      return session.boneNear(voxel, NEAR_BONE_VOXELS).map(Found::bone);
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * Add here: what looks like bone within the brush goes into the bone, out of any other bone it
+   * was in.
+   */
+  private static void paint(CtSource ct, GrowSession session, int[] voxel) {
+    Optional<Bone> target = brushTarget(session, voxel);
+    if (target.isEmpty()) {
+      status(Messages.getString("BoneGrowTool.brushWhich"));
+      return;
+    }
+    Bone bone = target.get();
+    GrowOptions o = options(ct);
+    BoxMask brush = MaskEdit.brush(voxel, brushRadius(ct), gridBox(ct));
+    BoxMask dense =
+        brush == null ? null : MaskEdit.dense(brush, ct.huSource(), o.lowerHu(), o.upperHu());
+    if (dense == null) {
+      warn(String.format(Messages.getString("BoneGrowTool.paintNothing"), o.lowerHu()));
+      return;
+    }
+    BoxMask grown = MaskEdit.plus(bone.mask(), dense);
+    if (grown == bone.mask()) {
+      status(String.format(Messages.getString("BoneGrowTool.paintAlready"), bone.label()));
+      return;
+    }
+    List<Bone> after = new ArrayList<>();
+    for (Bone b : session.bones()) {
+      if (b.id() == bone.id()) {
+        after.add(b.withMask(grown));
+        continue;
+      }
+      BoxMask left = b.mask().minus(List.of(dense));
+      if (left != null) {
+        after.add(left == b.mask() ? b : b.withMask(left));
+      }
+      // A bone wholly within the brush is painted into the target and leaves the list.
+    }
+    session.selected().clear();
+    session.selected().add(bone.id());
+    apply(ct, session, after);
+    double mm3 = (grown.count() - bone.mask().count()) * ct.grid().voxelVolumeMm3();
+    status(String.format(Messages.getString("BoneGrowTool.painted"), mm3, bone.label()));
+  }
+
+  /** Take out here: the bone's voxels within the brush leave it. */
+  private static void rub(CtSource ct, GrowSession session, int[] voxel) {
+    Optional<Bone> target = brushTarget(session, voxel);
+    if (target.isEmpty()) {
+      status(Messages.getString("BoneGrowTool.brushWhich"));
+      return;
+    }
+    Bone bone = target.get();
+    BoxMask brush = MaskEdit.brush(voxel, brushRadius(ct), gridBox(ct));
+    BoxMask left = brush == null ? bone.mask() : bone.mask().minus(List.of(brush));
+    if (left == bone.mask()) {
+      status(String.format(Messages.getString("BoneGrowTool.rubNothing"), bone.label()));
+      return;
+    }
+    if (left == null) {
+      warn(String.format(Messages.getString("BoneGrowTool.rubAll"), bone.label()));
+      return;
+    }
+    session.selected().clear();
+    session.selected().add(bone.id());
+    apply(ct, session, session.replaced(bone.id(), bone.withMask(left), null));
+    double mm3 = (bone.mask().count() - left.count()) * ct.grid().voxelVolumeMm3();
+    status(String.format(Messages.getString("BoneGrowTool.rubbed"), mm3, bone.label()));
+  }
+
+  private static void smoothSelected(CtSource ct, GrowSession session, List<Bone> selected) {
+    if (worker != null) {
+      status(Messages.getString("BoneGrowTool.busy"));
+      return;
+    }
+    start(new SmoothWorker(selected));
+  }
+
+  /** The smoothed bones replace the ones smoothed, kept out of the other bones. */
+  private static void smoothed(SmoothWorker done, List<Bone> result) {
+    Optional<CtSource> ct = currentSource();
+    GrowSession session = ct.map(BoneGrowTool::session).orElse(null);
+    if (session == null
+        || done.bones().stream()
+            .anyMatch(b -> session.bone(b.id()).filter(now -> now.mask() == b.mask()).isEmpty())) {
+      warn(Messages.getString("BoneGrowTool.changedMeanwhile"));
+      return;
+    }
+    List<Bone> after = new ArrayList<>(session.bones());
+    double voxelMm3 = ct.get().grid().voxelVolumeMm3();
+    double before = 0;
+    double now = 0;
+    for (Bone smooth : result) {
+      BoxMask mask = smooth.mask().minus(session.masksExcept(smooth.id()));
+      if (mask == null) {
+        continue;
+      }
+      for (int i = 0; i < after.size(); i++) {
+        if (after.get(i).id() == smooth.id()) {
+          before += after.get(i).mask().count() * voxelMm3 / 1000.0;
+          now += mask.count() * voxelMm3 / 1000.0;
+          after.set(i, after.get(i).withMask(mask));
+        }
+      }
+    }
+    apply(ct.get(), session, after);
+    if (result.size() == 1) {
+      status(
+          String.format(
+              Messages.getString("BoneGrowTool.smoothed"), result.getFirst().label(), now, before));
+    } else {
+      status(String.format(Messages.getString("BoneGrowTool.smoothedMany"), result.size()));
+    }
   }
 
   private static void clickToSplit(
@@ -986,6 +1161,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     } else if (w instanceof SplitWorker s) {
       message =
           s.kind() == SplitWorker.Kind.ERASE ? "BoneGrowTool.erasing" : "BoneGrowTool.splitting";
+    } else if (w instanceof SmoothWorker) {
+      message = "BoneGrowTool.smoothing";
     } else {
       message = "BoneGrowTool.growing";
     }
@@ -1029,6 +1206,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         splitDone(split, split.get());
       } else if (done instanceof FindWorker find) {
         found(find, find.get());
+      } else if (done instanceof SmoothWorker smooth) {
+        smoothed(smooth, smooth.get());
       }
     } catch (CancellationException e) {
       status(Messages.getString("BoneGrowTool.cancelled"));
