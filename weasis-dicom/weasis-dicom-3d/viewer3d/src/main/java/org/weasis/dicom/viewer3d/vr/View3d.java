@@ -594,7 +594,22 @@ public class View3d extends VolumeCanvas
     }
     drawProgressBar(g2d, progressBar);
     drawSegLoadingMessage(g2d);
+    drawLoadFailedMessage(g2d);
     drawTools(g2d);
+  }
+
+  /** Says, for as long as it is so, that only part of the volume reached the GPU. */
+  private void drawLoadFailedMessage(Graphics2D g2d) {
+    DicomVolTexture tex = volTexture;
+    if (tex == null || !tex.isLoadFailed()) {
+      return;
+    }
+    String msg = Messages.getString("volume.load.failed");
+    g2d.setFont(getLayerFont());
+    FontMetrics fm = g2d.getFontMetrics();
+    float x = (getWidth() - fm.stringWidth(msg)) / 2f;
+    float y = fm.getHeight() * 3f;
+    FontTools.paintColorFontOutline(g2d, msg, x, y, Color.ORANGE);
   }
 
   /** The lasso, the lengths and arrows, the arrow being dragged and the status of a cut. */

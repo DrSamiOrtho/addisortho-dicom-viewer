@@ -40,6 +40,7 @@ public class DicomVolTextureFactory {
 
   public static final String FULLY_LOADED = "texture.fully.loaded";
   public static final String PARTIALLY_LOADED = "texture.partially.loaded";
+  public static final String LOAD_FAILED = "texture.load.failed";
 
   private final PropertyChangeSupport changeSupport;
 
