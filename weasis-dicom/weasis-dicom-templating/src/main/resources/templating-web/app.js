@@ -23,8 +23,8 @@ const $ = id => document.getElementById(id);
 // PACS; names and record numbers as in the hospital unless "sharing outside the hospital" is ticked.
 const STANDALONE = document.documentElement.dataset.mode === 'standalone';
 // Viewer build (build_viewer.sh, 14 Oct 2026): the Addis Ortho DICOM Viewer serves this page on 127.0.0.1 and answers for
-// the archive (dicomweb, wado, store) for the one X-ray it hands over: offline, the Addis Ortho ranges
-// only (no other maker's; 23 Oct 2026). Only words differ from the hospital copy: the plan goes into the viewer, which can send it on to PACS.
+// the archive (dicomweb, wado, store) for the one X-ray it hands over: offline, Addis Ortho primary hip and knee ranges
+// only. Only words differ from the hospital copy: the plan goes into the viewer, which can send it on to PACS.
 const VIEWER = document.documentElement.dataset.mode === 'viewer';
 const SEND = VIEWER ? 'Save in the viewer' : 'Send to PACS', DEST = VIEWER ? 'the viewer' : 'PACS', SRCN = VIEWER ? 'the viewer' : 'archive';
 const RS = '../dicomweb', WADO = '../wado';            // relative to /openmrs/aoc/pacs/templating/ (pacs-web, read-only)
@@ -278,9 +278,7 @@ async function boot() {
   const q = new URLSearchParams(location.search);
   // wording that stays true once projects are saved to the server (Astra, 13 Oct: "nothing is uploaded" would not be)
   if (STANDALONE) $('foot').textContent = 'Addis Ortho Trading PLC · X-ray templating for surgeons. A planning aid: the plan is a draft and the surgeon decides. The X-ray opens in this browser; a saved project is stored for your team.';
-  // the viewer build's release (build_viewer.sh, 23 Oct 2026) in the footer, so a user can tell which templating they run
-  const rel = /^r\d{1,4}[a-z]?$/.test(document.documentElement.dataset.release || '') ? ` (templating ${document.documentElement.dataset.release})` : '';
-  if (VIEWER) $('foot').textContent = `Addis Ortho DICOM Viewer · X-ray templating on this computer, offline${rel}. Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer's 1:1 template sheets and 3D models.`;
+  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r28). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
   pendingNote();
   for (const [text, fn] of kcOpenItems()) { const li = document.createElement('li'), a = document.createElement('a'); a.href = '#'; a.textContent = text; a.onclick = e => { e.preventDefault(); fn(); }; li.appendChild(a); $('openList').appendChild(li); }
   // the short part on top and the rest under the templated-patients list, so a phone sees the list without scrolling far

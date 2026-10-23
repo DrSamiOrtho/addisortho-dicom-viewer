@@ -41,6 +41,8 @@ public final class PageFiles {
       Pattern.compile(
           "release (r[0-9]{1,4}[a-z]?)\nlibraryId ([A-Za-z0-9-]{1,40})\n"
               + "ranges (ao-[a-z0-9]{2,12}(?: ao-[a-z0-9]{2,12})*)\n");
+  // library.json as build_viewer.sh writes it: compact JSON, where "range" is a family's key only
+  // (heads and sizes have none). Pretty-printing it or adding a "range" field elsewhere breaks this.
   private static final Pattern FAMILY_RANGE = Pattern.compile("\"range\":\"([^\"]*)\"");
   private static final Pattern LINE = Pattern.compile("([0-9a-f]{64})  ([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?)");
   private static final Map<String, String> TYPES =

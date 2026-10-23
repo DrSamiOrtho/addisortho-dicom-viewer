@@ -18,7 +18,7 @@ SRC="${2:-$HOME/Library/CloudStorage/GoogleDrive-samuel.hailu@aau.edu.et/My Driv
 [ -f "$SRC/build_viewer.sh" ] || { echo "FAIL: no build_viewer.sh in $SRC" >&2; exit 1; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-sh "$SRC/build_viewer.sh" "$TMP/site" "$REL"
+sh "$SRC/build_viewer.sh" "$TMP/site" "$REL" || { echo "FAIL: build_viewer.sh could not build release $REL (above); nothing was compared or copied" >&2; exit 1; }
 DEST="$HERE/src/main/resources/templating-web"
 if [ -n "$CHECK" ]; then
   if diff -r "$TMP/site" "$DEST" > "$TMP/diff.txt" 2>&1; then

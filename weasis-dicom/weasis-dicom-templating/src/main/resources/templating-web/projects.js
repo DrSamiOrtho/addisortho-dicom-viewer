@@ -283,10 +283,10 @@ export function stateProblems(st, W, H, patient = null) {
 // not have (a range not open to the account) is kept aside as it is (contract 7), and a plan from another build has its
 // implants placed again (app.js applyPlan), so neither is held against this library. lib: library.json as loaded.
 const KIND_OF = { cupR: 'cup', cupL: 'cup', stemR: 'stem', stemL: 'stem', femur: 'tka-femur', tibia: 'tka-tibia' };
-// a knee component's stem extension (r20, SCHEMA-2026-10-17-r20.md): {size}, the size a knee-stem family lists
 // a tumour body's resection values (r22): the extent's source ('' until chosen, MRI or CT), extent and margin in mm or null
 export const tumOk = v => isObj(v) && ['', 'MRI', 'CT'].includes(v.src) && [[v.extent, 400], [v.margin, 100], [v.c, 100]].every(([x, hi]) => x === null || x === undefined || (typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= hi))
   && Object.keys(v).every(k => ['src', 'extent', 'margin', 'c'].includes(k));   // c: the stem collar picked with an option
+// a knee component's stem extension (r20, SCHEMA-2026-10-17-r20.md): {size}, the size a knee-stem family lists
 export const stemOk = v => isObj(v) && typeof v.size === 'string' && v.size.length <= 16 && /^[A-Za-z0-9._-]+$/.test(v.size) && (v.geo === undefined || (typeof v.geo === 'string' && /^[0-9a-f]{6,64}$/.test(v.geo)));
 const own = (o, k) => isObj(o) && Object.prototype.hasOwnProperty.call(o, k);
 export function libraryProblems(st, lib) {
@@ -1125,9 +1125,13 @@ function dialog(build) {
     const f = box.querySelector('input, button.primary, button'); if (f) f.focus();
   });
 }
+// more: a note under the question, or a list of short lines (the list's permanent delete: what would be lost). The first
+// option is the one focused (dialog focuses the first input or button in the box), so Cancel goes first where it is the default.
 function choose(text, options, more = '') {
   return dialog((box, done) => {
-    box.appendChild(node('p', '', text)); if (more) box.appendChild(node('p', 'note', more));
+    box.appendChild(node('p', '', text));
+    if (Array.isArray(more)) { const l = node('ul', 'dlgfacts'); for (const t of more) l.appendChild(node('li', '', t)); box.appendChild(l); }
+    else if (more) box.appendChild(node('p', 'note', more));
     const r = node('div', 'row'); for (const [label, v, cls] of options) r.appendChild(button(label, () => done(v), cls)); box.appendChild(r);
   });
 }
@@ -1228,7 +1232,7 @@ async function openKneeCase(id, meta, project, { have = null, haveSha = null, ho
 }
 
 // ---------- who is signed in (13 Oct 2026): GET /api/me -> {uid, em, ca, rg} ----------
-// Share and Hide are offered only where the server would allow them (contract 2 and 4: the case's owner, or someone who
+// Share, Hide and Delete (permanent) are offered only where the server would allow them (contract 2 and 4: the case's owner, or someone who
 // may see every templated patient); the server still decides. Asked once per page; if the answer does not come, both
 // are offered as before and a refusal is explained.
 let ME;   // undefined: not asked yet; null: no answer
@@ -1256,12 +1260,55 @@ export function showList(box) {
   const q = node('input', 'csearch'); q.type = 'search'; q.maxLength = 60; q.placeholder = 'Search name or record number'; q.setAttribute('aria-label', 'Search templated patients'); q.autocomplete = 'off';
   const msg = node('div', 'cmsg'); msg.setAttribute('role', 'status');
   const ul = node('ul', 'clist'), more = button('More', () => load(false), 'cmore'); more.hidden = true;
-  const dupBtn = button('Find duplicates', () => findDups(), 'cdups', 'Look for the same film saved twice, or two cases of one patient, side and joint');
-  const dupBox = node('div', 'cdupbox');
-  sec.append(h, q, dupBtn, dupBox, msg, ul, more); box.appendChild(sec);
-  const st = { q: '', next: null, seq: 0, hosp: new Map(), cases: [] };
+  sec.append(h, q, msg, ul, more); box.appendChild(sec);
+  // hosp: hospital code → its patients' <ul>; groups: the patient groups on the page ({li, hd, sub, cases, hcode, hul, who}),
+  // kept in step when a case leaves (deleted or hidden), so a "More" page adds to the right hospital and nothing stale is kept
+  const st = { q: '', next: null, seq: 0, hosp: new Map(), groups: [], gn: 0 };
   const say = (text, cls = '') => { msg.className = 'cmsg' + (cls ? ' ' + cls : ''); msg.textContent = text; };
-  async function load(reset) {
+  // a patient group starts closed (22 Oct 2026, Sami: duplicates are found and deleted case by case); its header says what
+  // is in it: "N cases, N films", the latest date, the sides and joints ("R hip, L knee"), and "possible duplicate" when two
+  // of its cases share an X-ray (sha256) or the same side and joint (a mark only; nothing is done about it here)
+  const filmsOf = m => (isObj(m.images) ? Object.values(m.images).filter(isObj).length : 1);
+  const shasOf = m => { const s = new Set(); if (isObj(m.image) && typeof m.image.sha256 === 'string' && m.image.sha256) s.add(m.image.sha256); if (isObj(m.images)) for (const f of Object.values(m.images)) if (isObj(f) && typeof f.sha256 === 'string' && f.sha256) s.add(f.sha256); return s; };
+  const sjOf = m => `${m.side === 'L' ? 'L' : 'R'} ${m.procedure === 'knee' ? 'knee' : 'hip'}`;
+  function maybeDup(cs) {
+    const sj = new Set(), sh = new Set();
+    for (const m of cs) {
+      const k = sjOf(m), own = shasOf(m);
+      if (sj.has(k) || [...own].some(s => sh.has(s))) return true;
+      sj.add(k); for (const s of own) sh.add(s);
+    }
+    return false;
+  }
+  function paint(G) {
+    const cs = G.cases, nf = cs.reduce((n, m) => n + filmsOf(m), 0);
+    const last = cs.map(m => String(m.updatedAt || '')).sort().pop() || '';
+    G.hd.textContent = '';
+    G.hd.append(node('b', 'pname', G.who), node('span', 'pcount', `${cs.length} case${cs.length === 1 ? '' : 's'}, ${nf} film${nf === 1 ? '' : 's'}`), node('span', 'psum', [...new Set(cs.map(sjOf))].join(', ')), node('span', 'pdate', fmtWhen(last)));
+    if (maybeDup(cs)) { const b = node('span', 'pdup', 'possible duplicate'); b.title = 'Two cases of this patient share an X-ray, or have the same side and joint. Open them to check before deleting one.'; G.hd.appendChild(b); }
+  }
+  function setOpen(G, on) { G.sub.hidden = !on; G.hd.setAttribute('aria-expanded', String(!!on)); }
+  // a case gone from the list (deleted for good, or hidden): its row, then its patient group when empty, then its hospital
+  function dropCase(li, G, m) {
+    li.remove();
+    if (!G) return;
+    const i = G.cases.indexOf(m); if (i >= 0) G.cases.splice(i, 1);
+    if (G.cases.length) { paint(G); return; }
+    G.li.remove(); st.groups = st.groups.filter(x => x !== G);
+    if (!G.hul.children.length) { const hli = G.hul.parentNode; if (hli) hli.remove(); if (st.hosp.get(G.hcode) === G.hul) st.hosp.delete(G.hcode); }
+  }
+  const emptyNote = () => (!ul.children.length && !st.next ? (st.q ? ` No other saved case matches "${st.q}".` : ' No other templated patients here.') : '');
+  // may this case be deleted from the list now? Not the case on screen (its film would be saved again, or the page started
+  // over with work not sent), not one with changes still waiting to be sent, and not while any save is on its way
+  function listBusy(id) {
+    const ref = FILM ? refOf(FILM) : null;
+    if ((H.S.caseRef && H.S.caseRef.id === id) || (ref && ref.id === id)) return 'Not deleted: this case is open on screen. Close it first (open another X-ray), or delete it from the case itself.';
+    for (const A of AWAY) if (A.ref && A.ref.id === id) return 'Not deleted: this case has changes still waiting to be sent (see the panel). Let them be sent or discard them first.';
+    if (JOBS > 0) return 'Not deleted: a save is still being sent. Try again in a moment.';
+    return '';
+  }
+  // note: a message kept once the list is loaded again (a refused delete says why the list was reloaded)
+  async function load(reset, note = '') {
     const seq = ++st.seq;
     if (reset) { st.next = null; }
     say(reset ? 'Loading…' : 'Loading more…'); more.disabled = true;
@@ -1272,7 +1319,8 @@ export function showList(box) {
       const r = await call('POST', '/projects/list', { json: body });   // the search goes in the body, never the URL (contract 4)
       const viewer = await me();
       if (seq !== st.seq) return;
-      if (reset) { ul.textContent = ''; st.hosp = new Map(); st.cases = []; dupBox.textContent = ''; }
+      if (reset) { ul.textContent = ''; st.hosp = new Map(); st.groups = []; }
+      const now = H.S.caseRef && H.S.caseRef.id ? H.S.caseRef.id : null, mark = now || LAST_CASE, added = [];
       // under hospital headings (Sami, 15 Oct: "so we have clear database for each hospital"), one row per patient labelled
       // "Full name · SSC · 45 y · SSC-MRN", and under it that patient's cases with their films (the "sub menu"); a case with
       // no hospital is under "Hospital not set" until a hospital is picked for it
@@ -1290,16 +1338,19 @@ export function showList(box) {
         }
         const hideId = !!H.S.set.share;   // sharing mode: no name, age or record number on the screen either (Astra, round 2, P1 3)
         const li = node('li', 'pgrp'), who = hideId ? `${hcode ? hcode + ' · ' : ''}patient details hidden (sharing mode)` : identLine(pt) || (pt.recordNo ? `Record ${pt.recordNo}` : 'Name left out');
-        const hd = node('button', 'phead'); hd.type = 'button'; hd.setAttribute('aria-expanded', 'true');
-        hd.append(node('b', 'pname', who), node('span', 'pcount', `${cs.length} case${cs.length > 1 ? 's' : ''}, ${cs.reduce((n, m) => n + (isObj(m.images) ? Object.keys(m.images).length : 1), 0)} films`));
+        const hd = node('button', 'phead'); hd.type = 'button';   // a button: Enter and Space open and close it
         const sub = node('ul', 'pcases'); sub.setAttribute('aria-label', `Cases of ${who}`);
-        hd.onclick = () => { sub.hidden = !sub.hidden; hd.setAttribute('aria-expanded', String(!sub.hidden)); };
-        for (const m of cs) { st.cases.push(m); sub.appendChild(row(m, viewer, true)); }
-        li.append(hd, sub); hul.appendChild(li);
+        sub.id = `pcases-${++st.gn}`; hd.setAttribute('aria-controls', sub.id);
+        const G = { li, hd, sub, cases: cs, hcode, hul, who };
+        hd.onclick = () => setOpen(G, sub.hidden);
+        for (const m of cs) sub.appendChild(row(m, viewer, true, G, mark && m.id === mark ? (m.id === now ? 'on screen' : 'last opened') : ''));
+        paint(G); setOpen(G, !!st.q || (!!mark && cs.some(m => m.id === mark)));   // closed, unless searched for or holding the case on screen / just opened
+        li.append(hd, sub); hul.appendChild(li); st.groups.push(G); added.push(G);
       }
       st.next = typeof r.next === 'string' ? r.next : null;
+      if (reset && !st.next && st.groups.length <= 3) for (const G of added) setOpen(G, true);   // a short list: all open
       more.hidden = !st.next; more.disabled = false;
-      say(ul.children.length ? '' : st.q ? `No saved case matches "${st.q}".` : 'No templated patients yet. A project saved here appears in this list.');
+      if (note) say(note, 'bad'); else say(ul.children.length ? '' : st.q ? `No saved case matches "${st.q}".` : 'No templated patients yet. A project saved here appears in this list.');
     } catch (e) {
       if (seq !== st.seq) return;
       more.hidden = true;
@@ -1309,18 +1360,18 @@ export function showList(box) {
   }
   // an error that says the case itself cannot be opened (not: no connection, a busy server, not signed in, not yours, over quota)
   const brokenOpen = e => !(e instanceof ApiError) || e.status === 500 || e.status === 422 || (e.status === 503 && e.code !== 'busy');
-  function row(m, viewer = ME, inGroup = false) {
-    const li = node('li', 'case' + (inGroup ? ' sub' : '')); li.dataset.id = String(m.id || '');
+  // G: the patient group the row is in; markTxt: "on screen" or "last opened" for the case this page has open or opened last
+  function row(m, viewer = ME, inGroup = false, G = null, markTxt = '') {
+    const li = node('li', 'case' + (inGroup ? ' sub' : '') + (markTxt ? ' cmark' : '')); li.dataset.id = String(m.id || '');
     const pt0 = isObj(m.patient) ? m.patient : {}, pt = H.S.set.share ? { hospital: pt0.hospital } : pt0;   // sharing mode: identity hidden
     const who = H.S.set.share ? 'Patient details hidden (sharing mode)' : pt.name || (pt.recordNo ? `Record ${pt.recordNo}` : 'Name left out');
     const kc = isObj(m.images);   // a knee case (contract section 12): its films under it (a button each)
     const side = `${m.side === 'L' ? 'Left' : 'Right'} ${m.procedure === 'knee' ? 'knee' : 'hip'}${kc ? ' case' : ''}`;
     const open = node('button', 'copen'); open.type = 'button';
-    const top = node('span', 'ctop'); top.append(node('b', 'cname' + (inGroup ? ' sr-only' : ''), who), node('span', 'cside', side));
-    if (!H.S.set.share) { const nn = !pt.name || String(pt.name).startsWith(PLACEHOLDER), nr = !pt.recordNo; if (nn || nr) top.append(node('span', 'cneeds', nn && nr ? 'needs name and MRN' : nn ? 'needs a name' : 'needs MRN')); }
-    top.append(node('span', 'cdate', fmtWhen(m.updatedAt)));
+    const top = node('span', 'ctop'); top.append(node('b', 'cname' + (inGroup ? ' sr-only' : ''), who), node('span', 'cside', side), node('span', 'cdate', fmtWhen(m.updatedAt)));
     const imp = node('span', 'cimp', implantsText(m.implants) || 'no implants placed');
     const by = node('span', 'cby', [pt.name && pt.recordNo && !inGroup ? `Record ${pt.recordNo}` : '', !kc ? '1 film' : '', m.updatedBy && m.updatedBy.em ? `saved by ${m.updatedBy.em}` : '', Array.isArray(m.collaborators) && m.collaborators.length ? `shared with ${m.collaborators.length}` : ''].filter(Boolean).join(' · '));
+    if (markTxt) top.appendChild(node('span', 'cnow', markTxt));
     open.append(top);
     let films = null;
     if (kc) {   // AP ✓ · Lateral ✓ · Skyline – · Long leg ✓: each saved film opens the case with that film in front
@@ -1342,7 +1393,7 @@ export function showList(box) {
         say(`Could not open that case: ${e instanceof ApiError ? why(e) : e.message || e}.`, 'bad'); if (e instanceof ApiError && e.status === 401) msg.appendChild(signinLink());
         // a case that cannot be opened (its files unreadable, refused by the store, not what the page can read) can be removed for good (21 Oct 2026)
         if (brokenOpen(e) && mayManage(m, viewer) && !li.querySelector('.cpurge')) {
-          const pg = button('Delete (permanent)', () => runDelete('case', { id: m.id, what: H.S.set.share ? '' : who, report: t => say(t, 'bad'), onDone: () => { if (H.S.caseRef && H.S.caseRef.id === m.id) caseOnScreen(null); li.remove(); say('Deleted permanently.'); } }), 'cdel cpurge', 'This case cannot be opened. Remove it from the server for good (not only from the list)');
+          const pg = button('Delete (permanent)', () => { const no = listBusy(String(m.id)); if (no) { say(no, 'bad'); return; } return runDelete('case', { id: m.id, what: H.S.set.share ? '' : who, report: t => say(t, 'bad'), onDone: () => { dropCase(li, G, m); say('Deleted permanently.' + emptyNote()); } }); }, 'cdel cpurge', 'This case cannot be opened. Remove it from the server for good (not only from the list)');
           pg.setAttribute('aria-label', `Delete ${who} permanently`);
           (act.isConnected ? act : li).appendChild(pg); li.classList.add('broken');
         }
@@ -1365,7 +1416,7 @@ export function showList(box) {
           const before = [...(m.collaborators || [])].sort().join(','), r = await call('POST', `/projects/${m.id}/collaborators`, { json: { collaborators: p.list } });
           m.collaborators = Array.isArray(r.collaborators) ? r.collaborators : p.list;
           if (H.S.caseRef && H.S.caseRef.id === m.id && [...m.collaborators].sort().join(',') !== before) caseOnScreen({ ...H.S.caseRef, rev: H.S.caseRef.rev + 1 });   // the server counts a change of sharing as a version
-          ed.hidden = true; li.replaceWith(row(m, viewer, inGroup));
+          ed.hidden = true; li.replaceWith(row(m, viewer, inGroup, G, markTxt));
           say(m.collaborators.length ? `Shared with ${m.collaborators.join(', ')}.` : 'Not shared with anyone now.');
         } catch (e) { say(`Not shared: ${why(e)}.`, 'bad'); }
       }, 'primary');
@@ -1373,79 +1424,62 @@ export function showList(box) {
       ed.append(lab, note, r2); inp.focus();
     }, '', 'Share this case with colleagues');
     share.setAttribute('aria-label', `Share ${who}`);
-    const hide = button('Delete', async () => {
-      if (!confirm(`Delete ${who} (${side}) from the templated-patients list? It leaves the list and cannot be opened here. The files stay on the server, so an administrator can still restore it.`)) return;
+    const hide = button('Hide (keeps files)', async () => {
+      if (!confirm(`Hide ${who} (${side}) from the templated-patients list? It is not deleted: the case stays on the server.`)) return;
       try {
         await call('POST', `/projects/${m.id}/hide`, { json: {} });
         if (H.S.caseRef && H.S.caseRef.id === m.id) caseOnScreen(null);   // saving the X-ray on screen again (Save project) starts a new case; it is not saved automatically any more
-        li.remove(); say('Deleted from the list (the files are kept on the server).');
-      } catch (e) { say(`Not deleted: ${why(e)}.`, 'bad'); }
-    }, 'cdel', 'Remove this case from the list (the files are kept on the server)');
-    hide.setAttribute('aria-label', `Delete ${who}`);
-    // name it, or correct its record number: the same record number puts the case with that patient's other cases
-    const ee = node('div', 'cshare'); ee.hidden = true;
-    const edit = button('Name / MRN', () => {
-      ee.hidden = !ee.hidden; if (ee.hidden) return;
-      ee.textContent = '';
-      const p0 = isObj(m.patient) ? m.patient : {}, named = typeof p0.name === 'string' && !p0.name.startsWith(PLACEHOLDER);
-      const nm = node('input'); nm.type = 'text'; nm.autocomplete = 'off'; nm.value = named ? p0.name : ''; nm.setAttribute('aria-label', 'Patient name');
-      const rn = node('input'); rn.type = 'text'; rn.autocomplete = 'off'; rn.value = mrnCore(p0.hospital, p0.recordNo); rn.setAttribute('aria-label', 'Record number');
-      const hs = node('select'); hs.setAttribute('aria-label', 'Hospital'); hs.appendChild(new Option('(not set)', ''));
-      for (const h of HOSPITALS) hs.appendChild(new Option(`${h.code} · ${h.name}`, h.code));
-      if (p0.hospital && !HOSPITALS.some(h => h.code === p0.hospital)) hs.appendChild(new Option(p0.hospital, p0.hospital));
-      hs.value = p0.hospital || '';
-      const lab = (t, el) => { const l = node('label', '', t + ' '); l.appendChild(el); return l; };
-      const note = node('p', 'note', 'The hospital and record number put this case with that patient\'s other cases (stored as, for example, SSC-12345).');
-      const err = node('p', 'note bad');
-      const save = button('Save', async () => {
-        const name = cleanId(nm.value), rec = cleanId(rn.value), hosp = hs.value;
-        if (!name && !rec) { err.textContent = 'Give a name or a record number.'; return; }
-        if (name.length > NAME_MAX) { err.textContent = `Name too long: at most ${NAME_MAX} characters.`; return; }
-        if (!mrnOk(hosp, rec)) { err.textContent = `Record number too long: at most ${MRN_MAX} characters with the hospital's code.`; return; }
-        const patient = { name: name || null, recordNo: rec || null }; if (hosp) patient.hospital = hosp;
-        save.disabled = true;
-        try {
-          await call('POST', `/projects/${m.id}/patient`, { json: { patient } });
-          if (H.S.caseRef && H.S.caseRef.id === m.id) caseOnScreen({ ...H.S.caseRef, rev: H.S.caseRef.rev + 1 });   // a rename is a version
-          say('Saved. The list is reloaded.'); load(true);
-        } catch (e) { save.disabled = false; err.textContent = `Not saved: ${why(e)}.`; }
-      }, 'primary');
-      const r2 = node('div', 'row'); r2.append(save, button('Cancel', () => { ee.hidden = true; }));
-      ee.append(lab('Name ', nm), lab('Record number ', rn), lab('Hospital ', hs), note, err, r2); nm.focus();
-    }, '', 'Add or correct the name and record number');
-    edit.setAttribute('aria-label', `Edit name and record number of ${who}`);
-    if (mayManage(m, viewer)) { act.append(edit, share, hide); li.append(open, act); if (films) li.appendChild(films); li.append(ee, ed); }   // only where the server would allow them
+        dropCase(li, G, m); say('Hidden from the list (kept on the server).' + emptyNote());
+      } catch (e) { say(`Not hidden: ${why(e)}.`, 'bad'); }
+    }, '', 'Take this case off the list (it is kept on the server)');
+    hide.setAttribute('aria-label', `Hide ${who}, ${side} (keeps files)`);
+    // the case removed for good (22 Oct 2026; POST /projects/<id>/purge, contract section 14): only where Hide is offered,
+    // after the case is read again (a version saved since the list was loaded is not deleted unseen) and the page's own
+    // dialog says what is lost, Cancel first and focused
+    const del = button('Delete (permanent)', () => listDelete(m, li, G, who, side, del), 'cdel', 'Remove this case and all its X-rays from the server for good');
+    del.setAttribute('aria-label', `Delete ${who}, ${side}, permanently`);
+    if (mayManage(m, viewer)) { act.append(share, hide, del); li.append(open, act); if (films) li.appendChild(films); li.append(ed); }   // only where the server would allow them
     else { li.append(open); if (films) li.appendChild(films); }
     return li;
   }
-  // duplicates among the cases on this page: the same image saved in two cases, or one patient (hospital and record number)
-  // with two cases of the same side and joint. The newest of a set is kept; the others can be deleted (hidden, files kept).
-  function findDups() {
-    dupBox.textContent = '';
-    const sets = new Map(), add = (k, m) => { if (!sets.has(k)) sets.set(k, new Map()); sets.get(k).set(m.id, m); };
-    for (const m of st.cases) {
-      const shas = new Set(); if (isObj(m.image) && m.image.sha256) shas.add(m.image.sha256); if (isObj(m.images)) for (const r of Object.values(m.images)) if (isObj(r) && r.sha256) shas.add(r.sha256);
-      for (const sh of shas) add('i:' + sh, m);
-      const p = isObj(m.patient) ? m.patient : {};
-      if (p.hospital && p.recordNo) add(`p:${mrnKey(p.hospital, p.recordNo)}|${m.side}|${m.procedure}`, m);
-    }
-    const seen = new Set(), found = [];
-    for (const [, mm] of sets) { if (mm.size < 2) continue; const ids = [...mm.keys()].sort().join(','); if (seen.has(ids)) continue; seen.add(ids); found.push([...mm.values()].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))); }
-    if (!found.length) { dupBox.appendChild(node('p', 'note', 'No duplicates among the patients loaded. (Press More to load more, then look again.)')); return; }
-    dupBox.appendChild(node('p', 'note', `${found.length} possible duplicate set${found.length > 1 ? 's' : ''}. Check each: the newest is kept.`));
-    for (const set of found) {
-      const d = node('div', 'cdup'), [keep, ...rest] = set;
-      const line = m => `${isObj(m.patient) && m.patient.name && !String(m.patient.name).startsWith(PLACEHOLDER) ? m.patient.name : 'Unnamed'} · ${m.side === 'L' ? 'Left' : 'Right'} ${m.procedure} · ${fmtWhen(m.updatedAt)}`;
-      d.appendChild(node('div', 'cdkeep', `Keep: ${H.S.set.share ? 'patient details hidden' : line(keep)}`));
-      for (const m of rest) d.appendChild(node('div', 'cdold', `Older copy: ${H.S.set.share ? 'patient details hidden' : line(m)}`));
-      const go = button(`Delete the ${rest.length} older cop${rest.length > 1 ? 'ies' : 'y'}`, async () => {
-        if (!confirm(`Delete ${rest.length} older cop${rest.length > 1 ? 'ies' : 'y'} and keep the newest? They leave the list; the files stay on the server.`)) return;
-        go.disabled = true; let n = 0;
-        try { for (const m of rest) { await call('POST', `/projects/${m.id}/hide`, { json: {} }); n++; if (H.S.caseRef && H.S.caseRef.id === m.id) caseOnScreen(null); } say(`Deleted ${n} older cop${n > 1 ? 'ies' : 'y'}.`); load(true); }
-        catch (e) { go.disabled = false; say(`Deleted ${n}, then stopped: ${why(e)}.`, 'bad'); }
-      }, 'cdel');
-      d.appendChild(go); dupBox.appendChild(d);
-    }
+  async function listDelete(m, li, G, who, side, btn) {
+    const id = String(m.id || ''); if (!ID_RE.test(id)) return;
+    let no = listBusy(id); if (no) { say(no, 'bad'); return; }
+    btn.disabled = true;
+    try {
+      let got;
+      try { got = await call('GET', `/projects/${id}`); }
+      catch (e) {
+        if (gone404(e)) load(true, 'Not deleted: this case is no longer in your patient list (deleted or hidden elsewhere). The list was reloaded.');
+        else say(`Not deleted: ${why(e)}.`, 'bad');
+        return;
+      }
+      const cur = isObj(got.meta) ? got.meta : {};
+      if (cur.rev !== m.rev || String(cur.updatedAt || '') !== String(m.updatedAt || '')) {
+        load(true, 'Not deleted: this case was saved again after the list was loaded (here or elsewhere). The list was reloaded: look at it again before deleting.'); return;
+      }
+      const share = !!H.S.set.share, pt = isObj(m.patient) ? m.patient : {}, kc = isObj(m.images);
+      const roles = kc ? ROLES.filter(r => isObj(m.images[r])) : [], nf = kc ? roles.length : 1;
+      const collab = Array.isArray(m.collaborators) ? m.collaborators.length : 0;
+      const ownerEm = isObj(m.owner) && typeof m.owner.em === 'string' ? m.owner.em : '';
+      const notMine = !ME || !isObj(m.owner) || m.owner.uid !== ME.uid;
+      const facts = [
+        share ? `${side}, saved ${fmtWhen(m.updatedAt)} (patient details hidden: sharing mode)` : `${who}${pt.name && pt.recordNo ? ` (record ${pt.recordNo})` : ''}: ${side}, saved ${fmtWhen(m.updatedAt)}`,
+        `${nf} film${nf === 1 ? '' : 's'}${kc ? `: ${roles.map(r => ROLE_NAME[r]).join(', ') || 'none'}` : ''}`,
+        `Implants: ${implantsText(m.implants) || 'none placed'}`,
+        m.updatedBy && m.updatedBy.em ? `Saved by ${m.updatedBy.em}` : '',
+        collab ? `Shared with ${collab} ${collab === 1 ? 'person' : 'people'}; they lose it too` : 'Not shared with anyone',
+        notMine && ownerEm ? `Owner: ${ownerEm} (not you)` : '',
+      ].filter(Boolean);
+      const pick = await choose('Delete this patient case PERMANENTLY? Every X-ray, plan and note in it is removed from the server for good and cannot be brought back. (Hide only takes it off the list and keeps the files.)',
+        [['Cancel', null, ''], ['Delete permanently', 'del', 'cdel']], facts);
+      if (pick !== 'del') return;
+      no = listBusy(id); if (no) { say(no, 'bad'); return; }   // opened or saved meanwhile
+      try { await purgeCall(`/projects/${id}/purge`); }
+      catch (e) { say(`Not deleted: ${why(e)}.`, 'bad'); return; }
+      if (LAST_CASE === id) LAST_CASE = null;
+      dropCase(li, G, m); say('Deleted permanently.' + emptyNote());
+    } finally { btn.disabled = false; }
   }
   let t = 0;
   q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { const v = q.value.trim(); if (v !== st.q) { st.q = v; load(true); } }, 350); });
@@ -1474,6 +1508,7 @@ const AUTO = { delay: 20000, maxWait: 60000, step: 400, retry: [5000, 15000, 300
 let FILM = null;             // the film on screen: { ck, kc, unit, orig, ref, how, eligible, wantCase, created, placeholder, conflict, gone, pend, snap, status, ... }
 const AWAY = new Set();      // films no longer on screen with a save still to make (their snapshot) or to retry
 let NEXT_PLACEHOLDER = null; // openCase → filmOpened: the list's placeholder name of the case being opened
+let LAST_CASE = null;        // the id of the case last opened or saved on this page (the list opens its patient group)
 let QUEUE = Promise.resolve();
 // every write to the server, automatic or Save project, one after another: one upload at a time, and two saves of the same
 // case never race on the same version
@@ -1483,6 +1518,7 @@ const live = F => !!F && F === FILM && !!F.unit && H.unit() === F.unit;
 const refOf = F => (live(F) ? H.S.caseRef : F.ref);
 function setRef(F, r) {
   F.ref = r || null; if (live(F)) H.S.caseRef = r || null;
+  if (r && r.id) LAST_CASE = r.id;   // the list opens this case's patient and marks the row (22 Oct 2026)
   if (F.ck) { remember(F.ck, r); if (F.kc && r) rememberFilms(F.ck, r); }
 }
 function caseOnScreen(r) { if (FILM && live(FILM)) { setRef(FILM, r); if (!r) { FILM.status = null; render(); } } else H.S.caseRef = r; }
@@ -2096,7 +2132,7 @@ export const autoTest = {
 };
 // ---------- permanent delete (Sami, 21 Oct 2026; contract section 14: "no permanent deletes" no longer holds) ----------
 // Offered on the errors of an open X-ray or case (a failed save, a refused film, an X-ray that cannot be read) and on a list
-// entry that cannot be opened. The list's own Delete is unchanged: it hides, the files stay. These remove for good:
+// entry that cannot be opened. (Each list row has its own "Delete (permanent)" since 22 Oct 2026; Hide keeps the files.) These remove for good:
 // kind "case": the whole patient case (POST /projects/<id>/purge); kind "xray": the X-ray the error is about, i.e. its film of
 // a knee case (POST /projects/<id>/film/<role>; the case's last film means the whole case, asked once more), or, for a case of
 // one X-ray, the case. A subject is {id (server case, or null: nothing saved yet), role (knee film), what (a few words for the
@@ -2123,8 +2159,8 @@ function resetAfterDelete() {
 export async function runDelete(kind, subj = null) {
   subj = subj || openSubject();
   if (!subj || !H) return false;
-  const open = !!subj.open || (!!subj.id && !!H.S.caseRef && H.S.caseRef.id === subj.id), w = subj.what ? ` (${subj.what})` : '';
-  const hideNote = ' (The list\'s Delete only hides a case and keeps its files; this does not.)';
+  const wt = clip(subj.what, 120), open = !!subj.open || (!!subj.id && !!H.S.caseRef && H.S.caseRef.id === subj.id), w = wt ? ` (${wt})` : '';   // no "()" when there is no name
+  const hideNote = ' (Hide in the patient list only hides a case and keeps its files; this does not.)';
   let q;
   if (subj.caseOnly && kind === 'xray') kind = 'case';
   if (!subj.id && !open) return false;
