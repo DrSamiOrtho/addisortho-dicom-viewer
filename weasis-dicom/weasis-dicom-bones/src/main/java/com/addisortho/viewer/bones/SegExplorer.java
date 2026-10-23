@@ -36,6 +36,10 @@ import org.weasis.dicom.codec.seg.SegSpecialElement;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
+import org.weasis.dicom.viewer2d.View2d;
+import org.weasis.dicom.viewer2d.mpr.MprContainer;
+import org.weasis.dicom.viewer2d.mpr.MprController;
+import org.weasis.dicom.viewer2d.mpr.Volume;
 import org.weasis.dicom.viewer3d.ActionVol;
 import org.weasis.dicom.viewer3d.EventManager;
 import org.weasis.dicom.viewer3d.View3DContainer;
@@ -155,7 +159,10 @@ final class SegExplorer {
     }
   }
 
-  /** Shows the segmentations of the CT in its 3D views and lists them in the Segmentation panel. */
+  /**
+   * Shows the segmentations of the CT in its 3D views, its MPR views and the slices of the 2D
+   * viewer, and lists them in the Segmentation panel.
+   */
   private static void refreshViews(MediaSeries<DicomImageElement> ct) {
     List<ViewerPlugin<?>> plugins = GuiUtils.getUICore().getViewerPlugins();
     List<ViewerPlugin<?>> copy;
@@ -163,8 +170,14 @@ final class SegExplorer {
       copy = List.copyOf(plugins);
     }
     EventManager manager = EventManager.getInstance();
+    String ctUID = TagD.getTagValue(ct, Tag.SeriesInstanceUID, String.class);
     for (ViewerPlugin<?> plugin : copy) {
+      if (plugin instanceof MprContainer mpr) {
+        refreshMpr(mpr, ctUID);
+        continue;
+      }
       if (!(plugin instanceof View3DContainer container)) {
+        refreshSlices(plugin, ctUID);
         continue;
       }
       for (ViewCanvas<DicomImageElement> canvas : container.getImagePanels()) {
@@ -190,6 +203,36 @@ final class SegExplorer {
       }
       manager.fireSeriesViewerListeners(
           new SeriesViewerEvent(container, ct, null, EVENT.SELECT_VIEW));
+    }
+  }
+
+  /** The MPR of the CT builds its outlines again from the segmentation now in the explorer. */
+  private static void refreshMpr(MprContainer mpr, String ctUID) {
+    MprController controller = mpr.getMprController();
+    Volume<?, ?> volume = controller == null ? null : controller.getVolume();
+    if (volume == null || volume.getStack() == null) {
+      return;
+    }
+    String uid =
+        TagD.getTagValue(volume.getStack().getSeries(), Tag.SeriesInstanceUID, String.class);
+    if (ctUID != null && ctUID.equals(uid)) {
+      controller.buildSegElementsAsync(mpr);
+    }
+  }
+
+  /** The slices of the CT in a 2D viewer draw their outlines again. */
+  private static void refreshSlices(ViewerPlugin<?> plugin, String ctUID) {
+    if (!(plugin instanceof org.weasis.core.ui.editor.image.ImageViewerPlugin<?> viewer)) {
+      return;
+    }
+    for (ViewCanvas<?> canvas : viewer.getImagePanels()) {
+      if (canvas instanceof View2d view
+          && view.getSeries() != null
+          && ctUID != null
+          && ctUID.equals(
+              TagD.getTagValue(view.getSeries(), Tag.SeriesInstanceUID, String.class))) {
+        view.requestSegmentationUpdate();
+      }
     }
   }
 }

@@ -137,4 +137,21 @@ class MaskEditTest {
         "a one-voxel sheet has too few bone neighbours everywhere");
     assertSame(bone, MaskEdit.smooth(bone, 0, Thread.currentThread()));
   }
+
+  @Test
+  void aStrokeLeavesNoGapBetweenPointsFarApart() {
+    double[] r = {2, 2, 2};
+    BoxMask line = MaskEdit.stroke(List.of(new int[] {5, 20, 20}, new int[] {30, 20, 20}), r, GRID);
+    for (int x = 5; x <= 30; x++) {
+      assertTrue(line.contains(x, 20, 20), "the line is whole at x = " + x);
+    }
+    assertTrue(line.contains(3, 20, 20), "a ball at the start");
+    assertTrue(line.contains(32, 20, 20), "a ball at the end");
+    assertFalse(line.contains(15, 23, 20), "no wider than the brush");
+    assertTrue(line.contains(15, 22, 20));
+
+    BoxMask one = MaskEdit.stroke(List.of(new int[] {10, 10, 10}), r, GRID);
+    assertEquals(MaskEdit.brush(new int[] {10, 10, 10}, r, GRID).count(), one.count());
+    assertNull(MaskEdit.stroke(List.of(new int[] {-20, -20, -20}), r, GRID));
+  }
 }

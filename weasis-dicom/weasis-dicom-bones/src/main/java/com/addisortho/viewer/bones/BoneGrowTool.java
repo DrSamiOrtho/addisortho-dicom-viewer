@@ -329,7 +329,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     initGui();
     PANELS.add(new WeakReference<>(this));
     if (!PICKER.isArmed()) {
-      PICKER.arm(BoneGrowTool::picked, BoneGrowTool::missed);
+      PICKER.arm(
+          BoneGrowTool::picked, BoneGrowTool::stroked, BoneGrowTool::isBrush, BoneGrowTool::missed);
     }
     showState();
     viewChanged();
@@ -828,7 +829,46 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     } else {
       leaveClickTool();
     }
+    brushOnSlices(isBrush());
     showStateEverywhere();
+  }
+
+  /** Add here or Take out here is on: a drag on a slice paints a stroke. */
+  private static boolean isBrush() {
+    return tool == Tool.PAINT || tool == Tool.RUB;
+  }
+
+  /** The left button of the slices before the brush took it, or {@code null}. */
+  private static String leftBeforeBrush;
+
+  /**
+   * While the brush is on, the slices' left button does nothing of its own, so a drag paints
+   * without also changing the window or moving the image; the left button it had comes back after.
+   * The MPR views and the 2D viewer share it; the 3D view keeps rotating.
+   */
+  private static void brushOnSlices(boolean on) {
+    org.weasis.dicom.viewer2d.EventManager slices =
+        org.weasis.dicom.viewer2d.EventManager.getInstance();
+    String now = slices.getMouseActions().getAction(MouseActions.T_LEFT);
+    String none = ActionW.NO_ACTION.cmd();
+    if (on && leftBeforeBrush == null) {
+      leftBeforeBrush = now;
+      setSliceLeft(slices, none);
+    } else if (!on && leftBeforeBrush != null) {
+      String back = leftBeforeBrush;
+      leftBeforeBrush = null;
+      if (none.equals(now)) {
+        setSliceLeft(slices, back);
+      } // else the user chose another left tool meanwhile: keep it
+    }
+  }
+
+  private static void setSliceLeft(org.weasis.dicom.viewer2d.EventManager slices, String command) {
+    if (slices.getSelectedView2dContainer() != null) {
+      slices.changeLeftMouseAction(command);
+    } else {
+      slices.getMouseActions().setAction(MouseActions.T_LEFT, command);
+    }
   }
 
   /** Puts rotation back on the 3D view's left button when a click tool is there. */
@@ -887,8 +927,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
           session.boneNear(voxel, NEAR_BONE_VOXELS).map(f -> f.bone().label()).orElse("no bone"));
       switch (tool) {
         case SELECT, ADD, TAKE -> clickToSelect(session, voxel, pickOf(seed.additive()));
-        case PAINT -> paint(ct, session, voxel);
-        case RUB -> rub(ct, session, voxel);
+        case PAINT ->
+            paint(ct, session, voxel, MaskEdit.brush(voxel, brushRadius(ct), gridBox(ct)));
+        case RUB -> rub(ct, session, voxel, MaskEdit.brush(voxel, brushRadius(ct), gridBox(ct)));
         case SPLIT -> clickToSplit(view.get(), ct, session, voxel, seed);
         case NEW -> {
           view.get().setSeedMarker(seed.lps());
@@ -898,6 +939,47 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
           view.get().setSeedMarker(seed.lps());
           startErase(session, voxel);
         }
+      }
+    } catch (Problem e) {
+      warn(e.getMessage());
+    }
+  }
+
+  /** A drag on a slice with the brush on: one Add here or Take out here along the whole stroke. */
+  private static void stroked(List<Seed> seeds) {
+    if (!isBrush() || seeds.isEmpty()) {
+      return;
+    }
+    if (worker != null) {
+      status(Messages.getString("BoneGrowTool.busy"));
+      return;
+    }
+    Optional<View3d> view = selectedView();
+    if (view.isEmpty()) {
+      warn(Messages.getString("BoneGrowTool.noCt"));
+      return;
+    }
+    try {
+      CtSource ct = source(view.get());
+      List<int[]> voxels = new ArrayList<>();
+      for (Seed seed : seeds) {
+        if (seed.frameOfReferenceUID() != null
+            && ct.frameOfReferenceUID() != null
+            && !Objects.equals(seed.frameOfReferenceUID(), ct.frameOfReferenceUID())) {
+          throw new Problem(Messages.getString("BoneGrowTool.otherFrame"));
+        }
+        ct.voxelOf(seed.lps()).ifPresent(voxels::add);
+      }
+      if (voxels.isEmpty()) {
+        throw new Problem(Messages.getString("BoneGrowTool.seedOutside"));
+      }
+      GrowSession session = session(ct);
+      BoxMask brush = MaskEdit.stroke(voxels, brushRadius(ct), gridBox(ct));
+      LOGGER.debug("Bones stroke {} of {} points in {}", tool, voxels.size(), seeds.get(0).plane());
+      if (tool == Tool.PAINT) {
+        paint(ct, session, voxels.getFirst(), brush);
+      } else {
+        rub(ct, session, voxels.getFirst(), brush);
       }
     } catch (Problem e) {
       warn(e.getMessage());
@@ -985,7 +1067,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
    * Add here: what looks like bone within the brush goes into the bone, out of any other bone it
    * was in.
    */
-  private static void paint(CtSource ct, GrowSession session, int[] voxel) {
+  private static void paint(CtSource ct, GrowSession session, int[] voxel, BoxMask brush) {
     Optional<Bone> target = brushTarget(session, voxel);
     if (target.isEmpty()) {
       status(Messages.getString("BoneGrowTool.brushWhich"));
@@ -993,7 +1075,6 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
     Bone bone = target.get();
     GrowOptions o = options(ct);
-    BoxMask brush = MaskEdit.brush(voxel, brushRadius(ct), gridBox(ct));
     BoxMask dense =
         brush == null ? null : MaskEdit.dense(brush, ct.huSource(), o.lowerHu(), o.upperHu());
     if (dense == null) {
@@ -1025,14 +1106,13 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   }
 
   /** Take out here: the bone's voxels within the brush leave it. */
-  private static void rub(CtSource ct, GrowSession session, int[] voxel) {
+  private static void rub(CtSource ct, GrowSession session, int[] voxel, BoxMask brush) {
     Optional<Bone> target = brushTarget(session, voxel);
     if (target.isEmpty()) {
       status(Messages.getString("BoneGrowTool.brushWhich"));
       return;
     }
     Bone bone = target.get();
-    BoxMask brush = MaskEdit.brush(voxel, brushRadius(ct), gridBox(ct));
     BoxMask left = brush == null ? bone.mask() : bone.mask().minus(List.of(brush));
     if (left == bone.mask()) {
       status(String.format(Messages.getString("BoneGrowTool.rubNothing"), bone.label()));

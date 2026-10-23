@@ -16,7 +16,10 @@ import java.awt.event.AWTEventListener;
 import java.awt.event.InputEvent;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Point2D;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import javax.swing.SwingUtilities;
 import org.dcm4che3.data.Tag;
@@ -41,6 +44,9 @@ final class SeedPicker {
   /** Farthest a click may move between press and release, in pixels; more is a drag. */
   private static final int CLICK_TOLERANCE = 4;
 
+  /** Least move between two points of a stroke, in pixels. */
+  private static final int STROKE_STEP = 2;
+
   /**
    * A seed position.
    *
@@ -64,6 +70,11 @@ final class SeedPicker {
   private Component pressedView;
   private Point pressedAt;
 
+  /** The points of the stroke being drawn on a slice, or {@code null}. */
+  private List<Seed> stroke;
+
+  private Point strokeLast;
+
   boolean isArmed() {
     return listener != null;
   }
@@ -76,12 +87,31 @@ final class SeedPicker {
    * rotation. A click in the 3D view that meets nothing is reported to {@code onMiss}.
    */
   void arm(Consumer<Seed> onPick, Consumer<String> onMiss) {
+    arm(onPick, null, () -> false, onMiss);
+  }
+
+  /**
+   * As {@link #arm(Consumer, Consumer)}, and while {@code strokes} says so, a drag on a slice (an
+   * MPR view or the 2D viewer) is handed to {@code onStroke} on release as the patient positions it
+   * passed through, in order. A drag in the 3D view stays a rotation.
+   */
+  void arm(
+      Consumer<Seed> onPick,
+      Consumer<List<Seed>> onStroke,
+      BooleanSupplier strokes,
+      Consumer<String> onMiss) {
     disarm();
     listener =
         event -> {
           if (!(event instanceof MouseEvent e)
-              || !SwingUtilities.isLeftMouseButton(e)
               || (e.getModifiersEx() & InputEvent.ALT_DOWN_MASK) != 0) {
+            return;
+          }
+          if (e.getID() == MouseEvent.MOUSE_DRAGGED) {
+            followStroke(e);
+            return;
+          }
+          if (!SwingUtilities.isLeftMouseButton(e)) {
             return;
           }
           Component c = e.getComponent();
@@ -99,6 +129,12 @@ final class SeedPicker {
           if (e.getID() == MouseEvent.MOUSE_PRESSED) {
             pressedView = view;
             pressedAt = p;
+            stroke = null;
+            if (onStroke != null && strokes.getAsBoolean() && !(view instanceof View3d)) {
+              stroke = new ArrayList<>();
+              strokeLast = p;
+              sliceSeed(view, p).ifPresent(stroke::add);
+            }
             return;
           }
           if (e.getID() != MouseEvent.MOUSE_RELEASED) {
@@ -106,17 +142,23 @@ final class SeedPicker {
           }
           boolean click =
               view == pressedView && pressedAt != null && pressedAt.distance(p) <= CLICK_TOLERANCE;
+          List<Seed> drawn = stroke;
           pressedView = null;
           pressedAt = null;
-          if (!click) {
-            return;
-          }
+          stroke = null;
+          strokeLast = null;
           boolean additive =
               (e.getModifiersEx()
                       & (InputEvent.SHIFT_DOWN_MASK
                           | InputEvent.CTRL_DOWN_MASK
                           | InputEvent.META_DOWN_MASK))
                   != 0;
+          if (!click) {
+            if (drawn != null && !drawn.isEmpty() && strokes.getAsBoolean()) {
+              onStroke.accept(drawn.stream().map(s -> s.withAdditive(additive)).toList());
+            }
+            return;
+          }
           Consumer<Seed> pick = seed -> onPick.accept(seed.withAdditive(additive));
           if (view instanceof View3d view3d) {
             pick3d(view3d, p, pick, onMiss);
@@ -130,7 +172,33 @@ final class SeedPicker {
                     pick, () -> onMiss.accept(Messages.getString("BoneGrowTool.missed")));
           }
         };
-    Toolkit.getDefaultToolkit().addAWTEventListener(listener, AWTEvent.MOUSE_EVENT_MASK);
+    Toolkit.getDefaultToolkit()
+        .addAWTEventListener(
+            listener, AWTEvent.MOUSE_EVENT_MASK | AWTEvent.MOUSE_MOTION_EVENT_MASK);
+  }
+
+  /** Adds the point dragged over to the stroke being drawn, on the slice it started on. */
+  private void followStroke(MouseEvent e) {
+    if (stroke == null || pressedView == null || !SwingUtilities.isLeftMouseButton(e)) {
+      return;
+    }
+    Point p = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), pressedView);
+    if (strokeLast != null && strokeLast.distance(p) < STROKE_STEP) {
+      return;
+    }
+    strokeLast = p;
+    sliceSeed(pressedView, p).ifPresent(stroke::add);
+  }
+
+  /** The patient position of a point of an MPR view or of a slice of the 2D viewer. */
+  private static Optional<Seed> sliceSeed(Component view, Point p) {
+    if (view instanceof MprView mpr) {
+      return fromClick(mpr, p);
+    }
+    if (view instanceof View2d slice) {
+      return fromSliceClick(slice, p);
+    }
+    return Optional.empty();
   }
 
   /** The surface the 3D view shows under the point, through the view's own picking. */
@@ -174,6 +242,8 @@ final class SeedPicker {
     }
     pressedView = null;
     pressedAt = null;
+    stroke = null;
+    strokeLast = null;
   }
 
   private static MprView mprViewOf(Component component) {

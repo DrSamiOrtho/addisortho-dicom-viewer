@@ -8,6 +8,7 @@
  */
 package com.addisortho.viewer.bones.grow;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -48,6 +49,57 @@ public final class MaskEdit {
       }
     }
     return BoxMask.trimmed(block, bits);
+  }
+
+  /**
+   * The voxels the brush passes over along {@code points}, in order: a ball at every point, and
+   * more balls between two points far apart, so a quick drag leaves no gap. {@code null} when the
+   * stroke is wholly outside the grid.
+   */
+  public static BoxMask stroke(List<int[]> points, double[] radius, VoxelBox grid) {
+    List<BoxMask> balls = new ArrayList<>();
+    int[] last = null;
+    for (int[] p : points) {
+      if (last == null) {
+        addBall(balls, p, radius, grid);
+        last = p;
+        continue;
+      }
+      double d = 0;
+      for (int i = 0; i < 3; i++) {
+        double t = (p[i] - last[i]) / radius[i];
+        d += t * t;
+      }
+      d = Math.sqrt(d);
+      if (d < 0.5) {
+        continue; // within half a brush of the last ball: nothing new
+      }
+      int steps = (int) Math.ceil(d / 0.5);
+      for (int k = 1; k <= steps; k++) {
+        double f = (double) k / steps;
+        addBall(
+            balls,
+            new int[] {
+              (int) Math.round(last[0] + f * (p[0] - last[0])),
+              (int) Math.round(last[1] + f * (p[1] - last[1])),
+              (int) Math.round(last[2] + f * (p[2] - last[2]))
+            },
+            radius,
+            grid);
+      }
+      last = p;
+    }
+    if (balls.isEmpty()) {
+      return null;
+    }
+    return balls.size() == 1 ? balls.getFirst() : BoxMask.union(balls);
+  }
+
+  private static void addBall(List<BoxMask> balls, int[] centre, double[] radius, VoxelBox grid) {
+    BoxMask ball = brush(centre, radius, grid);
+    if (ball != null) {
+      balls.add(ball);
+    }
   }
 
   /**
