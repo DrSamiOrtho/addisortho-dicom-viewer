@@ -199,9 +199,8 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
   Needs `jdk.httpserver` in the installer runtime (`launch-options.sh`) and `com.sun.net.httpserver` in both `base.json`.
 - `weasis-dicom/weasis-dicom-bones` (3D view tool panels):
   - **Bone STL**: one segment of a shown SEG as a binary STL, mm, DICOM LPS.
-  - **Bones** (rebuilt again 23 Oct 2026: find all, click to select). When a CT opens in 3D and its bone is isolated,
-    every bone is found at once (`grow/AutoSplit`, run by `FindWorker` from `View3d.addBoneIsolatedListener`; also the
-    Find the bones button): bone at 200 HU closed and marrow-filled, dense bone at 300 HU, a Euclidean distance
+  - **Bones** (rebuilt again 23 Oct 2026: find all, click to select). A CT opens in 3D as the plain isolated bone;
+    Find the bones (or Show the bones, once found) finds every bone at once (`grow/AutoSplit`, run by `FindWorker`): bone at 200 HU closed and marrow-filled, dense bone at 300 HU, a Euclidean distance
     transform in mm, and a watershed that keeps two parts apart only where the neck is under 0.45 of the thinner part's
     depth, at least 1 mm shallower, with 0.2 cm³ above it; pieces under 1 cm³ join the bone they touch most or lie
     within 10 mm of. A CT over 16 M voxels in the crop is worked on a 2x (or coarser) grid. The 3D view then shows
@@ -210,8 +209,9 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
     geometry, as the cross-hair) or in the list selects it
     (Shift, Ctrl or Cmd adds); Hide, Show only, Show all, Join, Split, Name and Delete act on the selection. Hidden and
     selected are colour-table styles (`View3d.setSegmentStyles`, static, keyed by SEG instance, so a rebuilt 3D view
-    keeps them), not cuts and not a SEG rewrite. Split takes two clicks on one bone and floods the bone's distance map
-    from both (`AutoSplit.splitBetween`), so the cut is the narrowest neck between them. Every step is an `EditHistory`
+    keeps them), not cuts and not a SEG rewrite. Split takes two clicks on one bone and floods it from both, brightest CT
+    first (`AutoSplit.splitBetween` with the CT), so the cut follows the darkest surface between them: the fracture
+    line or joint space, even where the parts press together over a broad face. Every step is an `EditHistory`
     entry of the 3D view, so Ctrl+Z walks through bone steps, cuts and crops together. Bones are immutable (`Bone`,
     `grow/BoxMask`); the SEG (series 902, segments numbered in list order) is rewritten in the background only when
     voxels, names or colours change (`SegWriteWorker`, one at a time). More tools keeps the region grow (New bone, with

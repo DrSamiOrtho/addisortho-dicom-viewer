@@ -126,4 +126,43 @@ class AutoSplitTest {
     assertEquals(waisted().count(), joined.count());
     assertTrue(joined.contains(20, 20, 5) && joined.contains(20, 20, 34));
   }
+
+  /**
+   * A fragment pressed against a bone over its whole face, with no neck: one 20 by 20 block, bone
+   * of 1000 HU, crossed at z 12 by a fracture line of 250 HU that the bone mask holds. The split
+   * between two marks, one on each side, follows the line, not the marks.
+   */
+  @Test
+  void twoMarksSplitAlongTheFractureLineWithTheCt() throws Exception {
+    Phantom ct =
+        new Phantom(
+            30,
+            30,
+            30,
+            (x, y, z) -> {
+              boolean inBlock = x >= 5 && x <= 24 && y >= 5 && y <= 24 && z >= 3 && z <= 22;
+              if (!inBlock) {
+                return 0;
+              }
+              return z == 12 ? 250 : 1000;
+            });
+    BitVolume bits = new BitVolume(30, 30, 30);
+    for (int z = 3; z <= 22; z++) {
+      for (int y = 5; y <= 24; y++) {
+        for (int x = 5; x <= 24; x++) {
+          bits.set(x, y, z);
+        }
+      }
+    }
+    BoxMask block = new BoxMask(VoxelBox.of(30, 30, 30), bits);
+    BoneSplit.Split split =
+        AutoSplit.splitBetween(block, new int[] {15, 15, 6}, new int[] {15, 15, 15}, 1, 1, 1, ct);
+    // The voxels of the line itself may go either way.
+    int z0 = split.cut().box().z0();
+    assertTrue(z0 == 12 || z0 == 13, "the fragment starts at the fracture line, not at " + z0);
+    long voxels = split.cut().count();
+    assertTrue(
+        voxels >= 20 * 20 * 10 && voxels <= 20 * 20 * 11,
+        "the whole fragment, z 13 to 22, with at most the line: " + voxels);
+  }
 }

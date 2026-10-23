@@ -302,7 +302,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     int gap = 7;
 
     findButton.setToolTipText(Messages.getString("BoneGrowTool.find.tip"));
-    findButton.addActionListener(_ -> selectedView().ifPresent(BoneGrowTool::findBones));
+    findButton.addActionListener(_ -> selectedView().ifPresent(BoneGrowTool::findOrShow));
     panel.add(GuiUtils.getFlowLayoutPanel(findButton));
     panel.add(GuiUtils.getFlowLayoutPanel(toolHint));
     progressBar.setStringPainted(true);
@@ -454,6 +454,16 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     int bones = session.map(s -> s.bones().size()).orElse(0);
     int selected = session.map(s -> s.selectedBones().size()).orElse(0);
     findButton.setEnabled(!running && lastView != null);
+    boolean plain =
+        bones > 0
+            && selectedView().map(v -> v.getSegType() == SegmentationTool.Type.NONE).orElse(false);
+    String findKey;
+    if (plain) {
+      findKey = "BoneGrowTool.showBones";
+    } else {
+      findKey = bones > 0 ? "BoneGrowTool.findAgain" : "BoneGrowTool.find";
+    }
+    findButton.setText(Messages.getString(findKey));
     hideButton.setEnabled(selected > 0);
     onlyButton.setEnabled(selected > 0);
     allButton.setEnabled(bones > 0);
@@ -602,25 +612,50 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   // ---- Finding the bones ----
 
   /**
-   * After a view's bone is isolated (on opening a CT in 3D): finds the bones when the CT has none
-   * yet; otherwise shows the ones it has, as in a 3D view built again on the same CT.
+   * After a view's bone is isolated (on opening a CT in 3D): the 3D view stays the plain picture of
+   * the bone; the bones are found and shown only when asked, with Find the bones.
    */
   private static void boneIsolated(View3d view) {
-    CtSource ct;
     try {
-      ct = source(view);
+      source(view);
     } catch (Problem e) {
       return; // not a CT the bones can be found on
     }
     lastView = view;
-    GrowSession session = session(ct);
-    if (session.bones().isEmpty()) {
-      if (worker == null) {
-        findBones(view);
-      }
-    } else if (view.getSegType() == SegmentationTool.Type.NONE) {
-      view.setSegType(displayType());
+    status(Messages.getString("BoneGrowTool.findHint"));
+  }
+
+  /** Find the bones, or show the bones already found when the 3D view shows the plain picture. */
+  private static void findOrShow(View3d view) {
+    if (bonesFound(view) && view.getSegType() == SegmentationTool.Type.NONE) {
+      showBones(view);
+    } else {
+      findBones(view);
     }
+  }
+
+  private static boolean bonesFound(View3d view) {
+    try {
+      return !session(source(view)).bones().isEmpty();
+    } catch (Problem e) {
+      return false;
+    }
+  }
+
+  /** Shows the bones on the 3D view, in colour or with the natural look, as chosen. */
+  private static void showBones(View3d view) {
+    view.setSegType(displayType());
+    EventManager.getInstance()
+        .getAction(ActionVol.SEG_TYPE)
+        .ifPresent(a -> a.setSelectedItemWithoutTriggerAction(displayType()));
+    showStateEverywhere();
+  }
+
+  /** Shows the bones when a step acts on them while the 3D view shows the plain picture. */
+  private static void showBonesIfPlain() {
+    selectedView()
+        .filter(v -> v.getSegType() == SegmentationTool.Type.NONE && bonesFound(v))
+        .ifPresent(BoneGrowTool::showBones);
   }
 
   /** Finds every bone the 3D view shows; the list found replaces the one there, undoably. */
@@ -825,6 +860,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       selected.clear();
       selected.add(bone.id());
     }
+    showBonesIfPlain();
     List<Bone> now = session.selectedBones();
     if (now.size() == 1) {
       status(String.format(Messages.getString("BoneGrowTool.selected"), now.getFirst().label()));
@@ -864,7 +900,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     Found first = splitStart;
     splitStart = null;
     double[] mm = {ct.grid().columnSpacing(), ct.grid().rowSpacing(), ct.grid().sliceSpacing()};
-    start(new SplitWorker(first.bone(), first.voxel(), found.get().voxel(), mm));
+    start(new SplitWorker(first.bone(), first.voxel(), found.get().voxel(), mm, ct.huSource()));
   }
 
   private static void startGrow(View3d view, CtSource ct, GrowSession session, int[] voxel)
@@ -1154,6 +1190,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
     List<Bone> before = session.bones();
     session.set(after);
+    showBonesIfPlain();
     view.get()
         .pushEdit(
             new EditHistory.Edit() {
