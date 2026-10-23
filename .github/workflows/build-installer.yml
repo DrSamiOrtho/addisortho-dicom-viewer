@@ -465,7 +465,7 @@ jobs:
         run: |
           VERSION="${TAG#ao-}"
           cat > notes.md <<EOF
-          Addis Ortho DICOM Viewer ${VERSION}: Weasis ${WEASIS_VERSION} with the Addis Ortho name, logos, first-launch notice and menu changes.
+          Addis Ortho DICOM Viewer ${VERSION}: Weasis ${WEASIS_VERSION} with the Addis Ortho name, logos, theme, start screen and menu changes.
 
           **Not a certified medical device** (CE, FDA or EFDA). For image review and surgical planning support only, not for primary diagnosis.
 

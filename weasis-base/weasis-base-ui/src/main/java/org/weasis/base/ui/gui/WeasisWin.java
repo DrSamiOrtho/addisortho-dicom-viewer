@@ -35,11 +35,13 @@ import bibliothek.gui.dock.util.DirectWindowProvider;
 import bibliothek.gui.dock.util.DockUtilities;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.formdev.flatlaf.extras.FlatSVGIcon;
+import com.formdev.flatlaf.util.SystemInfo;
 import java.awt.AWTException;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dialog;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Frame;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsDevice;
@@ -90,8 +92,10 @@ import javax.swing.Action;
 import javax.swing.Icon;
 import javax.swing.JCheckBox;
 import javax.swing.JCheckBoxMenuItem;
+import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JLayer;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
@@ -300,7 +304,9 @@ public class WeasisWin {
     scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
     scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER);
     scrollPane.setBorder(null);
-    rootPaneContainer.getContentPane().add(scrollPane, BorderLayout.NORTH);
+    rootPaneContainer
+        .getContentPane()
+        .add(brandedToolbar(scrollPane, toolbarContainer), BorderLayout.NORTH);
 
     rootPaneContainer.setGlassPane(AppProperties.glassPane);
 
@@ -407,9 +413,13 @@ public class WeasisWin {
 
     control.addFocusListener(selectionListener);
 
-    rootPaneContainer.getContentPane().add(GuiUtils.getUICore().getBaseArea(), BorderLayout.CENTER);
     // Allow dropping series into the empty main area
     CWorkingArea mainArea = GuiUtils.getUICore().getMainArea();
+    rootPaneContainer
+        .getContentPane()
+        .add(
+            new JLayer<>(GuiUtils.getUICore().getBaseArea(), new WelcomeLayerUI(mainArea)),
+            BorderLayout.CENTER);
     mainArea.getComponent().setTransferHandler(new SeriesHandler());
     mainArea.setLocation(CLocation.base().normalRectangle(0, 0, 1, 1));
     mainArea.setVisible(true);
@@ -421,6 +431,24 @@ public class WeasisWin {
     if (updateRelease && showDownloadRelease && getConfiguredUrl(P_UPDATE_URL) != null) {
       CompletableFuture.runAsync(() -> checkReleaseUpdate(frame));
     }
+  }
+
+  /**
+   * Draws a hairline under the toolbar and, on macOS, puts the Addis Ortho mark at its left, as
+   * tall as the buttons of {@code buttonRow}: there the menu bar is in the screen and the title bar
+   * is native. On other systems FlatLaf already shows the mark in the title bar.
+   */
+  private static JComponent brandedToolbar(JComponent toolbar, JComponent buttonRow) {
+    JPanel north = new JPanel(new BorderLayout());
+    north.add(toolbar, BorderLayout.CENTER);
+    north.add(new JSeparator(), BorderLayout.SOUTH);
+    if (SystemInfo.isMacOS) {
+      JPanel west = new JPanel(new FlowLayout(FlowLayout.LEADING, 0, 0));
+      west.setOpaque(false);
+      west.add(new BrandMark(buttonRow));
+      north.add(west, BorderLayout.WEST);
+    }
+    return north;
   }
 
   HashMap<MediaSeriesGroup, List<MediaSeries<?>>> getSeriesByEntry(

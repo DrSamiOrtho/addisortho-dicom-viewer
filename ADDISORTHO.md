@@ -15,8 +15,11 @@ in the installer licence page (`weasis-distributions/src/main/resources-native/L
 the third-party notice template; the About box states "GNU GPL version 3" (`weasis.copyrights` in
 `weasis-distributions/etc/config/base.json`). Keep all of them in step.
 
-It is not a certified medical device. It is for image review and surgical planning support only;
-the first-launch disclaimer must be accepted before the viewer opens.
+It is not a certified medical device. It is for image review and surgical planning support only.
+The release notes say so. There is no first-launch disclaimer: the owner turned it off on
+2026-10-23 (`weasis.show.disclaimer` is `false` in `weasis-distributions/etc/config/base.json`), and
+the smoke test checks that no "First Time Launch" window opens. Upstream's dialog code and text are
+unchanged, so turning the setting back on shows upstream's wording.
 
 ## Branches and upstream
 
@@ -91,7 +94,7 @@ real Weasis on the same computer. Linux packaging is not maintained.
 2. Done. Help menu and leftover Weasis wording (see below).
 3. Done. `weasis-i18n-dist` is vendored (see below).
 4. Done. "Modified by Addis Ortho Trading PLC" lines (see below).
-5. Open. Smoke test both installers next to a real Weasis install: disclaimer, DICOMDIR from a CD,
+5. Open. Smoke test both installers next to a real Weasis install: no first-launch dialog, DICOMDIR from a CD,
    length and angle, About box (third-party link opens `THIRD-PARTY-NOTICES.txt`), Help menu (no
    update check, no bug report, no release notes), URL scheme, uninstall leaves Weasis untouched.
    `smoke-test.yml` automates most of it (not length and angle, nor a real Weasis next to it).
@@ -135,8 +138,27 @@ value is empty:
 
 `weasis-launcher/conf/base.json` still has upstream's values because its tests expect them. User
 visible strings now use the configured name (`weasis.name`): the shortcuts page title, the OAuth
-callback page and the Resource Monitor report. The dark theme is listed as "Flat Addis Ortho".
+callback page and the Resource Monitor report.
 Non-English translations come from `weasis-i18n-dist` and still say Weasis.
+
+### Look
+
+- Theme: the default dark theme, "Core Dark - Flat Addis Ortho", is `org.weasis.launcher.FlatWeasisTheme`
+  (the class name is the stored `weasis.theme` value, keep it). It extends FlatDarkLaf; every colour and
+  shape is in `weasis-launcher/src/main/resources/org/weasis/theme/FlatWeasisTheme.properties`. Surfaces
+  are near-black with a `#034537` cast, selection is white on `#034537`, and `#A8FF30` is only for small
+  accents (focus ring, tab underline, progress, slider). `controlDkShadow` and `windowBorder` are set
+  there because DockingFrames draws its tab outlines with them. Upstream's Monokai `Weasis.theme.json`
+  is removed. The light theme is upstream's FlatIntelliJ.
+- Start screen: `WelcomeLayerUI` (weasis-base-ui) is a `JLayer` around the docking area that paints the
+  wordmark (`svg/logo/AddisOrthoWordmark.svg`, the About logo without its black plate), "DICOM Viewer"
+  and a hint while the main working area holds no viewer. It only paints, so drops and clicks still
+  reach the working area. Image panes are never painted on: they stay neutral black.
+- Mark: on macOS the AO mark (`BrandMark`, `LogoIcon.SMALL`) sits at the left of the toolbar, as tall
+  as the toolbar buttons (it follows the button row, with or without text labels), because the menu
+  bar is in the screen and the title bar is native. Clicking it goes back to the start screen: after
+  a confirmation it closes every open viewer the way "Close All" does. On Windows FlatLaf shows the
+  frame icon in its title bar, so nothing is added there.
 
 ### Translations
 
