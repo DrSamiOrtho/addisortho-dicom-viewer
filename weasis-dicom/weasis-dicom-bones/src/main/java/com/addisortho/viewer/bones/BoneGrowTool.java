@@ -9,6 +9,7 @@
 package com.addisortho.viewer.bones;
 
 import bibliothek.gui.dock.common.CLocation;
+import bibliothek.gui.dock.common.mode.ExtendedMode;
 import com.addisortho.viewer.bones.BoneExportWorker.Problem;
 import com.addisortho.viewer.bones.BoneGrowWorker.Request;
 import com.addisortho.viewer.bones.GrowSession.Found;
@@ -274,7 +275,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   private View3d historyView;
 
   public BoneGrowTool() {
-    super(BUTTON_NAME, Insertable.Type.TOOL, 41);
+    // Docked open beside the views, not a flap that slides away on the first click in a view:
+    // the selection, the hints and the outcome of each step must stay in sight.
+    super(BUTTON_NAME, POSITION.EAST, ExtendedMode.NORMALIZED, Insertable.Type.TOOL, 41);
     dockable.setTitleIcon(ResourceUtil.getIcon(OtherIcon.VIEW_3D));
     setDockableWidth(320);
     initGui();

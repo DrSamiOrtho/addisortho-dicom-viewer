@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer2d.mpr;
 
 import java.awt.Color;
@@ -763,8 +764,17 @@ public class MprView extends View2d implements SliceCanvas, ViewProgress {
       // Render what is currently built; the async completion refreshes every plane when done.
     }
 
-    List<SegmentationVolume> segVolumes = mprController.getSegVolumes();
-    List<SegSpecialElement> segElements = mprController.getSegElements();
+    // Addis Ortho: copies, as the controller's lists are rebuilt on another thread when a SEG is
+    // replaced; reading them live while they are cleared threw IndexOutOfBoundsException. A copy
+    // taken mid-rebuild is drawn once, and the rebuild's completion refreshes every plane.
+    List<SegmentationVolume> segVolumes;
+    List<SegSpecialElement> segElements;
+    try {
+      segVolumes = new ArrayList<>(mprController.getSegVolumes());
+      segElements = new ArrayList<>(mprController.getSegElements());
+    } catch (RuntimeException e) {
+      return; // the lists are being rebuilt
+    }
     if (segVolumes.isEmpty() || segElements.isEmpty()) {
       return;
     }
