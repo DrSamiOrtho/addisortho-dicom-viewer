@@ -45,25 +45,28 @@ import org.weasis.dicom.viewer3d.vr.VoxelFlood.IntQueue;
  *       face to face; the other pieces are internal;
  *   <li>an internal piece of {@link #SEED_MM3} or more is bone; one under {@link #NOISE_MM3} is
  *       noise and goes; one in between stays only when it lies within {@link #JOIN_MM} of a piece
- *       that stays, which spreads from piece to piece until nothing changes, so a fracture
- *       fragment, a chip, a sesamoid, the small carpal bones and the phalanges of a finger stay
- *       through their joint spaces, while the specks in a pad, the sheet of a table board and the
- *       marker on a pad go. Without any piece of {@link #SEED_MM3} the largest internal piece
- *       serves as the seed;
- *   <li>the bone region: the kept pieces with their holes filled slice by slice (the marrow canal
- *       and a nail inside it stay), widened by {@link #MARGIN_VOXELS} so the smooth surface is not
- *       clipped; the dropped pieces are out before the fill, so they never close a hole or widen
- *       into a sheet;
- *   <li>metal touching that region without air contact (a plate, a nail, a prosthesis) is kept
- *       whole; of metal touching air (a fixator pin, a wire out of the skin) only the part inside
- *       the region stays; a lead marker beside the bone has no kept piece around it and goes.
+ *       that stays, the true distance in mm with the voxel size of each axis. That spreads from
+ *       piece to piece for at most {@link #MAX_LINKS} links, so a fracture fragment, a chip, a
+ *       sesamoid, the small carpal bones and the phalanges of a finger stay through their joint
+ *       spaces, while the specks in a pad, the sheet of a table board and the marker on a pad go,
+ *       and a string of specks cannot carry the bone far along a pad seam. Without any piece of
+ *       {@link #SEED_MM3} the largest internal piece serves as the seed;
+ *   <li>the bone region: each kept piece with its own holes filled slice by slice (the marrow canal
+ *       and a nail inside it stay), so two bones never close a hole between them over pad or soft
+ *       tissue; the dropped pieces are out before the fill;
+ *   <li>metal touching a bone of that region, before it is widened, without air contact (a plate, a
+ *       nail, a prosthesis) is kept whole; a marker or other metal beside the bone does not touch
+ *       it and goes; of metal touching air (a fixator pin, a wire out of the skin) only the part
+ *       inside the widened region stays;
+ *   <li>the region and the kept metal widened by {@link #MARGIN_VOXELS}, so the smooth surface is
+ *       not clipped.
  * </ol>
  *
  * <p>Known losses, put back by Undo or Whole volume: a bone fragment displaced by more than {@link
  * #JOIN_MM} from any kept bone, a paediatric ossification centre further than that from its shaft,
  * and any bone smaller than {@link #SEED_MM3} in a volume that holds no bigger bone near it. The
  * other way round, a marker or a speck of {@link #NOISE_MM3} or more within {@link #JOIN_MM} of the
- * bone stays, and so does a chain of such specks that starts there.
+ * bone stays, and so does a chain of such specks that starts there, up to {@link #MAX_LINKS} long.
  *
  * <p>The result is a guess for display, applied as one undoable cut; it changes no voxel. Memory:
  * four bit volumes of the grid plus the scratch of one slice, all taken from the budget up front,
@@ -102,11 +105,24 @@ public final class BoneIsolation {
   public static final double NOISE_MM3 = 5;
 
   /**
-   * An internal piece between the two sizes stays when it lies within this distance, in mm, of a
-   * kept piece. Measured in 6-connected steps of the grid, so along a diagonal the reach is
-   * shorter.
+   * An internal piece between the two sizes stays when the gap between it and a kept piece is
+   * shorter than this, in mm: the Euclidean distance between the edges of their nearest voxels,
+   * with each axis's voxel size, so a 3 mm joint space on 1.5 mm slices is 3 mm, not 4.5.
    */
   public static final double JOIN_MM = 4;
+
+  /**
+   * Most links in a chain of small pieces joined one to the next from a bone: enough for the three
+   * phalanges of a finger beyond its metacarpal, or the two rows of the carpus beyond the radius.
+   */
+  public static final int MAX_LINKS = 4;
+
+  /**
+   * Largest box, in grid voxels, searched around one small piece (eight bytes each while it is
+   * measured, 32 MB at most); a piece under 1 cm3 needing more is a sheet or a seam, not a
+   * fragment, and is dropped.
+   */
+  private static final long MAX_REACH_VOXELS = 1L << 22;
 
   /**
    * @param region the voxels to keep, on the grid of the kept mask
@@ -188,7 +204,7 @@ public final class BoneIsolation {
       throw new IllegalArgumentException("Voxel size " + gridVoxelMm);
     }
     double voxelMm3 = gridVoxelMm.x * gridVoxelMm.y * gridVoxelMm.z;
-    int[] joinSteps = joinSteps(gridVoxelMm);
+    int[] reachSteps = reachSteps(gridVoxelMm);
     int airSteps =
         Math.max(1, (int) Math.round(AIR_REACH_MM / Math.min(gridVoxelMm.x, gridVoxelMm.y)));
     Vector3i g = space.grid();
@@ -203,7 +219,6 @@ public final class BoneIsolation {
     VoxelBits region = new VoxelBits(sx, sy, sz);
     byte[] cell = new byte[sliceVoxels];
     IntQueue queue = new IntQueue(1 << 12, budget);
-    IntQueue queue2 = new IntQueue(1 << 12, budget);
     try {
       GridSlices grid = new GridSlices(space, slices);
       for (int z = 0; z < sz; z++) {
@@ -222,6 +237,7 @@ public final class BoneIsolation {
       int externalPieces = 0;
       int droppedPieces = 0;
       Box bones = null;
+      List<Piece> kept = new ArrayList<>();
       List<Piece> candidates = new ArrayList<>();
       for (int z = 0; z < sz; z++) {
         long[] d = dense.sliceWords(z);
@@ -245,6 +261,7 @@ public final class BoneIsolation {
               }
             } else if (mm3 >= SEED_MM3) {
               bones = bones == null ? p.box() : union(bones, p.box());
+              kept.add(p);
               bonePieces++;
             } else {
               candidates.add(p);
@@ -264,6 +281,7 @@ public final class BoneIsolation {
         }
         candidates.remove(largest);
         bones = largest.box();
+        kept.add(largest);
         bonePieces = 1;
       }
 
@@ -290,21 +308,35 @@ public final class BoneIsolation {
       scratch.fill(false);
 
       Join join =
-          join(region, cand, scratch, candidates, joinSteps, bones, queue, queue2, cancelled);
+          join(
+              region,
+              cand,
+              scratch,
+              candidates,
+              kept,
+              gridVoxelMm,
+              reachSteps,
+              bones,
+              queue,
+              cancelled);
       if (join == null) {
         return Optional.empty();
       }
       droppedPieces += candidates.size();
       bones = join.box();
 
-      Box box = bones.grow(1, region);
-      fillHoles(region, box, cell, queue);
-      if (cancelled.getAsBoolean()) {
-        return Optional.empty();
+      // Each bone's own holes, so that two bones cannot enclose pad or soft tissue between them.
+      for (Piece p : kept) {
+        if (cancelled.getAsBoolean()) {
+          return Optional.empty();
+        }
+        fillPiece(region, scratch, p, cell, queue);
       }
-      dilate(region, scratch, MARGIN_VOXELS, box);
 
+      // Metal is kept whole only when it touches a bone itself, before the margin: a marker beside
+      // the bone no longer gets in through the widened edge.
       int implants = 0;
+      Box box = bones;
       for (Piece p : metals) {
         Piece q = flood(metalBits, scratch, null, region, p.x(), p.y(), p.z(), queue);
         boolean keep = q.touchesRegion() && !p.isExternal();
@@ -317,8 +349,13 @@ public final class BoneIsolation {
         }
         if (keep) {
           implants++;
+          box = union(box, p.box());
         }
       }
+      if (cancelled.getAsBoolean()) {
+        return Optional.empty();
+      }
+      dilate(region, scratch, MARGIN_VOXELS, box.grow(1, region));
       return Optional.of(
           new Result(
               region,
@@ -332,7 +369,6 @@ public final class BoneIsolation {
               budget.peak()));
     } finally {
       queue.free();
-      queue2.free();
     }
   }
 
@@ -344,12 +380,15 @@ public final class BoneIsolation {
     return 4 * 8L * sliceWords * g.z + sliceVoxels + 3 * 8L * sliceWords;
   }
 
-  /** Steps of {@link #JOIN_MM} on each axis of the grid, at least one. */
-  static int[] joinSteps(Vector3d voxelMm) {
+  /**
+   * Grid voxels a voxel may be off on each axis alone and still leave a gap under {@link #JOIN_MM}:
+   * the half size of the box holding every voxel that near. One for a gap of none.
+   */
+  static int[] reachSteps(Vector3d voxelMm) {
     return new int[] {
-      Math.max(1, (int) Math.round(JOIN_MM / voxelMm.x)),
-      Math.max(1, (int) Math.round(JOIN_MM / voxelMm.y)),
-      Math.max(1, (int) Math.round(JOIN_MM / voxelMm.z))
+      1 + (int) Math.floor(JOIN_MM / voxelMm.x - 1e-9),
+      1 + (int) Math.floor(JOIN_MM / voxelMm.y - 1e-9),
+      1 + (int) Math.floor(JOIN_MM / voxelMm.z - 1e-9)
     };
   }
 
@@ -357,24 +396,27 @@ public final class BoneIsolation {
   private record Join(int joined, Box box) {}
 
   /**
-   * Moves into {@code region} every candidate within the join steps of it, again and again until
-   * none is, taking the joined pieces out of {@code pending}; {@code null} when cancelled.
+   * Moves into {@code region}, link by link, every candidate within {@link #JOIN_MM} of it, for at
+   * most {@link #MAX_LINKS} links: the pieces found near the region in one round join it only at
+   * the round's end, so each round adds one link to a chain. The joined pieces leave {@code
+   * pending} for {@code kept}; {@code null} when cancelled.
    */
   private static Join join(
       VoxelBits region,
       VoxelBits cand,
       VoxelBits scratch,
       List<Piece> pending,
+      List<Piece> kept,
+      Vector3d voxelMm,
       int[] steps,
       Box box,
-      IntQueue a,
-      IntQueue b,
+      IntQueue queue,
       BooleanSupplier cancelled) {
     int joined = 0;
     // Only a candidate whose reach meets a piece kept in the last round can have come near.
     List<Box> fresh = List.of(box);
-    while (!fresh.isEmpty() && !pending.isEmpty()) {
-      List<Box> next = new ArrayList<>();
+    for (int link = 0; link < MAX_LINKS && !fresh.isEmpty() && !pending.isEmpty(); link++) {
+      List<Piece> near = new ArrayList<>();
       Iterator<Piece> it = pending.iterator();
       while (it.hasNext()) {
         Piece p = it.next();
@@ -385,13 +427,18 @@ public final class BoneIsolation {
         if (cancelled.getAsBoolean()) {
           return null;
         }
-        if (nearRegion(p, cand, region, scratch, steps, reach, a, b)) {
-          flood(cand, region, null, null, p.x(), p.y(), p.z(), a);
+        if (nearRegion(p, cand, region, scratch, voxelMm, reach, queue)) {
           it.remove();
-          joined++;
-          box = union(box, p.box());
-          next.add(p.box());
+          near.add(p);
         }
+      }
+      List<Box> next = new ArrayList<>();
+      for (Piece p : near) {
+        flood(cand, region, null, null, p.x(), p.y(), p.z(), queue);
+        kept.add(p);
+        joined++;
+        box = union(box, p.box());
+        next.add(p.box());
       }
       fresh = next;
     }
@@ -399,85 +446,201 @@ public final class BoneIsolation {
   }
 
   /**
-   * Whether any voxel of {@code region} lies within the join steps of the candidate piece grown
-   * from the seed voxel over {@code cand}: a breadth-first search outwards from the piece, one step
-   * per level, along each axis only up to its steps. {@code visited} must be clear within {@code
-   * reach} and is clear again on return; the queues are empty on return.
+   * Whether a voxel of {@code region} is less than {@link #JOIN_MM} from the candidate piece grown
+   * from its seed voxel over {@code cand}, edge to edge: the piece is marked in {@code mark} and
+   * grown by one voxel each way (a 3 by 3 by 3 block), and the exact Euclidean distance to that, in
+   * mm with each axis's voxel size, is computed over {@code reach} in three one-dimensional passes.
+   * From the grown piece the distance to a voxel is the gap between the voxels' edges, axis by
+   * axis. {@code mark} must be clear within {@code reach} and is clear again on return.
    */
   private static boolean nearRegion(
       Piece p,
       VoxelBits cand,
       VoxelBits region,
-      VoxelBits visited,
-      int[] steps,
+      VoxelBits mark,
+      Vector3d voxelMm,
       Box reach,
-      IntQueue level,
-      IntQueue nextLevel) {
-    int sx = cand.sizeX();
-    int sy = cand.sizeY();
-    int sz = cand.sizeZ();
-    int seed = p.x() + sx * (p.y() + sy * p.z());
-    visited.set(p.x(), p.y(), p.z());
-    level.add(seed);
-    // Level 0: the piece itself, left in place.
-    while (!level.isEmpty()) {
-      int i = level.poll();
-      nextLevel.add(i);
+      IntQueue queue) {
+    int bx = reach.x1() - reach.x0() + 1;
+    int by = reach.y1() - reach.y0() + 1;
+    int bz = reach.z1() - reach.z0() + 1;
+    long n = (long) bx * by * bz;
+    if (n > MAX_REACH_VOXELS) {
+      return false; // not a compact fragment: a sheet or a seam across the pad
+    }
+    markPiece(cand, mark, p, queue);
+    double[] d = new double[(int) n];
+    for (int z = 0, i = 0; z < bz; z++) {
+      for (int y = 0; y < by; y++) {
+        for (int x = 0; x < bx; x++, i++) {
+          d[i] = mark.get(reach.x0() + x, reach.y0() + y, reach.z0() + z) ? 0 : FAR;
+        }
+      }
+    }
+    clearBox(mark, reach);
+    // The block grown around each voxel of the piece: a minimum over three along each axis.
+    for (int z = 0; z < bz; z++) {
+      for (int y = 0; y < by; y++) {
+        nearestOfThree(d, (z * by + y) * bx, 1, bx);
+      }
+    }
+    for (int z = 0; z < bz; z++) {
+      for (int x = 0; x < bx; x++) {
+        nearestOfThree(d, z * by * bx + x, bx, by);
+      }
+    }
+    for (int y = 0; y < by; y++) {
+      for (int x = 0; x < bx; x++) {
+        nearestOfThree(d, y * bx + x, bx * by, bz);
+      }
+    }
+    int longest = Math.max(bx, Math.max(by, bz));
+    double[] line = new double[longest];
+    double[] out = new double[longest];
+    int[] v = new int[longest];
+    double[] cut = new double[longest + 1];
+    for (int z = 0; z < bz; z++) {
+      for (int y = 0; y < by; y++) {
+        distanceAlong(d, (z * by + y) * bx, 1, bx, voxelMm.x, line, out, v, cut);
+      }
+    }
+    for (int z = 0; z < bz; z++) {
+      for (int x = 0; x < bx; x++) {
+        distanceAlong(d, z * by * bx + x, bx, by, voxelMm.y, line, out, v, cut);
+      }
+    }
+    for (int y = 0; y < by; y++) {
+      for (int x = 0; x < bx; x++) {
+        distanceAlong(d, y * bx + x, bx * by, bz, voxelMm.z, line, out, v, cut);
+      }
+    }
+    double r2 = JOIN_MM * JOIN_MM - 1e-9;
+    for (int z = 0, i = 0; z < bz; z++) {
+      for (int y = 0; y < by; y++) {
+        for (int x = 0; x < bx; x++, i++) {
+          if (d[i] < r2 && region.get(reach.x0() + x, reach.y0() + y, reach.z0() + z)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /** Each value of the line becomes the least of itself and its two neighbours. */
+  private static void nearestOfThree(double[] d, int start, int stride, int len) {
+    double before = FAR;
+    for (int q = 0; q < len; q++) {
+      int i = start + q * stride;
+      double here = d[i];
+      double after = q + 1 < len ? d[i + stride] : FAR;
+      d[i] = Math.min(here, Math.min(before, after));
+      before = here;
+    }
+  }
+
+  /** Squared distance standing for "no piece voxel on this line yet". */
+  private static final double FAR = 1e30;
+
+  /**
+   * One pass of the exact squared Euclidean distance transform (Felzenszwalb and Huttenlocher) on
+   * the {@code len} values of {@code d} from {@code start}, {@code stride} apart, voxels {@code
+   * step} mm apart: each value becomes the least of the others' value plus their squared distance.
+   */
+  static void distanceAlong(
+      double[] d,
+      int start,
+      int stride,
+      int len,
+      double step,
+      double[] f,
+      double[] out,
+      int[] v,
+      double[] cut) {
+    for (int q = 0; q < len; q++) {
+      f[q] = d[start + q * stride];
+    }
+    int k = 0;
+    v[0] = 0;
+    cut[0] = Double.NEGATIVE_INFINITY;
+    cut[1] = Double.POSITIVE_INFINITY;
+    for (int q = 1; q < len; q++) {
+      double s = intersection(f, v[k], q, step);
+      // cut[0] is minus infinity, so k never goes below 0.
+      while (s <= cut[k]) {
+        k--;
+        s = intersection(f, v[k], q, step);
+      }
+      k++;
+      v[k] = q;
+      cut[k] = s;
+      cut[k + 1] = Double.POSITIVE_INFINITY;
+    }
+    k = 0;
+    for (int q = 0; q < len; q++) {
+      double pq = q * step;
+      while (cut[k + 1] < pq) {
+        k++;
+      }
+      double dq = (q - v[k]) * step;
+      out[q] = Math.min(FAR, dq * dq + f[v[k]]);
+    }
+    for (int q = 0; q < len; q++) {
+      d[start + q * stride] = out[q];
+    }
+  }
+
+  /** Where the parabolas of lines {@code a} and {@code b} cross, in mm along the line. */
+  private static double intersection(double[] f, int a, int b, double step) {
+    double pa = a * step;
+    double pb = b * step;
+    return ((f[b] + pb * pb) - (f[a] + pa * pa)) / (2 * (pb - pa));
+  }
+
+  /** Marks in {@code mark} the 6-connected piece of {@code from} holding the piece's seed. */
+  private static void markPiece(VoxelBits from, VoxelBits mark, Piece p, IntQueue queue) {
+    int sx = from.sizeX();
+    int sy = from.sizeY();
+    int sz = from.sizeZ();
+    mark.set(p.x(), p.y(), p.z());
+    queue.add(p.x() + sx * (p.y() + sy * p.z()));
+    while (!queue.isEmpty()) {
+      int i = queue.poll();
       int x = i % sx;
       int y = (i / sx) % sy;
       int z = i / sx / sy;
-      for (int[] n : NEIGHBOURS) {
-        int nx = x + n[0];
-        int ny = y + n[1];
-        int nz = z + n[2];
-        if (nx < 0 || ny < 0 || nz < 0 || nx >= sx || ny >= sy || nz >= sz) {
-          continue;
-        }
-        if (cand.get(nx, ny, nz) && visited.testAndSet(nx, ny, nz)) {
-          level.add(nx + sx * (ny + sy * nz));
-        }
-      }
-    }
-    boolean found = false;
-    int maxStep = Math.max(steps[0], Math.max(steps[1], steps[2]));
-    for (int k = 1; k <= maxStep && !found; k++) {
-      IntQueue t = level;
-      level = nextLevel;
-      nextLevel = t;
-      while (!level.isEmpty() && !found) {
-        int i = level.poll();
-        int x = i % sx;
-        int y = (i / sx) % sy;
-        int z = i / sx / sy;
-        for (int[] n : NEIGHBOURS) {
-          int axis = n[0] != 0 ? 0 : n[1] != 0 ? 1 : 2;
-          if (steps[axis] < k) {
-            continue;
-          }
-          int nx = x + n[0];
-          int ny = y + n[1];
-          int nz = z + n[2];
-          if (nx < 0 || ny < 0 || nz < 0 || nx >= sx || ny >= sy || nz >= sz) {
-            continue;
-          }
-          if (region.get(nx, ny, nz)) {
-            found = true;
-            break;
-          }
-          if (visited.testAndSet(nx, ny, nz)) {
-            nextLevel.add(nx + sx * (ny + sy * nz));
-          }
+      for (int[] nb : NEIGHBOURS) {
+        int nx = x + nb[0];
+        int ny = y + nb[1];
+        int nz = z + nb[2];
+        if (nx >= 0
+            && ny >= 0
+            && nz >= 0
+            && nx < sx
+            && ny < sy
+            && nz < sz
+            && from.get(nx, ny, nz)
+            && mark.testAndSet(nx, ny, nz)) {
+          queue.add(nx + sx * (ny + sy * nz));
         }
       }
     }
-    while (!level.isEmpty()) {
-      level.poll();
+  }
+
+  /**
+   * Fills the holes of one kept piece, slice by slice within its box: the piece moves out of {@code
+   * region} into {@code scratch}, is filled there, and goes back with its holes.
+   */
+  private static void fillPiece(
+      VoxelBits region, VoxelBits scratch, Piece p, byte[] cell, IntQueue queue) {
+    flood(region, scratch, null, null, p.x(), p.y(), p.z(), queue);
+    Box box = p.box().grow(1, region);
+    fillHoles(scratch, box, cell, queue);
+    for (int z = box.z0(); z <= box.z1(); z++) {
+      long[] s = scratch.sliceWords(z);
+      or(region.sliceWords(z), s);
+      Arrays.fill(s, 0L);
     }
-    while (!nextLevel.isEmpty()) {
-      nextLevel.poll();
-    }
-    clearBox(visited, reach);
-    return found;
   }
 
   private static Box grow(Box b, int[] steps, VoxelBits v) {

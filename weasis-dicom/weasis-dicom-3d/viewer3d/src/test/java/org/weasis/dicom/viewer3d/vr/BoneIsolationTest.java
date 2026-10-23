@@ -526,13 +526,120 @@ class BoneIsolationTest {
   }
 
   @Test
-  void joinStepsFollowTheVoxelSize() {
-    int[] s = BoneIsolation.joinSteps(new Vector3d(0.5, 0.7, 2));
+  void reachStepsHoldEveryVoxelWithinTheDistance() {
+    int[] s = BoneIsolation.reachSteps(new Vector3d(0.5, 0.7, 2));
     assertAll(
-        () -> assertEquals(8, s[0]),
-        () -> assertEquals(6, s[1]),
-        () -> assertEquals(2, s[2]),
-        () -> assertEquals(1, BoneIsolation.joinSteps(new Vector3d(1, 1, 5))[2], "at least one"));
+        // A voxel k off on one axis leaves a gap of k - 1 voxels.
+        () -> assertEquals(8, s[0], "a gap of 7 x 0.5 = 3.5 mm; 8 would be 4"),
+        () -> assertEquals(6, s[1], "5 x 0.7 = 3.5 mm"),
+        () -> assertEquals(2, s[2], "one slice, 2 mm"),
+        () -> assertEquals(1, BoneIsolation.reachSteps(new Vector3d(1, 1, 5))[2], "touching"));
+  }
+
+  // ---- Astra's review: true mm, chains, holes per piece, metal beside the bone ----
+
+  /** Soft tissue over the whole grid (no air), a bone cube of 12 mm at 0.5 mm voxels. */
+  private static Scene cubeInTissue(Vector3d mm, int w, int h, int d) {
+    return new Scene(w, h, d, mm);
+  }
+
+  @Test
+  void aFragmentOnTheDiagonalWithinFourMillimetresJoins() {
+    // 0.5 mm voxels. The bone ends at x = 33 and y = 33; a 6 mm3 fragment starts at x = y = 38,
+    // a gap of 2 mm on each axis, 2.8 mm. Counted in steps it was 10 steps, beyond the 8 allowed.
+    Vector3d mm = new Vector3d(0.5, 0.5, 0.5);
+    Scene near =
+        cubeInTissue(mm, 64, 64, 40)
+            .box(38, 41, 38, 41, 20, 22, 900)
+            .box(10, 33, 10, 33, 10, 33, 900)
+            .box(0, 63, 0, 63, 0, 39, 40);
+    Result r = near.isolate();
+    assertAll(
+        () -> assertEquals(1, r.joinedPieces(), "2.8 mm away"),
+        () -> assertTrue(r.region().get(39, 39, 21)));
+    // Two voxels further on each axis: gaps of 3 mm, 4.2 mm away.
+    Scene far =
+        cubeInTissue(mm, 64, 64, 40)
+            .box(40, 43, 40, 43, 20, 22, 900)
+            .box(10, 33, 10, 33, 10, 33, 900)
+            .box(0, 63, 0, 63, 0, 39, 40);
+    Result f = far.isolate();
+    assertAll(
+        () -> assertEquals(0, f.joinedPieces(), "4.2 mm away"),
+        () -> assertFalse(f.region().get(42, 42, 21)));
+  }
+
+  @Test
+  void aFragmentFourMillimetresBelowAndThreeAsideIsFiveAwayAndGoes() {
+    // 0.5 by 0.5 by 2 mm voxels: a gap of 2 slices (4 mm) and 6 columns (3 mm) is 5 mm; one of 1
+    // slice and 6 columns is 3.6 mm and joins.
+    Vector3d mm = new Vector3d(0.5, 0.5, 2);
+    Result far =
+        cubeInTissue(mm, 64, 64, 20)
+            .box(40, 43, 20, 23, 11, 12, 900)
+            .box(10, 33, 10, 33, 2, 8, 900)
+            .box(0, 63, 0, 63, 0, 19, 40)
+            .isolate();
+    Result near =
+        cubeInTissue(mm, 64, 64, 20)
+            .box(40, 43, 20, 23, 10, 11, 900)
+            .box(10, 33, 10, 33, 2, 8, 900)
+            .box(0, 63, 0, 63, 0, 19, 40)
+            .isolate();
+    assertAll(
+        () -> assertEquals(0, far.joinedPieces(), "5 mm"),
+        () -> assertEquals(1, near.joinedPieces(), "3.6 mm"));
+  }
+
+  @Test
+  void aChainOfSmallPiecesStopsAfterTheMostLinks() {
+    // A bone, then six small pieces 3 mm apart along z: four join, the last two go.
+    int d = 70;
+    Scene scene = new Scene(W, H, d, MM1).cylinder(CX, CY, 6, 6, 2, 12, 900);
+    for (int k = 0; k < 6; k++) {
+      int z0 = 16 + 6 * k;
+      scene.cylinder(CX, CY, 2, 2, z0, z0 + 2, 900);
+    }
+    Result r = scene.cylinder(CX, CY, 18, 18, 0, d - 1, 40).isolate();
+    assertAll(
+        () -> assertEquals(BoneIsolation.MAX_LINKS, r.joinedPieces()),
+        () -> assertEquals(6 - BoneIsolation.MAX_LINKS, r.droppedPieces()),
+        () -> assertTrue(r.region().get(CX, CY, 16 + 6 * 3 + 1), "the fourth"),
+        () -> assertFalse(r.region().get(CX, CY, 16 + 6 * 4 + 1), "the fifth"));
+  }
+
+  @Test
+  void bareMetalBesideTheBoneGoesThoughTheMarginReachesIt() {
+    // A metal block with no partial-volume shell, a 2 mm gap from the cortex at x = 46: the 2-voxel
+    // margin reaches the voxel next to it, but it touches no bone, so it is not kept whole.
+    Result r =
+        new Scene(W, H, D, MM1)
+            .box(49, 54, 38, 42, 18, 22, 3500)
+            .cylinder(CX, CY, 6, 6, 4, 35, 900)
+            .cylinder(CX, CY, 18, 18, 0, D - 1, 40)
+            .isolate();
+    assertAll(
+        () -> assertEquals(0, r.implants()),
+        () -> assertFalse(r.region().get(53, 40, 20), "the far side of the metal"),
+        () -> assertTrue(r.region().get(CX, CY, 20), "the bone"));
+  }
+
+  @Test
+  void twoBonesMeetingAtTheCornersDoNotFillThePadBetweenThem() {
+    // Two L-shaped bones, touching only corner to corner (two 6-connected pieces), close a square
+    // in every slice; filled together the square would be kept, filled one by one it is not.
+    Result r =
+        new Scene(64, 64, 20, MM1)
+            .box(10, 30, 10, 12, 4, 14, 900)
+            .box(10, 12, 13, 30, 4, 14, 900)
+            .box(13, 33, 31, 33, 4, 14, 900)
+            .box(31, 33, 13, 30, 4, 14, 900)
+            .box(0, 63, 0, 63, 0, 19, 40)
+            .isolate();
+    assertAll(
+        () -> assertEquals(2, r.bonePieces()),
+        () -> assertFalse(r.region().get(21, 21, 9), "the middle of the square"),
+        () -> assertTrue(r.region().get(11, 20, 9), "a bone"));
   }
 
   /**
