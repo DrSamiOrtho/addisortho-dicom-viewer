@@ -12,10 +12,15 @@ import com.addisortho.viewer.bones.grow.AutoSplit;
 import com.addisortho.viewer.bones.grow.BoneSplit;
 import com.addisortho.viewer.bones.grow.BoneSplit.Split;
 import com.addisortho.viewer.bones.grow.BoneSplit.SplitException;
+import com.addisortho.viewer.bones.grow.BoxMask;
 import com.addisortho.viewer.bones.grow.HuSource;
+import java.util.List;
 import javax.swing.SwingWorker;
 
-/** Splits a bone at its narrowest link off the event dispatch thread, for Erase piece and Split. */
+/**
+ * Cuts bones off the event dispatch thread: Erase piece (at the narrowest link) and Separate (a
+ * fragment from the bone it presses on, along the fracture line).
+ */
 final class SplitWorker extends SwingWorker<Split, Void> {
 
   /** What the clicked part becomes. */
@@ -28,6 +33,7 @@ final class SplitWorker extends SwingWorker<Split, Void> {
 
   private final Kind kind;
   private final Bone bone;
+  private final Bone neighbour;
   private final int[] voxel;
   private final int[] keep;
   private final double[] mm;
@@ -39,26 +45,42 @@ final class SplitWorker extends SwingWorker<Split, Void> {
    * @param voxel the clicked voxel of the bone
    */
   SplitWorker(Kind kind, Bone bone, int[] voxel) {
-    this(kind, bone, null, voxel, null, null);
+    this(kind, bone, null, null, voxel, null, null);
   }
 
   /**
-   * Splits the bone between two marks, along the darkest surface between them on the CT (a
-   * fracture line or a joint space).
+   * Separates a fragment from the bone it presses on, along the darkest surface between the two
+   * clicks on the CT (a fracture line or a joint space). Both clicks may be on one bone (the
+   * fragment is cut off it) or on two (their border is drawn again).
    *
-   * @param keep the mark on the part that stays the bone
-   * @param cut the mark on the part split off
+   * @param fragment the bone clicked on the fragment
+   * @param fragmentVoxel the click on the fragment
+   * @param neighbour the bone clicked second, the one the fragment comes away from
+   * @param neighbourVoxel the click on it
    * @param mm voxel size along x, y and z
    * @param hu the CT, read on the worker thread only
    */
-  SplitWorker(Bone bone, int[] keep, int[] cut, double[] mm, HuSource hu) {
-    this(Kind.SPLIT, bone, keep, cut, mm, hu);
+  SplitWorker(
+      Bone fragment,
+      int[] fragmentVoxel,
+      Bone neighbour,
+      int[] neighbourVoxel,
+      double[] mm,
+      HuSource hu) {
+    this(Kind.SPLIT, fragment, neighbour, neighbourVoxel, fragmentVoxel, mm, hu);
   }
 
   private SplitWorker(
-      Kind kind, Bone bone, int[] keep, int[] voxel, double[] mm, HuSource hu) {
+      Kind kind,
+      Bone bone,
+      Bone neighbour,
+      int[] keep,
+      int[] voxel,
+      double[] mm,
+      HuSource hu) {
     this.kind = kind;
     this.bone = bone;
+    this.neighbour = neighbour;
     this.keep = keep;
     this.voxel = voxel;
     this.mm = mm;
@@ -69,8 +91,14 @@ final class SplitWorker extends SwingWorker<Split, Void> {
     return kind;
   }
 
+  /** The bone clicked: for Erase piece the one cut, for Separate the fragment's. */
   Bone bone() {
     return bone;
+  }
+
+  /** For Separate, the bone the fragment comes away from (may be {@link #bone()} itself). */
+  Bone neighbour() {
+    return neighbour;
   }
 
   int[] voxel() {
@@ -80,7 +108,12 @@ final class SplitWorker extends SwingWorker<Split, Void> {
   @Override
   protected Split doInBackground() throws SplitException {
     if (keep != null) {
-      return AutoSplit.splitBetween(bone.mask(), keep, voxel, mm[0], mm[1], mm[2], hu);
+      // The neighbour's side is kept, the fragment's side is cut.
+      BoxMask whole =
+          neighbour.id() == bone.id()
+              ? bone.mask()
+              : BoxMask.union(List.of(neighbour.mask(), bone.mask()));
+      return AutoSplit.splitBetween(whole, keep, voxel, mm[0], mm[1], mm[2], hu);
     }
     return BoneSplit.split(bone.mask(), bone.anchor(), voxel, BoneSplit.MAX_DEPTH);
   }

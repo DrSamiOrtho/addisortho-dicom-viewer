@@ -771,9 +771,8 @@ public final class AutoSplit {
    * Splits one bone in two between two marks. With the CT, the two parts are flooded from the marks
    * brightest first, so they meet along the darkest surface between the marks: a fracture line or
    * a joint space, which the bone mask had closed, even where the two parts press together over a
-   * broad face with no neck. Each mark first moves to the brightest bone voxel within {@link
-   * #MARK_SNAP_MM}, so a click in the marrow starts from that part's own cortex. Without the CT,
-   * the flood follows the distance to the bone's surface: the narrowest neck.
+   * broad face with no neck. The marks stay where they were clicked and start flooding at once.
+   * Without the CT, the flood follows the distance to the bone's surface: the narrowest neck.
    *
    * @param hu the CT, or {@code null} to cut at the narrowest neck
    */
@@ -810,10 +809,6 @@ public final class AutoSplit {
       }
     } else {
       brightness(g, box, nx, ny, nz, hu);
-      int snap =
-          Math.max(1, (int) Math.round(MARK_SNAP_MM / Math.min(mmX, Math.min(mmY, mmZ))));
-      a = brightestNear(g, box, nx, ny, nz, a, snap);
-      b = brightestNear(g, box, nx, ny, nz, b, snap);
     }
     int ia = ((a[2] - box.z0() + 1) * ny + a[1] - box.y0() + 1) * nx + a[0] - box.x0() + 1;
     int ib = ((b[2] - box.z0() + 1) * ny + b[1] - box.y0() + 1) * nx + b[0] - box.x0() + 1;
@@ -831,8 +826,10 @@ public final class AutoSplit {
     byte[] side = new byte[g.length];
     side[ia] = 1;
     side[ib] = 2;
-    push(buckets, ia, level(g[ia]));
-    push(buckets, ib, level(g[ib]));
+    // The marks start at once, whatever their own brightness: a click in the marrow must not wait
+    // while the other part floods across the fracture.
+    push(buckets, ia, levels - 1);
+    push(buckets, ib, levels - 1);
     int[] step = {1, -1, nx, -nx, nx * ny, -nx * ny};
     long visited = 0;
     for (int lv = levels - 1; lv >= 0; ) {
@@ -875,14 +872,11 @@ public final class AutoSplit {
     return new BoneSplit.Split(kept, gone, 0);
   }
 
-  /** How far a Split mark moves to the brightest bone voxel near it, in mm. */
-  public static final double MARK_SNAP_MM = 1.5;
-
   /** CT values above this all flood together: cortex is cortex. */
   private static final double BRIGHT_HU = 1500;
 
   /**
-   * Replaces the bone voxels of {@code g} (INF) with their brightness: the mean CT value of the
+   * Replaces the bone voxels of {@code g} (INF) with their brightness: the lowest CT value of the
    * voxel and its six neighbours, from -100 to {@link #BRIGHT_HU} HU, as 0.01 to 8 so that one
    * flood step is 10 HU. The voxels around the bone stay 0.
    */
@@ -897,17 +891,17 @@ public final class AutoSplit {
             continue;
           }
           int gx = box.x0() + x - 1;
-          double sum = 0;
-          int n = 0;
+          // The darkest of the voxel and its six neighbours: a fracture gap one voxel wide stays
+          // dark across, where a mean would bridge it.
+          double darkest = Double.POSITIVE_INFINITY;
           for (int[] d : SEVEN) {
             double v = hu.huAt(gx + d[0], gy + d[1], gz + d[2]);
             if (!Double.isNaN(v)) {
-              sum += v;
-              n++;
+              darkest = Math.min(darkest, v);
             }
           }
-          double mean = n == 0 ? 0 : sum / n;
-          double clamped = Math.max(-100, Math.min(BRIGHT_HU, mean));
+          double value = Double.isInfinite(darkest) ? 0 : darkest;
+          double clamped = Math.max(-100, Math.min(BRIGHT_HU, value));
           g[i] = (float) Math.max(0.01, (clamped + 100) / 200);
         }
       }
@@ -917,34 +911,6 @@ public final class AutoSplit {
   private static final int[][] SEVEN = {
     {0, 0, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
   };
-
-  /** The brightest bone voxel within {@code r} voxels of the mark, CT grid voxel. */
-  private static int[] brightestNear(
-      float[] g, VoxelBox box, int nx, int ny, int nz, int[] m, int r) {
-    int[] best = m;
-    float bestV = -1;
-    for (int z = m[2] - r; z <= m[2] + r; z++) {
-      for (int y = m[1] - r; y <= m[1] + r; y++) {
-        for (int x = m[0] - r; x <= m[0] + r; x++) {
-          int lx = x - box.x0() + 1;
-          int ly = y - box.y0() + 1;
-          int lz = z - box.z0() + 1;
-          if (lx < 1 || ly < 1 || lz < 1 || lx >= nx - 1 || ly >= ny - 1 || lz >= nz - 1) {
-            continue;
-          }
-          int i = (lz * ny + ly) * nx + lx;
-          long dx = x - m[0];
-          long dy = y - m[1];
-          long dz = z - m[2];
-          if (dx * dx + dy * dy + dz * dz <= (long) r * r && g[i] > bestV) {
-            bestV = g[i];
-            best = new int[] {x, y, z};
-          }
-        }
-      }
-    }
-    return best;
-  }
 
   private static int level(float depth) {
     return (int) (depth * 20);

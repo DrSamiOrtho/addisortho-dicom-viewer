@@ -885,22 +885,25 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     view.setSeedMarker(seed.lps());
     if (splitStart == null
         || session.bone(splitStart.bone().id()).filter(b -> b == splitStart.bone()).isEmpty()) {
+      // First click: the fragment.
       splitStart = found.get();
       select(session, found.get().bone(), false);
-      showStateEverywhere();
+      String label = found.get().bone().label();
+      status(String.format(Messages.getString("BoneGrowTool.splitFragment"), label));
       return;
     }
-    if (found.get().bone().id() != splitStart.bone().id()) {
-      // Another bone: it becomes the one to split, from this click.
-      splitStart = found.get();
-      select(session, found.get().bone(), false);
-      status(Messages.getString("BoneGrowTool.splitOther"));
-      return;
-    }
-    Found first = splitStart;
+    // Second click: the bone the fragment comes away from, the same bone or another one.
+    Found fragment = splitStart;
     splitStart = null;
     double[] mm = {ct.grid().columnSpacing(), ct.grid().rowSpacing(), ct.grid().sliceSpacing()};
-    start(new SplitWorker(first.bone(), first.voxel(), found.get().voxel(), mm, ct.huSource()));
+    start(
+        new SplitWorker(
+            fragment.bone(),
+            fragment.voxel(),
+            found.get().bone(),
+            found.get().voxel(),
+            mm,
+            ct.huSource()));
   }
 
   private static void startGrow(View3d view, CtSource ct, GrowSession session, int[] voxel)
@@ -1046,37 +1049,82 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     Optional<CtSource> ct = currentSource();
     Bone bone = done.bone();
     GrowSession session = ct.map(BoneGrowTool::session).orElse(null);
-    if (session == null || session.bone(bone.id()).filter(b -> b.mask() == bone.mask()).isEmpty()) {
+    boolean unchanged =
+        session != null
+            && session.bone(bone.id()).filter(b -> b.mask() == bone.mask()).isPresent()
+            && (done.neighbour() == null
+                || session
+                    .bone(done.neighbour().id())
+                    .filter(b -> b.mask() == done.neighbour().mask())
+                    .isPresent());
+    if (!unchanged) {
       warn(Messages.getString("BoneGrowTool.changedMeanwhile"));
       return;
     }
     selectedView().ifPresent(v -> v.setSeedMarker(null));
     double voxelMm3 = ct.get().grid().voxelVolumeMm3();
     double cm3 = split.cut().count() * voxelMm3 / 1000.0;
-    Bone kept = session.bone(bone.id()).get().withMask(split.kept());
     if (done.kind() == SplitWorker.Kind.ERASE) {
+      Bone kept = session.bone(bone.id()).get().withMask(split.kept());
       apply(ct.get(), session, session.replaced(bone.id(), kept, null));
       status(String.format(Messages.getString("BoneGrowTool.erased"), cm3, bone.label()));
-    } else {
-      int id = session.newId();
-      String name = String.format(Messages.getString("BoneGrowTool.pieceName"), bone.label(), id);
+      return;
+    }
+    Bone neighbour = done.neighbour();
+    double keptCm3 = split.kept().count() * voxelMm3 / 1000.0;
+    int fragmentId;
+    String fragmentName;
+    List<Bone> after;
+    if (neighbour.id() == bone.id()) {
+      // One bone: the fragment becomes a bone of its own.
+      fragmentId = session.newId();
+      fragmentName =
+          String.format(Messages.getString("BoneGrowTool.pieceName"), bone.label(), fragmentId);
       Bone piece =
           new Bone(
-              id,
-              name,
-              session.colorOf(id),
+              fragmentId,
+              fragmentName,
+              session.colorOf(fragmentId),
               split.cut(),
               done.voxel(),
-              "Split off " + bone.label() + "; not reviewed"); // NON-NLS
-      apply(ct.get(), session, session.replaced(bone.id(), kept, piece));
-      session.selected().clear();
-      session.selected().add(id);
-      // One split per press of Split: the next click selects again.
-      chooseTool(Tool.SELECT);
-      styleViews(session);
-      refreshLists();
-      status(String.format(Messages.getString("BoneGrowTool.splitDone"), bone.label(), name, cm3));
+              "Separated from " + bone.label() + "; not reviewed"); // NON-NLS
+      after = session.replaced(bone.id(), bone.withMask(split.kept()), piece);
+    } else {
+      // Two bones: their border is drawn again; each keeps its name and colour.
+      fragmentId = bone.id();
+      fragmentName = bone.label();
+      List<Bone> list = new ArrayList<>();
+      for (Bone b : session.bones()) {
+        if (b.id() == bone.id()) {
+          list.add(b.withMask(split.cut()));
+        } else if (b.id() == neighbour.id()) {
+          list.add(b.withMask(split.kept()));
+        } else {
+          list.add(b);
+        }
+      }
+      after = list;
     }
+    LOGGER.info(
+        "Separate: {} is {} cm3, {} keeps {} cm3",
+        fragmentName,
+        String.format("%.2f", cm3), // NON-NLS
+        neighbour.label(),
+        String.format("%.2f", keptCm3)); // NON-NLS
+    apply(ct.get(), session, after);
+    session.selected().clear();
+    session.selected().add(fragmentId);
+    // One separation per press of Separate: the next click selects again.
+    chooseTool(Tool.SELECT);
+    styleViews(session);
+    refreshLists();
+    status(
+        String.format(
+            Messages.getString("BoneGrowTool.separated"),
+            fragmentName,
+            cm3,
+            neighbour.label(),
+            keptCm3));
   }
 
   // ---- Acting on the selection ----
