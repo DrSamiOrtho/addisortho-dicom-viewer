@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-mode="viewer">
+<html lang="en" data-mode="viewer" data-release="r28">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -13,8 +13,8 @@
   /* the header is one line; the study text gives way first (round 6, 13 Oct 2026) */
   header { background: var(--green); color: #fff; padding: 6px 12px; padding-top: max(6px, env(safe-area-inset-top)); padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); display: flex; gap: 10px; align-items: center; border-bottom: 3px solid var(--lime); flex-wrap: nowrap; min-width: 0; overflow: hidden; }
   header b { font-weight: 600; white-space: nowrap; }
-  header img.logo { height: 33px; width: auto; display: block; flex: 0 0 auto; }
-  #open .card img.cardlogo { display: block; height: 74px; width: auto; margin: 0 0 12px; }
+  header img.logo { height: 42px; width: auto; display: block; flex: 0 0 auto; }
+  #open .card img.cardlogo { display: block; height: 104px; width: auto; margin: 0 0 8px; }
   header .study { font-size: 13px; opacity: .92; flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   header label { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; white-space: nowrap; }
   header select, header button { font: inherit; font-size: 13px; }
@@ -26,7 +26,6 @@
   header .sp { display: none; }
   header .slot:empty { display: none; }
   header .slot { display: flex; gap: 6px; flex: 0 0 auto; }
-  #openBtn .sm { display: none; }
   .badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #fff; color: var(--green); font-weight: 600; white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .badge.bad { background: #ffe1e1; color: var(--bad); }
   .badge.warn { background: #fff0cc; color: var(--warn); }
@@ -100,7 +99,7 @@
   .tpl.active { border-color: var(--green); box-shadow: 0 0 0 1px var(--green); }
   .tpl .name { font-weight: 600; color: var(--green); }
   #open { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; background: #0b1412; color: #fff; overflow-y: auto; }
-  #open .card { max-width: 520px; background: #fff; color: #000; border-radius: 6px; padding: 22px 24px; border-top: 5px solid var(--green); margin: auto; }   /* centred, and scrolls whole when taller than the stage (the patient list) */
+  #open .card { width: min(100%, 780px); max-width: 780px; background: #fff; color: #000; border-radius: 6px; padding: 22px 24px; border-top: 5px solid var(--green); margin: auto; }   /* centred, and scrolls whole when taller than the stage (the patient list) */
   body.choosing #pcol { display: none; }   /* the start card over an open film (Open on t.addisortho.com): the panel is the film's */
   #open h1 { font-size: 19px; color: var(--green); margin: 0 0 8px; }
   #open.drag .card { outline: 3px dashed var(--lime); }
@@ -137,7 +136,7 @@
   .cside { font-size: 13px; } .cdate { font-size: 12px; color: #456; margin-left: auto; white-space: nowrap; }
   .cimp { font-size: 12px; color: #234; } .cby { font-size: 11px; color: #567; overflow-wrap: anywhere; }
   .cby:empty { display: none; }
-  .cact { display: flex; flex-direction: column; gap: 4px; padding: 6px; justify-content: center; border-left: 1px solid var(--line); }
+  .cact { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 6px; align-items: center; justify-content: flex-end; border-left: 1px solid var(--line); max-width: 46%; }
   .cact button { font-size: 12px; padding: 3px 8px; }
   .cshare { flex: 1 0 100%; padding: 6px 10px 10px; border-top: 1px solid var(--line); font-size: 13px; }
   .cshare[hidden] { display: none; }
@@ -149,6 +148,16 @@
   .dlg .fields { display: grid; gap: 8px; }
   .dlg .fields label { display: grid; gap: 3px; font-size: 13px; color: #234; }
   .dlg .fields input { font: inherit; padding: 8px; border: 1px solid #9bb; border-radius: 4px; min-height: 44px; }
+  /* the knee's plan-values question (Sami, 16 Oct 2026): phone-friendly, 44 px targets, scrolls inside the box */
+  .pvq .pvbox { max-width: min(560px, 94vw); overflow-y: auto; }
+  .pvq .pvqrow { display: grid; gap: 3px; padding: 6px 0; border-bottom: 1px solid #e3eceb; }
+  .pvq .pvqrow label { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; font-weight: 600; color: #034537; }
+  .pvq .pvqin { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; }
+  .pvq input, .pvq select, .pvq button { min-height: 44px; font: inherit; }
+  .pvq input[type=number] { width: 6.5em; padding: 6px 8px; border: 1px solid #9bb; border-radius: 4px; }
+  .pvq select { max-width: 100%; }
+  .pvq .pvqbtn button { min-width: 44px; padding: 8px 14px; }
+  .pvq .pvqmsg:empty { display: none; }
   /* the implant choice card (13 Oct 2026): families as rows to tap, the best geometric match marked, ranges without
      template files greyed and not selectable */
   .choice { width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin: 6px 0; font-size: 13px; }
@@ -162,6 +171,49 @@
   .choice .ch-o .best { font-size: 11px; font-weight: 600; background: var(--green); color: var(--lime); padding: 1px 6px; border-radius: 9px; white-space: nowrap; }
   .choice .ch-o.pend { color: #667; background: #eef1f0; border-style: dashed; cursor: not-allowed; padding-left: 8px; font-size: 12px; }
   #pendNote:empty { display: none; }
+  /* the knee case (14 Oct 2026, contract section 12): the films as a segmented control, the film's card, the case card,
+     and in the patient list a patient's cases under one row with each case's films */
+  .kctabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; margin: 0 0 6px; }
+  .kctabs button { font-size: 12px; padding: 4px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: #fff; color: var(--green); border: 1px solid #9bb; }
+  .kctabs button.on { background: var(--green); color: #fff; border-color: var(--green); box-shadow: inset 0 -3px 0 var(--lime); }
+  .kctabs button.st-add, .kctabs button.st-reopen { border-style: dashed; color: #456; }
+  .kctabs button.st-reopen { color: var(--warn); }
+  .kcfilm, .kcvals, .kcpf { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; margin: 6px 0; font-size: 13px; }
+  .kch { font-weight: 600; color: var(--green); margin-bottom: 3px; }
+  .kcfilm label, .kcvals label, .kcpf label, details.kccase > label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 3px 0; }
+  .kcpf input[type=text] { flex: 1 1 140px; font: inherit; padding: 3px 6px; border: 1px solid #9bb; border-radius: 3px; }
+  .kcoffer button { font-size: 12px; }
+  /* the patient list by hospital (15 Oct 2026): a heading per hospital, a row per patient, that patient's cases and films under it */
+  li.hgrp { margin: 10px 0 4px; }
+  li.hgrp .hhead { font-size: 14px; color: var(--green); margin: 0 0 2px; padding-bottom: 2px; border-bottom: 2px solid var(--green); }
+  #open ul.hpats { list-style: none; padding: 0; margin: 0; }
+  li.pgrp { border: 1px solid var(--green); border-radius: 4px; margin: 6px 0; background: #f7fbf9; padding: 4px; }
+  li.pgrp .phead { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; padding: 4px 6px; width: 100%; text-align: left; background: transparent; border: 0; color: #000; min-height: 44px; }
+  li.pgrp .phead::before { content: '▾'; color: var(--green); }
+  li.pgrp .phead[aria-expanded=false]::before { content: '▸'; }
+  li.pgrp .pcount, li.pgrp .prec { font-size: 12px; color: #456; }
+  #open ul.pcases { list-style: none; padding: 0 0 0 8px; margin: 0; }
+  li.case.sub { margin: 4px 0; }
+  .cneeds { font-size: 11px; background: #fff0cc; color: var(--warn); border: 1px solid #e6c97a; border-radius: 10px; padding: 0 7px; }
+  .cdups { font-size: 12px; margin: 6px 0 2px; }
+  .cdup { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin: 6px 0; font-size: 13px; background: #fff; }
+  .cdkeep { color: var(--green); font-weight: 600; } .cdold { color: #456; }
+  .cdup button.cdel, .cact button.cdel { color: var(--bad); border-color: var(--bad); }
+  .cshare .note.bad { color: var(--bad); } .cshare .note.bad:empty { display: none; }
+  .cfilms { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 12px; color: #678; padding: 0 10px 6px; flex-basis: 100%; }
+  .cfilm.on { color: var(--green); font-weight: 600; }
+  button.cfilm { background: #fff; border: 1px solid var(--green); border-radius: 4px; padding: 2px 8px; font: inherit; min-height: 32px; }
+  @media (pointer: coarse) { button.cfilm, li.pgrp .phead { min-height: 44px; min-width: 44px; } }
+  .ident { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; margin: 6px 0; font-size: 13px; }
+  .ident label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 3px 0; }
+  .ident input[type=text] { flex: 1 1 10em; min-width: 0; }
+  /* existing implants and the revision record (revision and conversion, 15 Oct 2026) */
+  .exist, .rev { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; margin: 6px 0; font-size: 13px; }
+  .exist label, .rev label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 3px 0; }
+  ul.exlist { list-style: none; padding: 0; margin: 4px 0; }
+  ul.exlist li { padding: 3px 0; border-top: 1px solid #eef2f0; }
+  ul.exlist li .row { margin-top: 2px; }
+  ul.lm li select.refsel { font-size: 12px; max-width: 9.5em; flex: 0 1 auto; }
   #pendNote ul { margin: 4px 0; padding-left: 18px; }
   footer { font-size: 12px; background: #fff0cc; color: #5a3d00; padding: 3px 14px; border-top: 1px solid #e8d49a; }
   kbd { font: 11px ui-monospace, monospace; border: 1px solid #aab; border-bottom-width: 2px; border-radius: 3px; padding: 0 3px; background: #fff; }
@@ -257,14 +309,15 @@
     header label { font-size: 0; gap: 0; min-width: 44px; }   /* never narrower than its 44 px list */
     header select { font-size: 12px; padding: 4px 2px; max-width: 30vw; min-height: 34px; min-width: 44px; }
     header button { font-size: 12px; padding: 4px 6px; min-height: 34px; }
-    #openBtn .lg { display: none; } #openBtn .sm { display: inline; }
     header .slot button.projsave { width: var(--icon); padding: 0; } header .slot .lg { display: none; }
     header .slot button.autostat { display: none; }   /* no room for words: the dot below, the words in the live region */
     header .slot button.projsave[data-st]::after { content: ''; position: absolute; top: 3px; right: 3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; background: #8aa; }
     header .slot button.projsave[data-st=saved]::after { background: var(--green); }
     header .slot button.projsave[data-st=offline]::after { background: #d08a00; }
     header .slot button.projsave[data-st=fail]::after, header .slot button.projsave[data-st=conflict]::after { background: var(--bad); }
-    #calBadge { font-size: 0; width: 12px; height: 12px; padding: 0; border-radius: 50%; flex: 0 0 12px; }
+    /* the calibration dot sits on the logo's corner, out of the row (15 Oct 2026: the logo kept, every control 44 px, 375 px wide) */
+    header { position: relative; }
+    #calBadge { font-size: 0; width: 12px; height: 12px; padding: 0; border-radius: 50%; flex: none; position: absolute; left: 2px; bottom: 3px; border: 1px solid #fff; }
     main { flex-direction: column; }
     body:not(.has-img) #pcol { display: none; }   /* no film yet: the open card has the whole screen */
     #stage { flex: 1 1 auto; min-height: 96px; }
@@ -310,7 +363,7 @@
     #pcol > #alerts:empty { display: none; }
     #pcol > #alerts div { margin: 0 0 4px; font-size: 12px; padding: 3px 8px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     #hud { display: none; }
-    #open .card { margin: 10px; padding: 16px; }
+    #open .card { margin: 10px; padding: 16px; } #open .card img.cardlogo { height: 96px; } .cact { max-width: none; border-left: 0; flex: 1 0 100%; justify-content: flex-start; }
     .steps button { font-size: 11px; padding: 4px 1px; }
     table.res { font-size: 12px; }
     /* the implant bar: one slim row laid over the bottom of the film (the film is not resized when it comes and goes);
@@ -325,10 +378,15 @@
     .steps button .nm { display: inline; }
     .steps button.cur { flex: 1 1 auto; }
   }
+  /* the narrowest phones (under 381 px): Open, Save project, Undo, Redo and Fit all on screen at 44 px with the logo kept
+     (Sami, 15 Oct 2026: "keep the logo"): the plan and side lists and Open are short (Hip, R, O) */
+  @media (max-width: 380px) { header { gap: 2px; padding-left: max(4px, env(safe-area-inset-left)); padding-right: max(4px, env(safe-area-inset-right)); } header img.logo { height: 20px; } header select { max-width: 24vw; } }
+  @media (max-width: 370px) { header { gap: 1px; padding-left: max(3px, env(safe-area-inset-left)); padding-right: max(3px, env(safe-area-inset-right)); } header img.logo { height: 15px; } }   /* 360 px phones: the logo smaller, still there */
   /* fingers: 44 px targets (Astra, 13 Oct) */
   @media (pointer: coarse) {
     :root { --icon: 44px; }
     button, select, input[type=number], .steps button, header select, header button { min-height: 44px; }
+    header select { min-width: 44px; }   /* the short lists (R, L, B; Hip): never narrower than a finger (15 Oct 2026) */
     button { min-width: 44px; }
     .steps button { min-width: 44px; }
     ul.lm li { min-height: 44px; padding: 4px 6px; }
@@ -349,15 +407,18 @@
 </head>
 <body>
 <header>
-  <img class="logo" src="brand/logo-lime.png" alt="Addis Ortho" width="67" height="33"><b>X-ray templating</b>
+  <img class="logo" src="data:image/png;base64,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" fetchpriority="high" decoding="async" alt="Addis Ortho" width="85" height="42"><b>X-ray templating</b>
   <span class="study" id="study"></span>
   <span class="sp"></span>
-  <label>Plan <select id="wf" aria-label="Plan"></select></label>
-  <label>Side <select id="side" aria-label="Surgery side"><option value="R">Right</option><option value="L">Left</option></select></label>
-  <button id="openBtn" aria-label="Open file" title="Open a DICOM, PNG or JPEG file, or a saved project (.aotp), from this computer"><span class="lg">Open file…</span><span class="sm" aria-hidden="true">Open</span></button>
+  <!-- short labels (Sami, 15 Oct 2026: "make room for others and keep the logo. you can keep hip/knee/bipolar narrower, side
+       R/L/B, open just O"): the plan's full name is each option's title, the words "Plan" and "Side" are for screen readers -->
+  <label><span class="sr-only">Plan</span><select id="wf" aria-label="Plan" title="Plan"></select></label>
+  <label><span class="sr-only">Side</span><select id="side" aria-label="Surgery side" title="Surgery side: R right, L left (B bilateral: not available)"><option value="R" title="Right">R</option><option value="L" title="Left">L</option><option value="B" title="Bilateral: not available (plan each side as its own case)" disabled>B</option></select></label>
+  <button id="openBtn" aria-label="Open" title="Open">O</button>
   <!-- Save project (projects.js, round 6) -->
   <span class="slot" id="projSlot"></span>
   <button id="undoBtn" class="icon" aria-label="Undo" title="Undo the last change (Ctrl/⌘+Z)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+  <button id="redoBtn" class="icon" aria-label="Redo" title="Redo what Undo took back (Ctrl/⌘+Shift+Z, Ctrl+Y)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
   <button id="fitBtn" class="icon" aria-label="Fit to window" title="Fit the X-ray to the window (F)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
   <button id="panelBtn" title="Show or hide the side panel" aria-controls="pcol">Panel</button>
   <input type="file" id="file2" accept=".dcm,.dicom,.aotp,application/dicom,application/zip,image/png,image/jpeg,image/webp,image/*" hidden>
@@ -373,7 +434,7 @@
     <button id="linesBtn" aria-pressed="false" aria-label="Reference lines" title="Show the reference lines (teardrop line, midline, canal lines, landmarks, mirrored targets)" hidden>Lines</button>
     <div id="open">
       <div class="card">
-        <img class="cardlogo" src="brand/logo-card.png" alt="Addis Ortho" width="150" height="74">
+        <img class="cardlogo" src="data:image/png;base64,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" fetchpriority="high" decoding="async" alt="Addis Ortho" width="211" height="104">
         <h1 id="openTitle">Open an X-ray to template</h1>
         <p id="openMsg">Open this page from an X-ray in the imaging viewer, or drop a DICOM, PNG or JPEG file or a saved project
           (.aotp) here. A picture or file you open stays in this browser.</p>

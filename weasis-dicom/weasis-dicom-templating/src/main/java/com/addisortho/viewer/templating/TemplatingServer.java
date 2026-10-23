@@ -124,7 +124,8 @@ public final class TemplatingServer implements Closeable {
     server.setExecutor(executor);
     server.createContext("/", this::handle);
     server.start();
-    LOGGER.info("Templating page (build {}) on {}", pages.build(), origin);
+    LOGGER.info(
+        "Templating page {} (build {}) on {}", pages.release(), pages.build(), origin);
   }
 
   private static HttpServer bind(int preferredPort) throws IOException {

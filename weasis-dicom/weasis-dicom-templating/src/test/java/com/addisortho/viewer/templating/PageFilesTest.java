@@ -42,16 +42,28 @@ class PageFilesTest {
     return PageFiles.sha256(content.getBytes(StandardCharsets.UTF_8)) + "  " + name + "\n";
   }
 
+  private static final String HTML = "<html lang=\"en\" data-mode=\"viewer\" data-release=\"r28\">";
+  private static final String LIB = "{\"libraryId\":\"abc\",\"families\":[{\"range\":\"ao-cup\"}]}";
+  private static final String REL = "release r28\nlibraryId abc\nranges ao-cup\n";
+
+  /** A page with index.html, library.json and RELEASE.txt as given, each listed with its sha256. */
+  private PageFiles page(String html, String lib, String rel) throws IOException {
+    return loadFrom(
+        line("index.html", html) + line("library.json", lib) + line(PageFiles.RELEASE, rel),
+        "index.html", html, "library.json", lib, PageFiles.RELEASE, rel);
+  }
+
   @Test
   void loadsExactlyTheListedFiles() throws IOException {
     PageFiles p =
         loadFrom(
-            line("index.html", "<p>") + line("library.json", "{}"),
-            "index.html", "<p>", "library.json", "{}", "extra.js", "alert(1)");
+            line("index.html", HTML) + line("library.json", LIB) + line(PageFiles.RELEASE, REL),
+            "index.html", HTML, "library.json", LIB, PageFiles.RELEASE, REL, "extra.js", "alert(1)");
     assertNotNull(p.get("index.html"));
     assertNull(p.get("extra.js"));
     assertNull(p.get(PageFiles.LIST));
     assertEquals(12, p.build().length());
+    assertEquals("r28", p.release());
   }
 
   @Test
@@ -79,17 +91,47 @@ class PageFilesTest {
   }
 
   @Test
+  void refusesAPageWithoutAMatchingRelease() {
+    // no RELEASE.txt at all: a page built before 23 Oct 2026
+    IOException none =
+        assertThrows(
+            IOException.class,
+            () -> loadFrom(line("index.html", HTML) + line("library.json", LIB), "index.html", HTML, "library.json", LIB));
+    assertTrue(none.getMessage().contains("RELEASE.txt"), none.getMessage());
+    // another maker's range, in RELEASE.txt or only in library.json
+    assertThrows(IOException.class, () -> page(HTML, LIB, "release r28\nlibraryId abc\nranges zb-g7\n"));
+    assertThrows(
+        IOException.class,
+        () ->
+            page(
+                HTML,
+                "{\"libraryId\":\"abc\",\"families\":[{\"range\":\"ao-cup\"},{\"range\":\"jnj-corail\"}]}",
+                REL));
+    // a range RELEASE.txt names that the library does not have
+    assertThrows(IOException.class, () -> page(HTML, LIB, "release r28\nlibraryId abc\nranges ao-cup ao-160\n"));
+    // another library, another release on the page, a release not like r28
+    assertThrows(IOException.class, () -> page(HTML, LIB, "release r28\nlibraryId xyz\nranges ao-cup\n"));
+    assertThrows(IOException.class, () -> page(HTML.replace("r28", "r27"), LIB, REL));
+    assertThrows(IOException.class, () -> page(HTML, LIB, REL.replace("r28", "28")));
+  }
+
+  @Test
   void theBundledPageIsComplete() throws IOException {
     PageFiles p = PageFiles.load(getClass().getClassLoader(), "templating-web/");
     for (String f : new String[] {"index.html", "app.js", "library.json", "vendor/openjpegwasm_decode.wasm"}) {
       assertNotNull(p.get(f), f);
     }
     String html = new String(p.get("index.html"), StandardCharsets.UTF_8);
-    assertTrue(html.contains("<html lang=\"en\" data-mode=\"viewer\">"));
+    assertTrue(html.contains("<html lang=\"en\" data-mode=\"viewer\" data-release=\"" + p.release() + "\">"));
     String lib = new String(p.get("library.json"), StandardCharsets.UTF_8);
     assertTrue(lib.contains("\"libraryId\":\"656ef0f7cb39\""));
-    for (String range : new String[] {"ao-130", "ao-160", "jnj-", "zb-"}) {
+    // the Addis Ortho ranges (23 Oct 2026, r28): the 160 stems with BB1, the CCK and tumour knees; no other maker
+    for (String id : new String[] {"chunli-160-150", "chunli-bb1-b", "chunli-cck-femur", "chunli-dfr-femur"}) {
+      assertTrue(lib.contains("\"id\":\"" + id + "\""), id);
+    }
+    for (String range : new String[] {"jnj-", "zb-", "ldk-"}) {
       assertTrue(!lib.contains("\"range\":\"" + range), range);
     }
+    assertEquals("r28", p.release());
   }
 }

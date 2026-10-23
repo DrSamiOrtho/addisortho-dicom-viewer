@@ -14,7 +14,7 @@ export function focusKind(a, editor) {
 }
 
 // The shortcut a key press stands for, or null (then the page leaves the key alone). e: a KeyboardEvent or its fields.
-//   Esc: stop what is armed.  Ctrl/⌘+Z: undo (Ctrl/⌘+Shift+Z is not redo this round, and does nothing).
+//   Esc: stop what is armed.  Ctrl/⌘+Z: undo; Ctrl/⌘+Shift+Z and Ctrl+Y: redo (15 Oct 2026).
 //   F: fit the X-ray to the window, also with no implant selected.
 //   ↑ / ↓ (and PgUp / PgDn, + / -): next / previous size of the selected implant.
 //   Shift+arrows: move it 0.5 mm along the screen; Shift+Alt+arrows: 2 mm.  , and .: turn it 0.5° (with Shift 2°).
@@ -24,7 +24,8 @@ export function shortcut(e, where) {
   if (e.isComposing || e.keyCode === 229 || where === 'text') return null;
   const mod = e.ctrlKey || e.metaKey, k = e.key;
   if (k === 'Escape') return mod || e.altKey ? null : { act: 'escape' };
-  if (mod) return !e.altKey && !e.shiftKey && (k === 'z' || k === 'Z') ? { act: 'undo' } : null;
+  // Ctrl/Cmd+Z undo; Ctrl/Cmd+Shift+Z and Ctrl+Y redo (Sami, 15 Oct: a Redo beside Undo)
+  if (mod) return e.altKey ? null : (k === 'z' || k === 'Z') ? { act: e.shiftKey ? 'redo' : 'undo' } : (k === 'y' || k === 'Y') && e.ctrlKey && !e.metaKey && !e.shiftKey ? { act: 'redo' } : null;
   if (where !== 'editor') return null;
   const arrow = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k];
   if (arrow && e.shiftKey) return { act: 'move', dx: arrow[0], dy: arrow[1], mm: e.altKey ? 2 : 0.5 };
