@@ -23,9 +23,9 @@ import java.util.stream.IntStream;
  *
  * <ol>
  *   <li>The bone is read twice: at the bone threshold (200 HU), closed by one voxel and with the
- *       marrow filled, which is the bone each piece will hold; and at the dense threshold (300
- *       HU), marrow filled, where the joint spaces are open because the subchondral plates are
- *       dense and the cartilage is not.
+ *       marrow filled, which is the bone each piece will hold; and at the dense threshold (300 HU),
+ *       marrow filled, where the joint spaces are open because the subchondral plates are dense and
+ *       the cartilage is not.
  *   <li>The distance of each dense voxel to the nearest non-bone voxel, in mm (a Euclidean distance
  *       transform, exact on the anisotropic grid).
  *   <li>A watershed on that distance: the voxels are taken deepest first and pieces meet where the
@@ -82,14 +82,34 @@ public final class AutoSplit {
 
     public static Options of(double mmX, double mmY, double mmZ) {
       return new Options(
-          GrowOptions.DEFAULT_LOWER_HU, 300, mmX, mmY, mmZ, 200, 1.0, 0.45, 1000, 10, 30,
+          GrowOptions.DEFAULT_LOWER_HU,
+          300,
+          mmX,
+          mmY,
+          mmZ,
+          200,
+          1.0,
+          0.45,
+          1000,
+          10,
+          30,
           16_000_000L);
     }
 
     public Options withMaxWorkVoxels(long voxels) {
       return new Options(
-          boneHu, denseHu, mmX, mmY, mmZ, minBoneMm3, minDepthMm, neckRatio, fragmentMm3,
-          attachMm, speckMm3, voxels);
+          boneHu,
+          denseHu,
+          mmX,
+          mmY,
+          mmZ,
+          minBoneMm3,
+          minDepthMm,
+          neckRatio,
+          fragmentMm3,
+          attachMm,
+          speckMm3,
+          voxels);
     }
   }
 
@@ -196,9 +216,11 @@ public final class AutoSplit {
       this.o = o;
       this.caller = caller;
       int factor = 1;
-      while (factor < 4 && coarse(solid.sizeX(), factor) * (long) coarse(solid.sizeY(), factor)
-              * coarse(solid.sizeZ(), factor)
-          > o.maxWorkVoxels()) {
+      while (factor < 4
+          && coarse(solid.sizeX(), factor)
+                  * (long) coarse(solid.sizeY(), factor)
+                  * coarse(solid.sizeZ(), factor)
+              > o.maxWorkVoxels()) {
         factor++;
       }
       this.f = factor;
@@ -228,8 +250,8 @@ public final class AutoSplit {
     // ---- Coarse grid and distance ----
 
     /**
-     * Distance in mm of each dense voxel of the working grid to the nearest voxel that is not;
-     * 0 outside. Fills {@code solidW} with the working grid's bone.
+     * Distance in mm of each dense voxel of the working grid to the nearest voxel that is not; 0
+     * outside. Fills {@code solidW} with the working grid's bone.
      */
     private float[] depthOfDense(boolean[] solidW) {
       float[] g = new float[wx * wy * wz];
@@ -704,9 +726,9 @@ public final class AutoSplit {
   }
 
   /**
-   * Squared Euclidean distance in mm² to the nearest 0 of a grid, in place: 0 stays 0, {@link
-   * #INF} gets its distance. Along x, then y, then z: each pass is the exact 1D transform of the
-   * one before.
+   * Squared Euclidean distance in mm² to the nearest 0 of a grid, in place: 0 stays 0, {@link #INF}
+   * gets its distance. Along x, then y, then z: each pass is the exact 1D transform of the one
+   * before.
    */
   static void squaredDistance(
       float[] g, int nx, int ny, int nz, double ux, double uy, double uz, Thread caller) {
@@ -769,8 +791,8 @@ public final class AutoSplit {
 
   /**
    * Splits one bone in two between two marks. With the CT, the two parts are flooded from the marks
-   * brightest first, so they meet along the darkest surface between the marks: a fracture line or
-   * a joint space, which the bone mask had closed, even where the two parts press together over a
+   * brightest first, so they meet along the darkest surface between the marks: a fracture line or a
+   * joint space, which the bone mask had closed, even where the two parts press together over a
    * broad face with no neck. The marks stay where they were clicked and start flooding at once.
    * Without the CT, the flood follows the distance to the bone's surface: the narrowest neck.
    *

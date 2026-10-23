@@ -98,8 +98,8 @@ import org.weasis.dicom.viewer3d.vr.View3d;
  * is isolated from the cast and the table, every bone is found at once and listed, each in its own
  * colour (see {@link AutoSplit}); the 3D view then shows the CT only inside the bones, tinted.
  *
- * <p>One way of working, alike in the 3D view and on the slices: click a bone to select it
- * (Shift, Ctrl or Cmd adds to the selection), then act on the selection:
+ * <p>One way of working, alike in the 3D view and on the slices: click a bone to select it (Shift,
+ * Ctrl or Cmd adds to the selection), then act on the selection:
  *
  * <ul>
  *   <li>Hide, Show only, Show all: what the 3D picture shows. A hidden bone stays in the list.
@@ -440,8 +440,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   /** Shows the shared state that is not a Swing model: hint, buttons, progress and message. */
   private void showState() {
-    String hint =
-        tool == Tool.SPLIT && splitStart != null ? "BoneGrowTool.splitSecond" : tool.hint;
+    String hint = tool == Tool.SPLIT && splitStart != null ? "BoneGrowTool.splitSecond" : tool.hint;
     toolHint.setText(html(Messages.getString(hint), null));
     BoneNames.Name name = selectedName();
     sideBox.setEnabled(name != null && name.paired());
@@ -1204,8 +1203,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     session.selected().add(first.id());
     apply(ct, session, after);
     status(
-        String.format(
-            Messages.getString("BoneGrowTool.joined"), selected.size(), joined.label()));
+        String.format(Messages.getString("BoneGrowTool.joined"), selected.size(), joined.label()));
   }
 
   private void renameSelected(CtSource ct, GrowSession session, List<Bone> selected) {

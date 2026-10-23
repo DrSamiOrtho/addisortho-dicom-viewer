@@ -114,8 +114,7 @@ class AutoSplitTest {
     assertThrows(
         BoneSplit.SplitException.class,
         () ->
-            AutoSplit.splitBetween(
-                waisted(), new int[] {20, 20, 5}, new int[] {0, 0, 0}, 1, 1, 1));
+            AutoSplit.splitBetween(waisted(), new int[] {20, 20, 5}, new int[] {0, 0, 0}, 1, 1, 1));
   }
 
   @Test

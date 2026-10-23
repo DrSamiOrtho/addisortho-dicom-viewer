@@ -71,13 +71,7 @@ final class SplitWorker extends SwingWorker<Split, Void> {
   }
 
   private SplitWorker(
-      Kind kind,
-      Bone bone,
-      Bone neighbour,
-      int[] keep,
-      int[] voxel,
-      double[] mm,
-      HuSource hu) {
+      Kind kind, Bone bone, Bone neighbour, int[] keep, int[] voxel, double[] mm, HuSource hu) {
     this.kind = kind;
     this.bone = bone;
     this.neighbour = neighbour;
