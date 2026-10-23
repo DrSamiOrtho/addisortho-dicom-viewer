@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.base.ui.gui;
 
 import bibliothek.gui.dock.common.CWorkingArea;

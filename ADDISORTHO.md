@@ -154,9 +154,11 @@ Non-English translations come from `weasis-i18n-dist` and still say Weasis.
   wordmark (`svg/logo/AddisOrthoWordmark.svg`, the About logo without its black plate), "DICOM Viewer"
   and a hint while the main working area holds no viewer. It only paints, so drops and clicks still
   reach the working area. Image panes are never painted on: they stay neutral black.
-- Mark: on macOS the AO mark (`LogoIcon.SMALL`) sits at the left of the toolbar, because the menu bar
-  is in the screen and the title bar is native. On Windows FlatLaf shows the frame icon in its title
-  bar, so nothing is added there.
+- Mark: on macOS the AO mark (`BrandMark`, `LogoIcon.SMALL`) sits at the left of the toolbar, as tall
+  as the toolbar buttons (it follows the button row, with or without text labels), because the menu
+  bar is in the screen and the title bar is native. Clicking it goes back to the start screen: after
+  a confirmation it closes every open viewer the way "Close All" does. On Windows FlatLaf shows the
+  frame icon in its title bar, so nothing is added there.
 
 ### Translations
 

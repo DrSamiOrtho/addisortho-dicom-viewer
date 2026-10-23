@@ -41,6 +41,7 @@ import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dialog;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Frame;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsDevice;
@@ -88,7 +89,6 @@ import javax.management.JMException;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import javax.swing.Action;
-import javax.swing.BorderFactory;
 import javax.swing.Icon;
 import javax.swing.JCheckBox;
 import javax.swing.JCheckBoxMenuItem;
@@ -304,7 +304,9 @@ public class WeasisWin {
     scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
     scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER);
     scrollPane.setBorder(null);
-    rootPaneContainer.getContentPane().add(brandedToolbar(scrollPane), BorderLayout.NORTH);
+    rootPaneContainer
+        .getContentPane()
+        .add(brandedToolbar(scrollPane, toolbarContainer), BorderLayout.NORTH);
 
     rootPaneContainer.setGlassPane(AppProperties.glassPane);
 
@@ -432,19 +434,19 @@ public class WeasisWin {
   }
 
   /**
-   * Draws a hairline under the toolbar and, on macOS, puts the Addis Ortho mark at its left: there
-   * the menu bar is in the screen and the title bar is native. On other systems FlatLaf already
-   * shows the mark in the title bar.
+   * Draws a hairline under the toolbar and, on macOS, puts the Addis Ortho mark at its left, as
+   * tall as the buttons of {@code buttonRow}: there the menu bar is in the screen and the title bar
+   * is native. On other systems FlatLaf already shows the mark in the title bar.
    */
-  private static JComponent brandedToolbar(JComponent toolbar) {
+  private static JComponent brandedToolbar(JComponent toolbar, JComponent buttonRow) {
     JPanel north = new JPanel(new BorderLayout());
     north.add(toolbar, BorderLayout.CENTER);
     north.add(new JSeparator(), BorderLayout.SOUTH);
     if (SystemInfo.isMacOS) {
-      JLabel mark = new JLabel(ResourceUtil.getIcon(LogoIcon.SMALL, 22, 22));
-      mark.setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 4));
-      mark.setToolTipText(AppProperties.WEASIS_NAME);
-      north.add(mark, BorderLayout.WEST);
+      JPanel west = new JPanel(new FlowLayout(FlowLayout.LEADING, 0, 0));
+      west.setOpaque(false);
+      west.add(new BrandMark(buttonRow));
+      north.add(west, BorderLayout.WEST);
     }
     return north;
   }
