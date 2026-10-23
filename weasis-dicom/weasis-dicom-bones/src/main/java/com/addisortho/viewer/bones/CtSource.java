@@ -9,6 +9,7 @@
 package com.addisortho.viewer.bones;
 
 import com.addisortho.viewer.bones.BoneExportWorker.Problem;
+import com.addisortho.viewer.bones.grow.AutoSplit;
 import com.addisortho.viewer.bones.grow.HuSource;
 import com.addisortho.viewer.bones.grow.VoxelBox;
 import com.addisortho.viewer.bones.seg.CtGrid;
@@ -26,6 +27,7 @@ import org.weasis.dicom.codec.display.Modality;
 import org.weasis.dicom.viewer2d.mpr.Volume;
 import org.weasis.dicom.viewer3d.vr.CropBox;
 import org.weasis.dicom.viewer3d.vr.DicomVolTexture;
+import org.weasis.dicom.viewer3d.vr.KeptMask;
 import org.weasis.dicom.viewer3d.vr.View3d;
 
 /**
@@ -155,6 +157,39 @@ final class CtSource {
       volume.lpsToVoxel(p, p);
       return volume.getNearestDouble(p.x, p.y, p.z, 0);
     };
+  }
+
+  /**
+   * Whether each voxel of the grid is still shown in the 3D view, not cut away by a cut or the bone
+   * isolation. Reads the view's mask as it is: call it while no cut runs.
+   */
+  AutoSplit.Shown shown(View3d view) {
+    KeptMask mask = view.getKeptMask();
+    if (mask == null || mask.isFull()) {
+      return AutoSplit.Shown.ALL;
+    }
+    int sx = volume.getSizeX();
+    int sy = volume.getSizeY();
+    int sz = volume.getSizeZ();
+    return (x, y, z) -> {
+      double[] lps = grid.voxelToLps(x, y, z);
+      Vector3d v = volume.lpsToVoxel(new Vector3d(lps[0], lps[1], lps[2]), new Vector3d());
+      int vx = (int) Math.round(v.x);
+      int vy = (int) Math.round(v.y);
+      int vz = (int) Math.round(v.z);
+      return vx >= 0
+          && vy >= 0
+          && vz >= 0
+          && vx < sx
+          && vy < sy
+          && vz < sz
+          && mask.isKeptVolumeVoxel(vx, vy, vz);
+    };
+  }
+
+  /** The block of the grid inside the 3D view's crop box, else the whole grid. */
+  VoxelBox searchBox(View3d view) throws Problem {
+    return cropBox(view).orElse(VoxelBox.of(grid.columns(), grid.rows(), grid.sliceCount()));
   }
 
   /** The voxel of the grid nearest to a patient position, when inside the grid. */

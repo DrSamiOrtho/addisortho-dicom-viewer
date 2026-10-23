@@ -16,7 +16,6 @@ import java.util.Optional;
 import javax.swing.ButtonGroup;
 import javax.swing.Icon;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
 import javax.swing.JOptionPane;
 import javax.swing.JToggleButton;
 import org.weasis.core.api.gui.util.ActionW;
@@ -38,8 +37,8 @@ import org.weasis.dicom.viewer3d.vr.View3dSnapshot;
 import org.weasis.dicom.viewer3d.vr.View3dVideoExport;
 
 /**
- * The 3D tools bar: the mouse tools (rotate, roll, pan, zoom, window/level, scalpel, keep only
- * this, remove this, length, arrow), the scalpel commands with their undo history, the six
+ * The 3D tools bar: the mouse tools (rotate, roll, pan, zoom, window/level, scalpel, length,
+ * arrow), the scalpel commands with their undo history, the six
  * anatomical orientations, fit and reset, shading, and the image, movie and snapshot commands.
  * Every command has a key, listed in {@link Shortcuts3d}.
  */
@@ -77,9 +76,8 @@ public class Volume3dToolBar extends WtoolBar {
         ActionVol.SCALPEL,
         icon("vol.scalpel"),
         Messages.getString("tool.scalpel.tip") + " (S)");
-    addTool("Keep", ActionVol.KEEP_THIS, icon("vol.keep"), Messages.getString("tool.keep.tip"));
-    addTool(
-        "Remove", ActionVol.REMOVE_THIS, icon("vol.remove"), Messages.getString("tool.remove.tip"));
+    // Keep only this and Remove this are left to the mouse button menus: the Bones panel's Show
+    // only and Hide do the same on the bones it found, by a click on them.
     addTool(
         "Length",
         ActionVol.LENGTH,
@@ -119,10 +117,6 @@ public class Volume3dToolBar extends WtoolBar {
             icon("vol.restore"),
             Messages.getString("cut.restore"),
             () -> selectedView().ifPresent(View3d::restoreVolume));
-    JCheckBox separation = new JCheckBox(Messages.getString("cut.separation"));
-    separation.addActionListener(
-        _ -> selectedView().ifPresent(v -> v.setLightSeparation(separation.isSelected())));
-    add(separation);
     addSeparator();
 
     for (StandardView view : StandardView.values()) {
@@ -272,14 +266,10 @@ public class Volume3dToolBar extends WtoolBar {
       e.getValue().setEnabled(view.isPresent());
       e.getValue().setToolTipText(toolTips.get(e.getKey()));
     }
-    // The tools that pick a point of the volume wait for the segmentation they must honour, and
-    // keep/remove have no anatomy to act on in the segmentation-only mode.
+    // The tools that pick a point of the volume wait for the segmentation they must honour.
     String pick = view.map(View3d::pickUnavailableReason).orElse(null);
-    String keepRemove = view.map(View3d::keepRemoveUnavailableReason).orElse(null);
     disableWithReason(ActionVol.LENGTH.cmd(), pick);
     disableWithReason(ActionVol.ARROW.cmd(), pick);
-    disableWithReason(ActionVol.KEEP_THIS.cmd(), keepRemove);
-    disableWithReason(ActionVol.REMOVE_THIS.cmd(), keepRemove);
   }
 
   private void disableWithReason(String cmd, String reason) {

@@ -108,4 +108,34 @@ public record BoxMask(VoxelBox box, BitVolume bits) implements VoxelMask {
     left.andNot(removed);
     return trimmed(box, left);
   }
+
+  /** The voxels of all the masks, in one mask. */
+  public static BoxMask union(List<BoxMask> masks) {
+    VoxelBox all = masks.getFirst().box();
+    for (BoxMask m : masks) {
+      VoxelBox b = m.box();
+      all =
+          new VoxelBox(
+              Math.min(all.x0(), b.x0()),
+              Math.max(all.x1(), b.x1()),
+              Math.min(all.y0(), b.y0()),
+              Math.max(all.y1(), b.y1()),
+              Math.min(all.z0(), b.z0()),
+              Math.max(all.z1(), b.z1()));
+    }
+    BitVolume bits = new BitVolume(all.sizeX(), all.sizeY(), all.sizeZ());
+    for (BoxMask m : masks) {
+      VoxelBox b = m.box();
+      for (int z = 0; z < b.sizeZ(); z++) {
+        for (int y = 0; y < b.sizeY(); y++) {
+          for (int x = 0; x < b.sizeX(); x++) {
+            if (m.bits().get(x, y, z)) {
+              bits.set(b.x0() - all.x0() + x, b.y0() - all.y0() + y, b.z0() - all.z0() + z);
+            }
+          }
+        }
+      }
+    }
+    return new BoxMask(all, bits);
+  }
 }

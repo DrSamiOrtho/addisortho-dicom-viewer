@@ -172,7 +172,7 @@ final class SegExplorer {
             && view.getVolTexture() != null
             && ct.equals(view.getVolTexture().getSeries())) {
           if (view.getSegType() == SegmentationTool.Type.NONE) {
-            view.setSegType(SegmentationTool.Type.SEG_OVERLAY);
+            view.setSegType(SegmentationTool.Type.BONES);
           } else {
             view.updateSegmentation();
           }
@@ -186,7 +186,7 @@ final class SegExplorer {
                     a.setSelectedItemWithoutTriggerAction(
                         manager.getSelectedViewPane() instanceof View3d v
                             ? v.getSegType()
-                            : SegmentationTool.Type.SEG_OVERLAY));
+                            : SegmentationTool.Type.BONES));
       }
       manager.fireSeriesViewerListeners(
           new SeriesViewerEvent(container, ct, null, EVENT.SELECT_VIEW));

@@ -44,8 +44,18 @@ final class SeedPicker {
    * @param lps patient position, mm
    * @param frameOfReferenceUID frame of reference of the MPR series it was taken on
    * @param plane the view it was taken in, for the user
+   * @param additive Shift, Ctrl or Cmd was held: the click adds to what is selected
    */
-  record Seed(Vector3d lps, String frameOfReferenceUID, String plane) {}
+  record Seed(Vector3d lps, String frameOfReferenceUID, String plane, boolean additive) {
+
+    Seed(Vector3d lps, String frameOfReferenceUID, String plane) {
+      this(lps, frameOfReferenceUID, plane, false);
+    }
+
+    Seed withAdditive(boolean add) {
+      return new Seed(lps, frameOfReferenceUID, plane, add);
+    }
+  }
 
   private AWTEventListener listener;
   private Component pressedView;
@@ -95,12 +105,19 @@ final class SeedPicker {
           if (!click) {
             return;
           }
+          boolean additive =
+              (e.getModifiersEx()
+                      & (InputEvent.SHIFT_DOWN_MASK
+                          | InputEvent.CTRL_DOWN_MASK
+                          | InputEvent.META_DOWN_MASK))
+                  != 0;
+          Consumer<Seed> pick = seed -> onPick.accept(seed.withAdditive(additive));
           if (view instanceof View3d view3d) {
-            pick3d(view3d, p, onPick, onMiss);
+            pick3d(view3d, p, pick, onMiss);
           } else if (view instanceof MprView mpr) {
             fromClick(mpr, p)
                 .ifPresentOrElse(
-                    onPick, () -> onMiss.accept(Messages.getString("BoneGrowTool.missed")));
+                    pick, () -> onMiss.accept(Messages.getString("BoneGrowTool.missed")));
           }
         };
     Toolkit.getDefaultToolkit().addAWTEventListener(listener, AWTEvent.MOUSE_EVENT_MASK);

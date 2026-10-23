@@ -13,8 +13,10 @@ import com.addisortho.viewer.bones.grow.VoxelBox;
 import com.addisortho.viewer.bones.seg.SegmentationBuilder.Segment;
 import java.awt.Color;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.dcm4che3.util.UIDUtils;
 
 /**
@@ -43,6 +45,7 @@ final class GrowSession {
   private final String ctSeriesUID;
   private final String segSeriesUID = UIDUtils.createUID();
   private List<Bone> bones = List.of();
+  private final Set<Integer> selected = new LinkedHashSet<>();
   private int version;
   private int nextId = 1;
   private List<Bone> written = List.of();
@@ -66,15 +69,44 @@ final class GrowSession {
     return bones;
   }
 
-  /** Counts the changes of the list, so a write can tell whether it is still current. */
+  /**
+   * Counts the changes of what is written, so a write can tell whether it is still current: hiding
+   * or showing a bone does not count.
+   */
   int version() {
     return version;
   }
 
   /** Replaces the list of bones. */
   void set(List<Bone> now) {
+    List<Bone> before = bones;
     bones = List.copyOf(now);
-    version++;
+    if (!sameSegments(before, bones)) {
+      version++;
+    }
+    selected.retainAll(bones.stream().map(Bone::id).toList());
+  }
+
+  private static boolean sameSegments(List<Bone> a, List<Bone> b) {
+    if (a.size() != b.size()) {
+      return false;
+    }
+    for (int i = 0; i < a.size(); i++) {
+      if (!a.get(i).sameSegment(b.get(i))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** The bones selected by a click, in the order clicked; not part of the undo history. */
+  Set<Integer> selected() {
+    return selected;
+  }
+
+  /** The selected bones, in the order of the list. */
+  List<Bone> selectedBones() {
+    return bones.stream().filter(b -> selected.contains(b.id())).toList();
   }
 
   /** A number for a new bone; never given twice, so undo and redo cannot mix two bones up. */

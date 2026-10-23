@@ -23,19 +23,44 @@ import java.awt.Color;
  * @param anchor the voxel the bone started from (its seed, or the click that split it off): Erase
  *     piece and Split keep the part holding it
  * @param description how the bone was made, written as the segment description
+ * @param hidden taken out of the 3D picture; not written, so hiding needs no new segmentation
  */
-record Bone(int id, String label, Color color, BoxMask mask, int[] anchor, String description) {
+record Bone(
+    int id,
+    String label,
+    Color color,
+    BoxMask mask,
+    int[] anchor,
+    String description,
+    boolean hidden) {
+
+  Bone(int id, String label, Color color, BoxMask mask, int[] anchor, String description) {
+    this(id, label, color, mask, anchor, description, false);
+  }
 
   Bone withMask(BoxMask m) {
-    return new Bone(id, label, color, m, anchor, description);
+    return new Bone(id, label, color, m, anchor, description, hidden);
   }
 
   Bone withLabel(String l) {
-    return new Bone(id, l, color, mask, anchor, description);
+    return new Bone(id, l, color, mask, anchor, description, hidden);
   }
 
   Bone withColor(Color c) {
-    return new Bone(id, label, c, mask, anchor, description);
+    return new Bone(id, label, c, mask, anchor, description, hidden);
+  }
+
+  Bone withHidden(boolean h) {
+    return h == hidden ? this : new Bone(id, label, color, mask, anchor, description, h);
+  }
+
+  /** Whether the segment written for it is the same: everything but {@link #hidden()}. */
+  boolean sameSegment(Bone other) {
+    return id == other.id
+        && mask == other.mask
+        && label.equals(other.label)
+        && color.equals(other.color)
+        && java.util.Objects.equals(description, other.description);
   }
 
   /** The segment written for this bone, numbered {@code number} in the segmentation. */

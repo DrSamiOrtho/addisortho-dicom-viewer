@@ -243,6 +243,17 @@ bool isSegMasked(vec3 texCoord) {
     return segMaskMode == 1 ? !inside : inside;
 }
 
+// How much of the segment colour replaces the anatomy colour in the Bones in colour mode. The
+// anatomy keeps its brightness, so the shading of the real bone surface still reads.
+const float SEG_TINT = 0.75;
+
+vec3 tintBySegment(vec3 rgb, vec3 texCoord) {
+    vec4 seg = sampleSegOverlay(texCoord);
+    if (seg.a <= 0.0) return rgb;
+    float light = max(max(rgb.r, rgb.g), rgb.b);
+    return mix(rgb, seg.rgb * light, SEG_TINT);
+}
+
 // Radius, in voxels, of the central differences giving the segment surface normal. The differences
 // are summed over every radius up to this one rather than taken at a single one: each tap of a
 // binary mask contributes only -1, 0 or +1, so one radius yields a handful of directions and the
@@ -665,6 +676,7 @@ vec4 rayCastingComposite(Ray ray, float tmin, float tmax, vec2 uv) {
         pix = getNormalizedWindowLevel(texCoord);
         //pix = guassianFilter(texCoord, stepSize);
         vec4 pixel = applyVoxelColor(texCoord, pix);
+        if (segTint) pixel.rgb = tintBySegment(pixel.rgb, texCoord);
         pixel.a = min(pixel.a * opacityFactor, 1.0);
 
         if (accurateBlending) {
@@ -771,6 +783,7 @@ vec4 rayCastingIsoSurface(Ray ray, float tmin, float tmax, vec2 uv) {
         if (isSegMasked(texCoord)) continue;
         pix = getNormalizedWindowLevel(texCoord);
         vec4 pixel = applyVoxelColor(texCoord, pix);
+        if (segTint) pixel.rgb = tintBySegment(pixel.rgb, texCoord);
         bool sign_cur = pix > center;
         if (pixel.a > 0.0) {
             if (sign_cur != prev_sign) {

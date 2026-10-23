@@ -65,6 +65,7 @@ import javax.swing.JProgressBar;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.ToolTipManager;
+import org.dcm4che3.data.Tag;
 import org.dcm4che3.img.lut.PresetWindowLevel;
 import org.joml.Matrix3d;
 import org.joml.Matrix4d;
@@ -92,6 +93,8 @@ import org.weasis.core.api.util.FontItem;
 import org.weasis.core.api.util.FontTools;
 import org.weasis.core.ui.editor.image.*;
 import org.weasis.core.ui.editor.image.DefaultView2d.ZoomType;
+import org.weasis.core.ui.editor.image.ViewCanvas;
+import org.weasis.core.ui.editor.image.ViewerPlugin;
 import org.weasis.core.ui.model.graphic.Graphic;
 import org.weasis.core.ui.model.graphic.imp.seg.SegRegion;
 import org.weasis.core.ui.model.layer.LayerAnnotation;
@@ -100,8 +103,10 @@ import org.weasis.core.ui.model.layer.LayerType;
 import org.weasis.core.ui.model.utils.bean.PanPoint;
 import org.weasis.core.util.LangUtil;
 import org.weasis.dicom.codec.DicomImageElement;
+import org.weasis.dicom.codec.DicomMediaIO;
 import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.SpecialElementRegion;
+import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.codec.geometry.PatientOrientation;
 import org.weasis.dicom.codec.seg.SegBuildScheduler;
 import org.weasis.dicom.codec.seg.SegSpecialElement;
@@ -119,6 +124,7 @@ import org.weasis.dicom.viewer3d.InfoLayer3d;
 import org.weasis.dicom.viewer3d.Messages;
 import org.weasis.dicom.viewer3d.OpenGLInfo;
 import org.weasis.dicom.viewer3d.Shortcuts3d;
+import org.weasis.dicom.viewer3d.View3DContainer;
 import org.weasis.dicom.viewer3d.View3DFactory;
 import org.weasis.dicom.viewer3d.dockable.SegmentationTool.Type;
 import org.weasis.dicom.viewer3d.geometry.Axis;
@@ -924,6 +930,10 @@ public class View3d extends VolumeCanvas
         gl, "segMaskMode", (g, loc) -> g.glUniform1i(loc, getSegMaskMode())); // NON-NLS
     program.allocateUniform(
         gl,
+        "segTint", // NON-NLS
+        (g, loc) -> g.glUniform1i(loc, segType == Type.BONES && isSegTextureActive() ? 1 : 0));
+    program.allocateUniform(
+        gl,
         "segSegmentCount", // NON-NLS
         (g, loc) -> {
           SegVolumeTexture svt = segVolumeTexture;
@@ -1572,6 +1582,24 @@ public class View3d extends VolumeCanvas
     }
 
     for (RenderedSeg rs : rendered) {
+      Map<Integer, SegStyle> styles = SEGMENT_STYLES.get(sopUIDOf(rs.seg()));
+      if (styles != null) {
+        for (Map.Entry<Integer, SegStyle> e : styles.entrySet()) {
+          int number = e.getKey() + rs.offset();
+          RegionAttributes base = result.get(number);
+          if (base == null) {
+            base = rs.seg().getSegAttributes().get(e.getKey());
+          }
+          if (base instanceof SegRegion<?> region) {
+            SegRegion<?> styled = region.copy();
+            styled.setVisible(e.getValue().visible());
+            if (e.getValue().color() != null) {
+              styled.setColor(e.getValue().color());
+            }
+            result.put(number, styled);
+          }
+        }
+      }
       if (!rs.seg().isVisible()) {
         for (Map.Entry<Integer, ? extends RegionAttributes> e :
             rs.seg().getSegAttributes().entrySet()) {
@@ -1600,6 +1628,83 @@ public class View3d extends VolumeCanvas
       }
     }
     return null;
+  }
+
+  // ---- Segment styles of the Bones panel (Addis Ortho) ----
+
+  /**
+   * How a segment is shown: hidden or not, and in which colour ({@code null} keeps its own).
+   *
+   * @param visible whether the segment is drawn; a hidden bone is gone from the Bones in colour
+   *     picture, since the CT is shown only inside visible segments
+   */
+  public record SegStyle(boolean visible, Color color) {}
+
+  /**
+   * Styles set by the Bones panel, by SEG instance UID, then segment number. Static so that a 3D
+   * view built again on the same CT shows the bones as they were left: the panel holds the state,
+   * not the view.
+   */
+  private static final Map<String, Map<Integer, SegStyle>> SEGMENT_STYLES =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
+  /**
+   * Sets the styles of the segments of one segmentation, replacing the ones set before, and
+   * refreshes the colour table of every 3D view (a cheap step: no texture is built again).
+   *
+   * @param styles by segment number; an empty map clears them
+   */
+  public static void setSegmentStyles(String sopInstanceUID, Map<Integer, SegStyle> styles) {
+    if (sopInstanceUID == null) {
+      return;
+    }
+    if (styles.isEmpty()) {
+      SEGMENT_STYLES.remove(sopInstanceUID);
+    } else {
+      SEGMENT_STYLES.put(sopInstanceUID, Map.copyOf(styles));
+    }
+    for (View3d view : openViews()) {
+      if (view.getSegType().requiresSegTexture()) {
+        view.refreshSegColorLUT();
+      }
+    }
+  }
+
+  private static String sopUIDOf(SegSpecialElement seg) {
+    String uid = TagD.getTagValue(seg, Tag.SOPInstanceUID, String.class);
+    if (uid == null && seg.getMediaReader() instanceof DicomMediaIO reader) {
+      uid = reader.getDicomObject().getString(Tag.SOPInstanceUID);
+    }
+    return uid;
+  }
+
+  /** The 3D views on screen. */
+  private static List<View3d> openViews() {
+    List<View3d> views = new ArrayList<>();
+    List<ViewerPlugin<?>> plugins = GuiUtils.getUICore().getViewerPlugins();
+    List<ViewerPlugin<?>> copy;
+    synchronized (plugins) {
+      copy = List.copyOf(plugins);
+    }
+    for (ViewerPlugin<?> plugin : copy) {
+      if (plugin instanceof View3DContainer container) {
+        for (ViewCanvas<DicomImageElement> canvas : container.getImagePanels()) {
+          if (canvas instanceof View3d view) {
+            views.add(view);
+          }
+        }
+      }
+    }
+    return views;
+  }
+
+  /** Told on the event dispatch thread when the bone of a view was isolated (Addis Ortho). */
+  private static final List<java.util.function.Consumer<View3d>> BONE_ISOLATED =
+      new java.util.concurrent.CopyOnWriteArrayList<>();
+
+  /** Adds a listener told each time a view's bone has been isolated from the cast and table. */
+  public static void addBoneIsolatedListener(java.util.function.Consumer<View3d> listener) {
+    BONE_ISOLATED.add(listener);
   }
 
   /** Returns this view's segmentation display mode (never {@code null}). */
@@ -1634,7 +1739,10 @@ public class View3d extends VolumeCanvas
    * removed from the rendering).
    */
   private int getSegMaskMode() {
-    if (segType == Type.SEG_MASK_INCLUDE) {
+    if (!isSegTextureActive()) {
+      return 0; // no segment to mask with yet: show the anatomy rather than nothing
+    }
+    if (segType == Type.SEG_MASK_INCLUDE || segType == Type.BONES) {
       return 1;
     }
     return segType == Type.SEG_MASK_EXCLUDE ? 2 : 0;
@@ -1957,7 +2065,7 @@ public class View3d extends VolumeCanvas
               r.peakBytes() >> 20);
           return VoxelFlood.keepOnly(mask.bits(), r.region());
         },
-        () -> {},
+        () -> BONE_ISOLATED.forEach(l -> l.accept(this)),
         new CutText(
             Messages.getString(asked ? "isolate.none" : "crop.auto.done"),
             Messages.getString("isolate.done")));
@@ -2218,7 +2326,7 @@ public class View3d extends VolumeCanvas
     return switch (segType) {
       case SEG_ONLY -> VolumePicker.SegMode.SEG_ONLY;
       case SEG_OVERLAY -> VolumePicker.SegMode.OVERLAY;
-      case SEG_MASK_INCLUDE -> VolumePicker.SegMode.MASK_INCLUDE;
+      case SEG_MASK_INCLUDE, BONES -> VolumePicker.SegMode.MASK_INCLUDE;
       case SEG_MASK_EXCLUDE -> VolumePicker.SegMode.MASK_EXCLUDE;
       default -> VolumePicker.SegMode.NONE;
     };
