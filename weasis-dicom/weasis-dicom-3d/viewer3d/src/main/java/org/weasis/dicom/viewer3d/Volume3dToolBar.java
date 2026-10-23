@@ -38,9 +38,9 @@ import org.weasis.dicom.viewer3d.vr.View3dVideoExport;
 
 /**
  * The 3D tools bar: the mouse tools (rotate, roll, pan, zoom, window/level, scalpel, length,
- * arrow), the scalpel commands with their undo history, the six
- * anatomical orientations, fit and reset, shading, and the image, movie and snapshot commands.
- * Every command has a key, listed in {@link Shortcuts3d}.
+ * arrow), the scalpel commands with their undo history, the six anatomical orientations, fit and
+ * reset, shading, and the image, movie and snapshot commands. Every command has a key, listed in
+ * {@link Shortcuts3d}.
  */
 public class Volume3dToolBar extends WtoolBar {
 
