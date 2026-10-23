@@ -726,6 +726,38 @@ class BoneIsolationTest {
         () -> assertEquals(0, keptInSlice(r, 0, w - 1, 390, 480, 300), "no sheet in the pad"));
   }
 
+  @Test
+  void aSpeckInTheMarrowCanalKeepsTheWholeBone() {
+    // A long hollow bone in soft tissue, and an 8 mm3 speck in its canal 2 mm from the cortex: the
+    // speck is joined, and filling its holes once the canal is filled must not cut the bone down
+    // to the speck's slices (a bone-kernel elbow CT opened as a slab).
+    int w = 60;
+    int h = 60;
+    int d = 80;
+    BoneExtent.SliceSource slices =
+        z -> {
+          float[] s = new float[w * h];
+          for (int y = 0, i = 0; y < h; y++) {
+            for (int x = 0; x < w; x++, i++) {
+              int r2 = (x - 30) * (x - 30) + (y - 30) * (y - 30);
+              boolean speck = x >= 31 && x <= 32 && y >= 29 && y <= 30 && z >= 40 && z <= 41;
+              boolean cortex = z >= 5 && z < 75 && r2 <= 64 && r2 > 25;
+              s[i] = speck || cortex ? 700 : r2 <= 625 ? 40 : -1000;
+            }
+          }
+          return s;
+        };
+    VolumeSpace space = VolumeSpace.ofVolume(new Vector3i(w, h, d), MM1);
+    Result r =
+        BoneIsolation.find(space, slices, 0, MM1, 300, () -> false, new WorkingMemory(64L << 20))
+            .orElseThrow();
+    assertAll(
+        () -> assertEquals(1, r.bonePieces()),
+        () -> assertEquals(1, r.joinedPieces(), "the speck in the canal"),
+        () -> assertTrue(keptInSlice(r, 0, w - 1, 0, h - 1, 6) > 0, "the bone's first slices"),
+        () -> assertTrue(keptInSlice(r, 0, w - 1, 0, h - 1, 73) > 0, "the bone's last slices"));
+  }
+
   private static long keptInSlice(Result r, int x0, int x1, int y0, int y1, int z) {
     long n = 0;
     for (int y = y0; y <= y1; y++) {

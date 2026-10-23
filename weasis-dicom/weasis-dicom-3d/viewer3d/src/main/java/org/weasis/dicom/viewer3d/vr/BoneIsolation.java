@@ -326,11 +326,20 @@ public final class BoneIsolation {
       bones = join.box();
 
       // Each bone's own holes, so that two bones cannot enclose pad or soft tissue between them.
+      long keptVoxels = 0;
       for (Piece p : kept) {
         if (cancelled.getAsBoolean()) {
           return Optional.empty();
         }
         fillPiece(region, scratch, p, cell, queue);
+        keptVoxels += p.voxels();
+      }
+      // The fills only add voxels: fewer than the kept pieces means a bone was lost, and the view
+      // must stay whole rather than show what is left of it.
+      long filled = region.count();
+      if (filled < keptVoxels) {
+        throw new IllegalStateException(
+            "Bone isolation lost bone: " + filled + " voxels for " + keptVoxels + " kept");
       }
 
       // Metal is kept whole only when it touches a bone itself, before the margin: a marker beside
@@ -629,12 +638,14 @@ public final class BoneIsolation {
 
   /**
    * Fills the holes of one kept piece, slice by slice within its box: the piece moves out of {@code
-   * region} into {@code scratch}, is filled there, and goes back with its holes.
+   * region} into {@code scratch}, is filled there, and goes back with its holes. A piece that lay
+   * in the hole of a bone filled before it (a speck in the marrow canal) is joined to that bone by
+   * now and moves with it, so the box is the one of what moved, not of the piece alone.
    */
   private static void fillPiece(
       VoxelBits region, VoxelBits scratch, Piece p, byte[] cell, IntQueue queue) {
-    flood(region, scratch, null, null, p.x(), p.y(), p.z(), queue);
-    Box box = p.box().grow(1, region);
+    Piece moved = flood(region, scratch, null, null, p.x(), p.y(), p.z(), queue);
+    Box box = moved.box().grow(1, region);
     fillHoles(scratch, box, cell, queue);
     for (int z = box.z0(); z <= box.z1(); z++) {
       long[] s = scratch.sliceWords(z);
