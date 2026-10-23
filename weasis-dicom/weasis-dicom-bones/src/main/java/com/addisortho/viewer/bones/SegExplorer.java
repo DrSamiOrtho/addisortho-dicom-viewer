@@ -172,7 +172,7 @@ final class SegExplorer {
             && view.getVolTexture() != null
             && ct.equals(view.getVolTexture().getSeries())) {
           if (view.getSegType() == SegmentationTool.Type.NONE) {
-            view.setSegType(SegmentationTool.Type.BONES);
+            view.setSegType(BoneGrowTool.displayType());
           } else {
             view.updateSegmentation();
           }
@@ -186,7 +186,7 @@ final class SegExplorer {
                     a.setSelectedItemWithoutTriggerAction(
                         manager.getSelectedViewPane() instanceof View3d v
                             ? v.getSegType()
-                            : SegmentationTool.Type.BONES));
+                            : BoneGrowTool.displayType()));
       }
       manager.fireSeriesViewerListeners(
           new SeriesViewerEvent(container, ct, null, EVENT.SELECT_VIEW));

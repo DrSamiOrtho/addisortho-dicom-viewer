@@ -215,7 +215,8 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
     `grow/BoxMask`); the SEG (series 902, segments numbered in list order) is rewritten in the background only when
     voxels, names or colours change (`SegWriteWorker`, one at a time). More tools keeps the region grow (New bone, with
     the region, bone and side picker of `BoneNames`), Erase piece (`grow/BoneSplit`) and the grow settings. Keep only
-    this and Remove this left the 3D tool bar (still in the mouse button menus).
+    this and Remove this left the 3D tool bar (still in the mouse button menus). Natural look (a Bones panel switch)
+    shows the bones as the CT shows bone (`SEG_MASK_INCLUDE`), hidden ones still hidden; untick for the colours.
   - **Make 3D bones**: runs the owner's TotalSegmentator pipeline (`planning/make_3d.sh`, free model: hip, shoulder,
     spine) where it is installed, and opens its results in the study.
 - `viewer3d`: Smooth surfaces for segments, a crop box, and "Save 3D picture to the study" / "Copy 3D picture".

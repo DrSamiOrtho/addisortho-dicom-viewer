@@ -181,6 +181,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   private static final ToggleButtonModel CROP = new ToggleButtonModel();
   private static final ToggleButtonModel PREVIEW = new ToggleButtonModel();
   private static final ToggleButtonModel MORE = new ToggleButtonModel();
+  private static final ToggleButtonModel NATURAL = new ToggleButtonModel();
   private static final Map<Tool, ToggleButtonModel> TOOLS = new EnumMap<>(Tool.class);
   private static final DefaultBoundedRangeModel PROGRESS =
       new DefaultBoundedRangeModel(0, 0, 0, 100);
@@ -220,6 +221,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     BONE.addListDataListener(onSelection(BoneGrowTool::applyPreset));
     LOWER.addChangeListener(_ -> updatePreview());
     PREVIEW.addActionListener(_ -> updatePreview());
+    NATURAL.addActionListener(_ -> showDisplayType());
     View3d.addBoneIsolatedListener(BoneGrowTool::boneIsolated);
   }
 
@@ -322,6 +324,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     deleteButton.addActionListener(_ -> onSelected(BoneGrowTool::deleteSelected));
     panel.add(GuiUtils.getFlowLayoutPanel(hideButton, onlyButton, allButton));
     panel.add(GuiUtils.getFlowLayoutPanel(joinButton, splitButton, nameButton, deleteButton));
+    JCheckBox naturalBox = checkBox("BoneGrowTool.natural", NATURAL);
+    naturalBox.setToolTipText(Messages.getString("BoneGrowTool.natural.tip"));
+    panel.add(GuiUtils.getFlowLayoutPanel(naturalBox));
     panel.add(GuiUtils.boxVerticalStrut(gap));
 
     JLabel listTitle = new JLabel(Messages.getString("BoneGrowTool.list"));
@@ -611,7 +616,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         findBones(view);
       }
     } else if (view.getSegType() == SegmentationTool.Type.NONE) {
-      view.setSegType(SegmentationTool.Type.BONES);
+      view.setSegType(displayType());
     }
   }
 
@@ -656,13 +661,48 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     apply(ct, session, bones);
     selectedView()
         .filter(v -> v.getVolTexture().getVolume() == ct.volume())
-        .ifPresent(v -> v.setSegType(SegmentationTool.Type.BONES));
+        .ifPresent(v -> v.setSegType(displayType()));
     String text = String.format(Messages.getString("BoneGrowTool.found"), bones.size());
     if (result.fragments() > 0) {
       String fragments = Messages.getString("BoneGrowTool.foundFragments");
       text += " " + String.format(fragments, result.fragments());
     }
     status(text);
+  }
+
+  /**
+   * How the bones are shown in 3D: in their colours, or with the natural look of the CT (the plain
+   * bone preset) inside the bones still shown. Hidden bones stay hidden either way.
+   */
+  static SegmentationTool.Type displayType() {
+    return NATURAL.isSelected()
+        ? SegmentationTool.Type.SEG_MASK_INCLUDE
+        : SegmentationTool.Type.BONES;
+  }
+
+  /** Puts the chosen look on the 3D view and on the Segmentation panel's display choice. */
+  private static void showDisplayType() {
+    selectedView()
+        .ifPresent(
+            v -> {
+              v.setSegType(displayType());
+              EventManager.getInstance()
+                  .getAction(ActionVol.SEG_TYPE)
+                  .ifPresent(a -> a.setSelectedItemWithoutTriggerAction(displayType()));
+            });
+  }
+
+  /** Ticks Natural look when the view shows the bones that way, as after the Segmentation panel. */
+  private static void followDisplayType(View3d view) {
+    if (view == null) {
+      return;
+    }
+    SegmentationTool.Type type = view.getSegType();
+    if (type == SegmentationTool.Type.BONES) {
+      NATURAL.setSelected(false);
+    } else if (type == SegmentationTool.Type.SEG_MASK_INCLUDE) {
+      NATURAL.setSelected(true);
+    }
   }
 
   // ---- Tools ----
@@ -1349,6 +1389,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   }
 
   private void viewChanged() {
+    followDisplayType(selectedView().orElse(null));
     followHistory();
     refreshList();
   }
