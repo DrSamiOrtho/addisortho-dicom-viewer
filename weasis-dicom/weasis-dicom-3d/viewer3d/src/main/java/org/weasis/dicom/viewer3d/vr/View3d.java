@@ -211,7 +211,9 @@ public class View3d extends VolumeCanvas
   private volatile boolean segBuildRunning;
 
   /** Renders the segments from their trilinear occupancy rather than the nearest label voxel. */
-  private volatile boolean segSmooth = true;
+  // Addis Ortho: off in the Lite edition, where the occupancy texture (one byte per voxel) costs
+  // too much memory.
+  private volatile boolean segSmooth = !RenderingLayer.isLite();
 
   /** 1×1×1 placeholder keeping the occupancy sampler unit complete, see bindSegTextures. */
   private int segOccupancyPlaceholderId;

@@ -5,8 +5,14 @@
 # .github/workflows/build-installer.yml (macOS and Windows builds), so that every installer
 # ships launchers with the same configuration.
 #
-# Usage: . launch-options.sh <macosx|windows|linux>
+# Usage: . launch-options.sh <macosx|windows|linux> [lite]
 # Defines: JDK_MODULES, customOptions[], commonOptions[]
+#
+# "lite" gives the options of the Lite edition, for PCs with 4 GB of RAM: a fixed 1 GB heap
+# instead of a share of the RAM (the OS, the graphics driver and the image cache need the rest),
+# a 256 MB image cache, a small 3D upload buffer, the serial collector (least memory of its own,
+# gives memory back), smaller 3D textures and no smooth segment surfaces (weasis.lite), and its
+# own shell port so that it can run beside the full edition.
 
 # jdk.localedata => other locale (en_us) data are included in the jdk.localedata
 # jdk.jdwp.agent => package for debugging agent
@@ -47,12 +53,35 @@ case "$1" in
     ;;
 esac
 
+LITE=no
+[ "$2" = "lite" ] && LITE=yes
+if [ "$LITE" = "yes" ] ; then
+  # Replaces the share of the RAM set above by a fixed heap.
+  liteOptions=()
+  for ((i = 0; i < ${#customOptions[@]}; i++)); do
+    if [[ "${customOptions[$i]}" == -XX:MaxRAMPercentage=* ]] ; then
+      unset 'liteOptions[${#liteOptions[@]}-1]' # drops the "--java-options" before it
+      liteOptions=("${liteOptions[@]}")
+      continue
+    fi
+    liteOptions+=("${customOptions[$i]}")
+  done
+  customOptions=("${liteOptions[@]}" \
+  "--java-options" "-Xmx1g" \
+  "--java-options" "-XX:+UseSerialGC" \
+  "--java-options" "-Dweasis.lite=true" \
+  "--java-options" "-Dweasis.native.memory=268435456" \
+  "--java-options" "-Dweasis.volume.staging.memory=67108864")
+fi
+
 # Options applied to the main Weasis launcher on every platform (the heap limit, MaxRAMPercentage,
 # is set per platform above). The Dicomizer launcher does not
 # inherit them: jpackage drops the command line --java-options as soon as an --add-launcher
 # properties file defines java-options, so they are repeated in
 # resources/<platform>/dicomizer-launcher.properties.
-commonOptions=("--java-options" "-Dgosh.port=17179" \
+GOSH_PORT=17179
+[ "$LITE" = "yes" ] && GOSH_PORT=17189
+commonOptions=("--java-options" "-Dgosh.port=${GOSH_PORT}" \
 "--java-options" "--enable-native-access=ALL-UNNAMED" \
 "--java-options" "-XX:+UseStringDeduplication" \
 "--java-options" "-Djavax.accessibility.assistive_technologies=org.weasis.launcher.EmptyAccessibilityProvider" \

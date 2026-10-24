@@ -11,6 +11,10 @@ on:
         description: 'Release from main without pushing a tag: ao-<weasis version>-<n>, for example ao-4.7.3-1. The release job creates the tag on the built commit. Leave empty for a test build.'
         required: false
         default: ''
+      lite:
+        description: '"true" builds the Lite edition, for PCs with 4 GB of RAM ("Addis Ortho Viewer Lite": 1 GB heap, smaller 3D textures); it installs beside the full edition.'
+        required: false
+        default: 'false'
   # A tag ao-<weasis version>-<n> (for example ao-4.7.3-1) builds all three installers and publishes
   # them as a GitHub pre-release; the complete source of the release is the tag itself.
   push:
@@ -96,8 +100,11 @@ jobs:
 
   jpackage:
     env:
-      NAME: "Addis Ortho Viewer"
-      IDENTIFIER: "com.addisortho.viewer"
+      # The Lite edition is a separate app (name, identifier, Windows upgrade code), so it installs
+      # beside the full edition instead of replacing it.
+      LITE: ${{ inputs.lite == 'true' && 'lite' || '' }}
+      NAME: ${{ inputs.lite == 'true' && 'Addis Ortho Viewer Lite' || 'Addis Ortho Viewer' }}
+      IDENTIFIER: ${{ inputs.lite == 'true' && 'com.addisortho.viewer.lite' || 'com.addisortho.viewer' }}
       # Windows file properties (CompanyName, LegalCopyright, FileDescription) and macOS
       # NSHumanReadableCopyright; given to the app-image step as well as to the installer step.
       VENDOR: "Addis Ortho Trading PLC"
@@ -201,7 +208,7 @@ jobs:
           machine=${{ matrix.wsystem }}
 
           # JDK_MODULES, customOptions and commonOptions are shared with package-weasis.sh
-          source "${{ env.WEASIS_SCRIPT }}/launch-options.sh" "$machine"
+          source "${{ env.WEASIS_SCRIPT }}/launch-options.sh" "$machine" "${{ env.LITE }}"
 
           declare -a signArgs=()
           if [ "$machine" = "macosx" ] && [ "$MAC_SIGN" != "yes" ] ; then
@@ -321,6 +328,10 @@ jobs:
           ARC_NAME=${{ matrix.warc }}
           if [ "$machine" = "windows" ] ; then
             [ "$ARC_NAME" = "aarch64" ] && UPGRADE_UID="1d34dbc0-804b-491f-b9b7-cddec4b42771" || UPGRADE_UID="4179fa98-ca01-4739-b89e-92aff0702b48"
+            if [ "${{ env.LITE }}" = "lite" ] ; then
+              # Its own upgrade code: installing the Lite edition must not remove the full one.
+              [ "$ARC_NAME" = "aarch64" ] && UPGRADE_UID="a5a09c96-fab0-47e7-9fce-7e3a1b812bae" || UPGRADE_UID="a905d395-ba9f-4dc3-831c-53687cd447a6"
+            fi
             jpackage --type "msi" --app-image "${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}" --dest "${{ env.WEASIS_OUTPUT }}" --name "${{ env.NAME }}" --resource-dir "${{ env.RES }}/msi/${ARC_NAME}" \
             --license-file "${{ env.WEASIS_INPUT }}/Licence.txt" --description "${{ env.DESCRIPTION }}" --win-upgrade-uuid "$UPGRADE_UID" \
             --win-menu --win-menu-group "${{ env.NAME }}" --copyright "${{ env.COPYRIGHT }}" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" \
@@ -341,7 +352,7 @@ jobs:
             SIGNED_PKG="final-dist/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}-${ARC_NAME}.pkg"
             if [ "$MAC_SIGN" != "yes" ] ; then
               cp "$UNSIGNED_PKG" "final-dist/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}-${ARC_NAME}-unsigned.pkg"
-              echo "APP_ARTIFACT=addisortho-viewer-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
+              echo "APP_ARTIFACT=addisortho-viewer${{ env.LITE && '-lite' || '' }}-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
               exit 0
             fi
             KEYCHAIN="$HOME/Library/Keychains/signing_temp.keychain-db"
@@ -351,7 +362,7 @@ jobs:
             productsign --sign "$INSTALLER_ID" --keychain "$KEYCHAIN" --timestamp \
               "$UNSIGNED_PKG" "$SIGNED_PKG"
           fi
-          echo "APP_ARTIFACT=addisortho-viewer-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
+          echo "APP_ARTIFACT=addisortho-viewer${{ env.LITE && '-lite' || '' }}-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
 
       - name: Notarize Release Build
         if: matrix.wsystem == 'macosx' && env.MAC_SIGN == 'yes'

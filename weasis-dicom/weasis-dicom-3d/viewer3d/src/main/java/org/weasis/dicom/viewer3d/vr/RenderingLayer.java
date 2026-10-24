@@ -27,6 +27,20 @@ public class RenderingLayer<E extends ImageElement> {
   public static final String P_MAX_TEX_XY = "volume.texture.max.xy";
   public static final String P_MAX_TEX_Z = "volume.texture.max.z";
 
+  /**
+   * Addis Ortho: system property set by the Lite edition, for PCs with 4 GB of RAM: smaller 3D
+   * textures and no smooth segment surfaces by default.
+   */
+  public static final String P_LITE = "weasis.lite"; // NON-NLS
+
+  /** Largest 3D texture side the Lite edition builds by default, in voxels. */
+  public static final int LITE_MAX_TEXTURE = 256;
+
+  /** Whether this is the Lite edition. */
+  public static boolean isLite() {
+    return Boolean.getBoolean(P_LITE);
+  }
+
   /** Whether a CT volume opens smoothed (on by default), see DicomVolTexture#isSmoothing(). */
   public static final String P_SMOOTH_CT = "volume.smooth.ct";
 

@@ -99,8 +99,14 @@ public class DicomVolTextureFactory {
 
     WProperties localPersistence = GuiUtils.getUICore().getLocalPersistence();
     int maxTexSize = View3DFactory.getMax3dTextureSize();
-    int maxSizeXY = localPersistence.getIntProperty(RenderingLayer.P_MAX_TEX_XY, maxTexSize);
-    int maxSizeZ = localPersistence.getIntProperty(RenderingLayer.P_MAX_TEX_Z, maxTexSize);
+    // Addis Ortho: the Lite edition (PCs with 4 GB of RAM) builds a smaller 3D texture unless the
+    // user chose a size in the 3D preferences.
+    int defaultSize =
+        RenderingLayer.isLite()
+            ? Math.min(maxTexSize, RenderingLayer.LITE_MAX_TEXTURE)
+            : maxTexSize;
+    int maxSizeXY = localPersistence.getIntProperty(RenderingLayer.P_MAX_TEX_XY, defaultSize);
+    int maxSizeZ = localPersistence.getIntProperty(RenderingLayer.P_MAX_TEX_Z, defaultSize);
     int width = volume.getSizeX();
     int height = volume.getSizeY();
     int depth = volume.getSizeZ();
