@@ -373,9 +373,22 @@ jobs:
           import java.nio.file.Path;
 
           public class GlProbe {
-            public static void main(String[] args) {
+            static void setEnv(String name, String value) throws Throwable {
+              var linker = java.lang.foreign.Linker.nativeLinker();
+              var k32 = java.lang.foreign.SymbolLookup.libraryLookup("kernel32", java.lang.foreign.Arena.global());
+              var h = linker.downcallHandle(k32.find("SetEnvironmentVariableW").orElseThrow(),
+                  java.lang.foreign.FunctionDescriptor.of(java.lang.foreign.ValueLayout.JAVA_INT,
+                      java.lang.foreign.ValueLayout.ADDRESS, java.lang.foreign.ValueLayout.ADDRESS));
+              try (var a = java.lang.foreign.Arena.ofConfined()) {
+                int ok = (int) h.invokeExact(a.allocateFrom(name, java.nio.charset.StandardCharsets.UTF_16LE),
+                    a.allocateFrom(value, java.nio.charset.StandardCharsets.UTF_16LE));
+              }
+            }
+
+            public static void main(String[] args) throws Throwable {
               if (args.length > 0) {
                 Path dir = Path.of(args[0]);
+                setEnv("GALLIUM_DRIVER", "llvmpipe");
                 System.load(dir.resolve("libgallium_wgl.dll").toAbsolutePath().toString());
                 System.load(dir.resolve("opengl32.dll").toAbsolutePath().toString());
                 System.setProperty("jogamp.primary.library.path", dir.toAbsolutePath().toString());

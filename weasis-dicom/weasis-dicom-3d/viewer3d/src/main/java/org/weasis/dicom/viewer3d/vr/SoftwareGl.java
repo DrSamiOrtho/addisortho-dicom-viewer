@@ -9,6 +9,13 @@
  */
 package org.weasis.dicom.viewer3d.vr;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
+import java.lang.foreign.SymbolLookup;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.slf4j.Logger;
@@ -87,6 +94,10 @@ public final class SoftwareGl {
     }
     Path dir = mesaDir();
     try {
+      // Mesa would otherwise pick its D3D12 driver, which on these PCs runs on Microsoft's own
+      // software renderer (WARP); llvmpipe is Mesa's faster processor renderer. Mesa reads it from
+      // the process environment when its DLL starts, so it must be set before loading.
+      setProcessEnv("GALLIUM_DRIVER", "llvmpipe"); // NON-NLS
       // opengl32.dll imports libgallium_wgl.dll by name; a DLL loaded by full path does not find
       // its neighbours, so load the dependency first.
       System.load(dir.resolve(GALLIUM_DLL).toString());
@@ -101,6 +112,26 @@ public final class SoftwareGl {
       LOGGER.info("Software 3D: Mesa renderer loaded from {}", dir);
     } catch (Throwable t) {
       LOGGER.error("Software 3D: cannot load the Mesa renderer from {}", dir, t);
+    }
+  }
+
+  /** Sets a variable in this process's Windows environment, which Java cannot do on its own. */
+  private static void setProcessEnv(String name, String value) throws Throwable {
+    Linker linker = Linker.nativeLinker();
+    SymbolLookup kernel32 = SymbolLookup.libraryLookup("kernel32", Arena.global()); // NON-NLS
+    MethodHandle setEnv =
+        linker.downcallHandle(
+            kernel32.find("SetEnvironmentVariableW").orElseThrow(), // NON-NLS
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    try (Arena arena = Arena.ofConfined()) {
+      int ok =
+          (int)
+              setEnv.invokeExact(
+                  arena.allocateFrom(name, StandardCharsets.UTF_16LE),
+                  arena.allocateFrom(value, StandardCharsets.UTF_16LE));
+      if (ok == 0) {
+        LOGGER.warn("Software 3D: cannot set {}", name);
+      }
     }
   }
 
