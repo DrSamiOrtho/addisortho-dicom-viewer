@@ -7,6 +7,7 @@ public class GlProbe {
       Path dir = Path.of(args[0]);
       System.load(dir.resolve("libgallium_wgl.dll").toAbsolutePath().toString());
       System.load(dir.resolve("opengl32.dll").toAbsolutePath().toString());
+      System.setProperty("jogamp.primary.library.path", dir.toAbsolutePath().toString());
       System.setProperty("jogl.windows.useWGLVersionOf5WGLGDIFuncSet", "true");
     }
     GLProfile.initSingleton();

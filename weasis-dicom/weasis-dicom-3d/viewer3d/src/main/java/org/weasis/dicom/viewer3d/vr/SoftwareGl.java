@@ -40,6 +40,7 @@ public final class SoftwareGl {
 
   private static final String GALLIUM_DLL = "libgallium_wgl.dll"; // NON-NLS
   private static final String OPENGL_DLL = "opengl32.dll"; // NON-NLS
+  private static final String PRIMARY_LIB_PATH = "jogamp.primary.library.path"; // NON-NLS
   private static final String WGL_GDI_FUNCS =
       "jogl.windows.useWGLVersionOf5WGLGDIFuncSet"; // NON-NLS
 
@@ -90,6 +91,9 @@ public final class SoftwareGl {
       // its neighbours, so load the dependency first.
       System.load(dir.resolve(GALLIUM_DLL).toString());
       System.load(dir.resolve(OPENGL_DLL).toString());
+      // JOGL opens OpenGL by the full path C:\Windows\System32\opengl32.dll unless a primary
+      // library folder is given, which it searches first.
+      System.setProperty(PRIMARY_LIB_PATH, dir.toString());
       // JOGL otherwise chooses and sets the pixel format through GDI, which talks to the system
       // driver, so Mesa cannot make a context; this makes it use Mesa's wgl* versions instead.
       System.setProperty(WGL_GDI_FUNCS, "true");
