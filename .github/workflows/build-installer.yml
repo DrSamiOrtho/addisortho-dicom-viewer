@@ -356,7 +356,8 @@ jobs:
       - name: Prove software 3D on a PC without a graphics driver (Windows only)
         # The Windows runner has no GPU driver (OpenGL 1.1 "GDI Generic"), like a PC whose chip is
         # too old. JOGL must fail there on its own, and reach OpenGL 4.x through the bundled Mesa
-        # once the viewer's loading order (libgallium_wgl.dll, then opengl32.dll) is applied.
+        # once the viewer's loading order (libgallium_wgl.dll, then opengl32.dll, then JOGL's switch
+        # to Mesa's own wgl pixel-format calls) is applied.
         if: matrix.wsystem == 'windows'
         shell: bash
         run: |
@@ -377,6 +378,7 @@ jobs:
                 Path dir = Path.of(args[0]);
                 System.load(dir.resolve("libgallium_wgl.dll").toAbsolutePath().toString());
                 System.load(dir.resolve("opengl32.dll").toAbsolutePath().toString());
+                System.setProperty("jogl.windows.useWGLVersionOf5WGLGDIFuncSet", "true");
               }
               GLProfile.initSingleton();
               GLProfile profile;
@@ -418,7 +420,7 @@ jobs:
           echo "--- Bundled Mesa from the app image"
           ls -la "../${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}/app/mesa" || true
           mesa="../${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}/app/mesa"
-          out=$(java -Djogl.debug.DebugGL -cp "$cp" GlProbe.java "$mesa" 2>&1 | tail -40) || true
+          out=$(java -cp "$cp" GlProbe.java "$mesa" 2>&1 | tail -40) || true
           echo "$out"
           echo "$out" | grep -q "renderer=llvmpipe" || { echo "Mesa was not used"; exit 1; }
           echo "$out" | grep -qE "version=4\.[3-9]" || { echo "Mesa did not give OpenGL 4.3 or later"; exit 1; }

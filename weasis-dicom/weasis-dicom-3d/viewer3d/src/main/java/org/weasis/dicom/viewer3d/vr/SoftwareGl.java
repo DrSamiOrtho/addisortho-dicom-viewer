@@ -40,6 +40,8 @@ public final class SoftwareGl {
 
   private static final String GALLIUM_DLL = "libgallium_wgl.dll"; // NON-NLS
   private static final String OPENGL_DLL = "opengl32.dll"; // NON-NLS
+  private static final String WGL_GDI_FUNCS =
+      "jogl.windows.useWGLVersionOf5WGLGDIFuncSet"; // NON-NLS
 
   private static volatile boolean active;
 
@@ -88,6 +90,9 @@ public final class SoftwareGl {
       // its neighbours, so load the dependency first.
       System.load(dir.resolve(GALLIUM_DLL).toString());
       System.load(dir.resolve(OPENGL_DLL).toString());
+      // JOGL otherwise chooses and sets the pixel format through GDI, which talks to the system
+      // driver, so Mesa cannot make a context; this makes it use Mesa's wgl* versions instead.
+      System.setProperty(WGL_GDI_FUNCS, "true");
       active = true;
       LOGGER.info("Software 3D: Mesa renderer loaded from {}", dir);
     } catch (Throwable t) {
