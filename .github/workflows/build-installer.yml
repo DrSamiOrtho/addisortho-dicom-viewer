@@ -439,6 +439,27 @@ jobs:
           echo "$out" | grep -q "renderer=llvmpipe" || { echo "Mesa was not used"; exit 1; }
           echo "$out" | grep -qE "version=4\.[3-9]" || { echo "Mesa did not give OpenGL 4.3 or later"; exit 1; }
 
+      - name: Start the real viewer in software 3D (Windows only)
+        # The 3D check runs when the viewer starts, so its log shows whether the app itself reaches
+        # llvmpipe. Informational: a GUI start on the runner can fail for reasons of its own.
+        if: matrix.wsystem == 'windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          exe="${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}/${{ env.NAME }}.exe"
+          JAVA_TOOL_OPTIONS="-Dweasis.3d.software=true" "$exe" &
+          pid=$!
+          for i in $(seq 1 24); do
+            sleep 5
+            if grep -rqs -E "Video card for OpenGL|Cannot init OpenGL" "$USERPROFILE/.weasis" 2>/dev/null; then break; fi
+          done
+          sleep 5
+          grep -rhs -E "Software 3D|Video card for OpenGL|OpenGL context created|Cannot init OpenGL|IllegalState" "$USERPROFILE/.weasis" | cut -c1-300 | head -20
+          taskkill //F //T //PID $pid >/dev/null 2>&1 || true
+          taskkill //F //IM "${{ env.NAME }}.exe" >/dev/null 2>&1 || true
+          grep -rqs "Software 3D: drawing with llvmpipe" "$USERPROFILE/.weasis" || { echo "The viewer did not reach llvmpipe"; exit 1; }
+
       - name: Build package with jpackage
         shell: bash
         env:
