@@ -416,8 +416,9 @@ jobs:
           echo "--- System OpenGL (expected to fail or be below 3.3)"
           java -cp "$cp" GlProbe.java 2>&1 | tail -5 || true
           echo "--- Bundled Mesa from the app image"
+          ls -la "../${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}/app/mesa" || true
           mesa="../${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}/app/mesa"
-          out=$(java -cp "$cp" GlProbe.java "$mesa" 2>&1 | tail -5)
+          out=$(java -Djogl.debug.DebugGL -cp "$cp" GlProbe.java "$mesa" 2>&1 | tail -40) || true
           echo "$out"
           echo "$out" | grep -q "renderer=llvmpipe" || { echo "Mesa was not used"; exit 1; }
           echo "$out" | grep -qE "version=4\.[3-9]" || { echo "Mesa did not give OpenGL 4.3 or later"; exit 1; }
