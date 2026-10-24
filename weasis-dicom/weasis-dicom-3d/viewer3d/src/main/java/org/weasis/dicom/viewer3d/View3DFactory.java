@@ -16,10 +16,12 @@ import com.jogamp.opengl.GLContext;
 import com.jogamp.opengl.Threading;
 import java.awt.Component;
 import java.awt.Window;
+import java.util.ArrayList;
 import java.util.List;
 import javax.swing.Action;
 import javax.swing.Icon;
 import javax.swing.JButton;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -55,6 +57,7 @@ import org.weasis.dicom.codec.DicomMediaIO;
 import org.weasis.dicom.explorer.main.DicomExplorer;
 import org.weasis.dicom.viewer2d.EventManager;
 import org.weasis.dicom.viewer3d.vr.OpenglUtils;
+import org.weasis.dicom.viewer3d.vr.SoftwareGl;
 
 @org.osgi.service.component.annotations.Component(service = SeriesViewerFactory.class)
 public class View3DFactory implements SeriesViewerFactory {
@@ -263,7 +266,9 @@ public class View3DFactory implements SeriesViewerFactory {
             "OpenGL {} does not support compute shaders (requires 4.3). Using FBO-based fragment shader fallback.",
             openGLInfo.shortVersion());
       }
-      if (openGLInfo.looksSoftware()) {
+      if (SoftwareGl.isActive()) {
+        LOGGER.info("Software 3D: drawing with {}", openGLInfo.renderer());
+      } else if (openGLInfo.looksSoftware()) {
         throw new IllegalStateException(
             "The OpenGL renderer seems to be a software renderer without real GPU: "
                 + openGLInfo.renderer());
@@ -297,6 +302,19 @@ public class View3DFactory implements SeriesViewerFactory {
     return GuiUtils.getUICore().getLocalPersistence().getBooleanProperty(P_FORCE_FBO, false);
   }
 
+  /**
+   * Addis Ortho: turns software 3D on or off for the next start. Turning it on also re-enables
+   * OpenGL, which the failed hardware check switched off.
+   */
+  public static void useSoftwareGl(boolean use) {
+    SoftwareGl.setChosen(use);
+    if (use) {
+      WProperties localPersistence = GuiUtils.getUICore().getLocalPersistence();
+      localPersistence.putBooleanProperty(P_OPENGL_PREV_INIT, true);
+      localPersistence.putBooleanProperty(P_OPENGL_ENABLE, true);
+    }
+  }
+
   public static void showOpenglErrorMessage(Component parent) {
     String msg = Messages.getString("opengl.error.msg");
     JButton prefButton = new JButton(Messages.getString("check.in.preferences"));
@@ -309,8 +327,38 @@ public class View3DFactory implements SeriesViewerFactory {
           dialog.showPage(NAME);
           ColorLayerUI.showCenterScreen(dialog, layer);
         });
+    List<JComponent> items = new ArrayList<>();
+    items.add(new JLabel(msg));
+    // Addis Ortho: name the graphics chip that failed, and offer software 3D where it is installed.
+    OpenGLInfo info = openGLInfo;
+    if (info != null) {
+      items.add(
+          new JLabel(
+              Messages.getString("graphic.card")
+                  + StringUtil.COLON_AND_SPACE
+                  + info.renderer()
+                  + ", OpenGL "
+                  + info.shortVersion()));
+    }
+    if (SoftwareGl.isAvailable() && !SoftwareGl.isChosen()) {
+      items.add(new JLabel(Messages.getString("software.3d.offer")));
+      JButton softwareButton = new JButton(Messages.getString("software.3d.use"));
+      softwareButton.addActionListener(
+          e -> {
+            useSoftwareGl(true);
+            SwingUtilities.getWindowAncestor(softwareButton).dispose();
+            JOptionPane.showMessageDialog(
+                WinUtil.getValidComponent(parent),
+                Messages.getString("software.3d.restart"),
+                NAME,
+                JOptionPane.INFORMATION_MESSAGE);
+          });
+      items.add(softwareButton);
+    }
+    items.add(prefButton);
     JPanel panel =
-        GuiUtils.getVerticalBoxLayoutPanel(GuiUtils.getScaleLength(7), new JLabel(msg), prefButton);
+        GuiUtils.getVerticalBoxLayoutPanel(
+            GuiUtils.getScaleLength(7), items.toArray(new JComponent[0]));
     JOptionPane.showMessageDialog(
         WinUtil.getValidComponent(parent),
         panel,

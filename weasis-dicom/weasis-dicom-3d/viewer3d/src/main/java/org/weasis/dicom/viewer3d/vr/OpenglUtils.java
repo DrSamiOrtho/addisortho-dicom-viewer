@@ -17,6 +17,8 @@ public class OpenglUtils {
   private static final Logger LOGGER = LoggerFactory.getLogger(OpenglUtils.class);
 
   static {
+    // Addis Ortho: software 3D must replace opengl32.dll before JOGL loads it.
+    SoftwareGl.loadIfChosen();
     GLProfile.initSingleton();
   }
 

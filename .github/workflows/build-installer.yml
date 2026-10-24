@@ -172,6 +172,31 @@ jobs:
             echo "No deployment specific preparation"
           fi
 
+      - name: Add the Mesa software renderer (Windows only)
+        # Addis Ortho: software 3D for PCs whose graphics chip has no OpenGL 3.3 (Intel HD 2000/3000).
+        # The viewer loads these two DLLs from app/mesa only when the user chooses software 3D.
+        # Mesa is MIT licensed; these are the pal1000/mesa-dist-win MSVC builds, checked by SHA-256.
+        if: matrix.wsystem == 'windows'
+        shell: bash
+        env:
+          MESA_VERSION: "26.2.3"
+          MESA_SHA256: "3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o mesa.7z "https://github.com/pal1000/mesa-dist-win/releases/download/${MESA_VERSION}/mesa3d-${MESA_VERSION}-release-msvc.7z"
+          echo "${MESA_SHA256}  mesa.7z" | sha256sum -c -
+          7z e -y -omesa-x64 mesa.7z x64/opengl32.dll x64/libgallium_wgl.dll
+          dest="${{ env.WEASIS_INPUT_BIN }}/mesa"
+          mkdir -p "$dest"
+          cp mesa-x64/opengl32.dll mesa-x64/libgallium_wgl.dll "$dest/"
+          cat > "$dest/README.txt" <<EOF
+          Mesa ${MESA_VERSION} software OpenGL renderer (llvmpipe), used by Addis Ortho Viewer only when
+          "Software 3D" is chosen, for graphics chips without OpenGL 3.3.
+          Binaries: https://github.com/pal1000/mesa-dist-win (MIT licence)
+          Source: https://gitlab.freedesktop.org/mesa/mesa (MIT licence, https://docs.mesa3d.org/license.html)
+          EOF
+          ls -la "$dest"
+
       - name: Import Developer Certificate
         uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466  # v7
         if: matrix.wsystem == 'macosx' && env.MAC_SIGN == 'yes'
@@ -327,6 +352,75 @@ jobs:
           fi
 
           echo "$(ls -la ${{ env.WEASIS_OUTPUT }})"
+
+      - name: Prove software 3D on a PC without a graphics driver (Windows only)
+        # The Windows runner has no GPU driver (OpenGL 1.1 "GDI Generic"), like a PC whose chip is
+        # too old. JOGL must fail there on its own, and reach OpenGL 4.x through the bundled Mesa
+        # once the viewer's loading order (libgallium_wgl.dll, then opengl32.dll) is applied.
+        if: matrix.wsystem == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p gl-probe && cd gl-probe
+          base=https://repo1.maven.org/maven2/org/jogamp
+          for j in gluegen/gluegen-rt/2.6.0/gluegen-rt-2.6.0 jogl/jogl-all/2.6.0/jogl-all-2.6.0; do
+            curl -fsSLO "$base/$j.jar"
+            curl -fsSLO "$base/$j-natives-windows-amd64.jar"
+          done
+          cat > GlProbe.java <<'EOF'
+          import com.jogamp.opengl.*;
+          import java.nio.file.Path;
+
+          public class GlProbe {
+            public static void main(String[] args) {
+              if (args.length > 0) {
+                Path dir = Path.of(args[0]);
+                System.load(dir.resolve("libgallium_wgl.dll").toAbsolutePath().toString());
+                System.load(dir.resolve("opengl32.dll").toAbsolutePath().toString());
+              }
+              GLProfile.initSingleton();
+              GLProfile profile;
+              try {
+                profile = GLProfile.get(GLProfile.GL4);
+              } catch (Exception e) {
+                profile = GLProfile.get(GLProfile.GL3);
+              }
+              GLDrawable drawable = GLDrawableFactory.getFactory(profile)
+                  .createOffscreenDrawable(null, new GLCapabilities(profile), null, 1, 1);
+              drawable.setRealized(true);
+              GLContext ctx = drawable.createContext(null);
+              ctx.makeCurrent();
+              GL gl = ctx.getGL();
+              int[] tex = new int[1];
+              gl.glGetIntegerv(GL2ES2.GL_MAX_3D_TEXTURE_SIZE, tex, 0);
+              System.out.println("PROBE profile=" + profile.getName()
+                  + " version=" + gl.glGetString(GL.GL_VERSION)
+                  + " renderer=" + gl.glGetString(GL.GL_RENDERER)
+                  + " max3d=" + tex[0]);
+              if (gl.isGL4()) {
+                GL4 gl4 = gl.getGL4();
+                int sh = gl4.glCreateShader(GL4.GL_COMPUTE_SHADER);
+                gl4.glShaderSource(sh, 1, new String[] {
+                    "#version 430\nlayout(local_size_x=1) in;\nvoid main(){}\n"}, null);
+                gl4.glCompileShader(sh);
+                int[] ok = new int[1];
+                gl4.glGetShaderiv(sh, GL4.GL_COMPILE_STATUS, ok, 0);
+                System.out.println("PROBE compute shader compiled=" + (ok[0] != 0));
+              }
+              ctx.release();
+              System.exit(0);
+            }
+          }
+          EOF
+          cp="gluegen-rt-2.6.0.jar;jogl-all-2.6.0.jar"
+          echo "--- System OpenGL (expected to fail or be below 3.3)"
+          java -cp "$cp" GlProbe.java 2>&1 | tail -5 || true
+          echo "--- Bundled Mesa from the app image"
+          mesa="../${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}/app/mesa"
+          out=$(java -cp "$cp" GlProbe.java "$mesa" 2>&1 | tail -5)
+          echo "$out"
+          echo "$out" | grep -q "renderer=llvmpipe" || { echo "Mesa was not used"; exit 1; }
+          echo "$out" | grep -qE "version=4\.[3-9]" || { echo "Mesa did not give OpenGL 4.3 or later"; exit 1; }
 
       - name: Build package with jpackage
         shell: bash

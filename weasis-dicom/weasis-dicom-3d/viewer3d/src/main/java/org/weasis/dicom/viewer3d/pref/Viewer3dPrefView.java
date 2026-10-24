@@ -41,6 +41,7 @@ import org.weasis.dicom.viewer3d.View3DFactory;
 import org.weasis.dicom.viewer3d.geometry.Camera;
 import org.weasis.dicom.viewer3d.geometry.CameraView;
 import org.weasis.dicom.viewer3d.vr.RenderingLayer;
+import org.weasis.dicom.viewer3d.vr.SoftwareGl;
 
 public class Viewer3dPrefView extends AbstractItemDialogPage {
   private final JCheckBox enableOpenGL = new JCheckBox(Messages.getString("enable"));
@@ -53,6 +54,7 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
 
   private final JComboBox<CameraView> comboBoxOrientations = new JComboBox<>(CameraView.values());
   private final JCheckBox openOnBone = new JCheckBox(Messages.getString("open.bone"));
+  private final JCheckBox softwareGl = new JCheckBox(Messages.getString("software.3d"));
   private final JSpinner spinnerMaxXY;
   private final JSpinner spinnerMaxZ;
 
@@ -125,6 +127,12 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
     enableOpenGL.setSelected(View3DFactory.isOpenglEnable());
     openglPanel.add(
         GuiUtils.getFlowLayoutPanel(ITEM_SEPARATOR_SMALL, ITEM_SEPARATOR, enableOpenGL));
+    // Addis Ortho: software 3D, for Windows PCs whose graphics chip has no OpenGL 3.3.
+    if (SoftwareGl.isAvailable()) {
+      softwareGl.setSelected(SoftwareGl.isChosen());
+      openglPanel.add(
+          GuiUtils.getFlowLayoutPanel(ITEM_SEPARATOR_SMALL, ITEM_SEPARATOR, softwareGl));
+    }
 
     OpenGLInfo info = View3DFactory.getOpenGLInfo();
     if (info == null) {
@@ -158,7 +166,11 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
       // This minimal version must match with the shader version
       Version minimalVersion = new Version(3, 3, 0);
       boolean versionIssue = !info.isVersionCompliant();
-      boolean software = info.looksSoftware();
+      boolean software = info.looksSoftware() && !SoftwareGl.isActive();
+      if (SoftwareGl.isActive()) {
+        openglPanel.add(
+            GuiUtils.getFlowLayoutPanel(new JLabel(Messages.getString("software.3d.active"))));
+      }
 
       if (versionIssue || software || info.max3dTextureSize() < RenderingLayer.MIN_TEXTURE_SIZE) {
         String alert =
@@ -312,6 +324,12 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
         RenderingLayer.P_MAX_TEX_Z,
         spinnerMaxZ.getValue() instanceof Integer val ? val : View3DFactory.getMax3dTextureSize());
     localPersistence.putBooleanProperty(RenderingLayer.P_OPEN_CT_ON_BONE, openOnBone.isSelected());
+    if (SoftwareGl.isAvailable() && softwareGl.isSelected() != SoftwareGl.isChosen()) {
+      View3DFactory.useSoftwareGl(softwareGl.isSelected());
+      if (softwareGl.isSelected()) {
+        enableOpenGL.setSelected(true);
+      }
+    }
     boolean openglEnabled = enableOpenGL.isSelected();
     if (openglEnabled && !View3DFactory.isOpenglEnable()) {
       localPersistence.putBooleanProperty(View3DFactory.P_OPENGL_PREV_INIT, true);

@@ -100,9 +100,9 @@ public class DicomVolTextureFactory {
     WProperties localPersistence = GuiUtils.getUICore().getLocalPersistence();
     int maxTexSize = View3DFactory.getMax3dTextureSize();
     // Addis Ortho: the Lite edition (PCs with 4 GB of RAM) builds a smaller 3D texture unless the
-    // user chose a size in the 3D preferences.
+    // user chose a size in the 3D preferences. Software 3D (drawn by the processor) does the same.
     int defaultSize =
-        RenderingLayer.isLite()
+        RenderingLayer.isLite() || SoftwareGl.isActive()
             ? Math.min(maxTexSize, RenderingLayer.LITE_MAX_TEXTURE)
             : maxTexSize;
     int maxSizeXY = localPersistence.getIntProperty(RenderingLayer.P_MAX_TEX_XY, defaultSize);
