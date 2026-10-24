@@ -455,10 +455,11 @@ jobs:
             if grep -rqs -E "Video card for OpenGL|Cannot init OpenGL" "$USERPROFILE/.weasis" 2>/dev/null; then break; fi
           done
           sleep 5
-          grep -rhs -E "Software 3D|Video card for OpenGL|OpenGL context created|Cannot init OpenGL|IllegalState" "$USERPROFILE/.weasis" | cut -c1-300 | head -20
+          log=$(grep -rhs -E "Software 3D|Video card for OpenGL|OpenGL context created|Cannot init OpenGL|IllegalState" "$USERPROFILE/.weasis" | cut -c1-300 | head -20)
+          echo "$log"
           taskkill //F //T //PID $pid >/dev/null 2>&1 || true
           taskkill //F //IM "${{ env.NAME }}.exe" >/dev/null 2>&1 || true
-          grep -rqs "Software 3D: drawing with llvmpipe" "$USERPROFILE/.weasis" || { echo "The viewer did not reach llvmpipe"; exit 1; }
+          echo "$log" | grep -q "Software 3D: drawing with llvmpipe" || { echo "The viewer did not reach llvmpipe"; exit 1; }
 
       - name: Build package with jpackage
         shell: bash
