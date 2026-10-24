@@ -7,15 +7,13 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer.imp;
 
 import com.formdev.flatlaf.util.SystemFileChooser;
-import com.formdev.flatlaf.util.SystemInfo;
 import java.awt.Dialog;
 import java.io.File;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import javax.swing.JButton;
@@ -69,9 +67,14 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
           }
         });
     checkboxWriteInCache = new JCheckBox(Messages.getString("DicomDirImport.cache"));
+    JCheckBox checkboxAutoImport =
+        new JCheckBox(Messages.getString("DicomDirImport.auto"), DiscWatcher.isEnabled());
+    checkboxAutoImport.addActionListener(
+        e -> DiscWatcher.setEnabled(checkboxAutoImport.isSelected()));
 
     add(GuiUtils.getFlowLayoutPanel(ITEM_SEPARATOR_SMALL, ITEM_SEPARATOR, btnCdrom));
     add(GuiUtils.getFlowLayoutPanel(ITEM_SEPARATOR_SMALL, ITEM_SEPARATOR, checkboxWriteInCache));
+    add(GuiUtils.getFlowLayoutPanel(ITEM_SEPARATOR_SMALL, ITEM_SEPARATOR, checkboxAutoImport));
 
     add(GuiUtils.boxYLastElement(LAST_FILLER_HEIGHT));
   }
@@ -201,48 +204,16 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
     return loadSeries;
   }
 
-  private static void addFiles(List<File> dvs, File folder) {
-    if (folder.canRead()) {
-      File[] files = folder.listFiles();
-      if (files != null) {
-        Collections.addAll(dvs, files);
-      }
-    }
-  }
-
   public static File getDcmDirFromMedia() {
-    final List<File> dvs = new ArrayList<>();
-    try {
-      if (SystemInfo.isWindows) {
-        dvs.addAll(Arrays.asList(File.listRoots()));
-      } else if (SystemInfo.isMacOS) {
-        addFiles(dvs, new File("/Volumes"));
-      } else {
-        addFiles(dvs, new File("/media"));
-        addFiles(dvs, new File("/mnt"));
-        String user = System.getProperty("user.name", "local"); // NON-NLS
-        addFiles(dvs, new File("/media/" + user));
-        addFiles(dvs, new File("/run/media/" + user));
-      }
-    } catch (Exception e) {
-      LOGGER.error("Error when reading device directories: {}", e.getMessage());
-    }
-
+    List<File> dvs = DiscDrive.mountedRoots();
     Collections.reverse(dvs);
-    String[] dicomdir = {"DICOMDIR", "dicomdir", "DICOMDIR.", "dicomdir."}; // NON-NLS
-
     for (File drive : dvs) {
       // Detect read-only media
-      if (drive.canRead() && !drive.isHidden()) {
-        for (String s : dicomdir) {
-          File f = new File(drive, s);
-          if (f.canRead() && !f.canWrite()) {
-            return f;
-          }
-        }
+      File f = DiscDrive.findReadOnlyDicomDir(drive);
+      if (f != null) {
+        return f;
       }
     }
-
     return null;
   }
 }

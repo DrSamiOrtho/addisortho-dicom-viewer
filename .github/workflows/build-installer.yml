@@ -210,6 +210,17 @@ jobs:
           # JDK_MODULES, customOptions and commonOptions are shared with package-weasis.sh
           source "${{ env.WEASIS_SCRIPT }}/launch-options.sh" "$machine" "${{ env.LITE }}"
 
+          # jpackage takes the icon, the Windows file properties and the pkg backgrounds from files
+          # named after the app ("<name>.ico", "<name>.icns"...). Give the Lite edition copies of
+          # the full edition's, or its launcher, shortcuts and taskbar show the generic Java icon.
+          if [ "${{ env.NAME }}" != "Addis Ortho Viewer" ] ; then
+            for f in "$RES"/"Addis Ortho Viewer"*; do
+              [ -f "$f" ] || continue
+              cp -f "$f" "$RES/${{ env.NAME }}${f#"$RES/Addis Ortho Viewer"}"
+            done
+            ls -la "$RES"
+          fi
+
           declare -a signArgs=()
           if [ "$machine" = "macosx" ] && [ "$MAC_SIGN" != "yes" ] ; then
             echo "No Apple signing certificate: building an unsigned app bundle"

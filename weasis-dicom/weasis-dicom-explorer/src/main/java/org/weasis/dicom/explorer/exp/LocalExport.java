@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer.exp;
 
 import com.formdev.flatlaf.util.SystemFileChooser;
@@ -89,6 +90,7 @@ import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.codec.TransferSyntax;
 import org.weasis.dicom.codec.display.WindowAndPresetsOp;
 import org.weasis.dicom.explorer.DicomModel;
+import org.weasis.dicom.explorer.DiscDrive;
 import org.weasis.dicom.explorer.HangingProtocols;
 import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.LocalPersistence;
@@ -511,6 +513,10 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
                 }
               } else {
                 writeOther(this, exportDir, model, format, pref);
+              }
+              // Written straight onto a CD/DVD: eject it, ready to hand over.
+              if (!isCancelled() && DiscDrive.isOnDisc(exportDir.toPath())) {
+                DiscDrive.eject(exportDir.toPath());
               }
               return true;
             }
