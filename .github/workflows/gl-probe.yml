@@ -3,11 +3,9 @@ name: Software 3D probe (Windows)
 # Addis Ortho: quick check that JOGL reaches OpenGL through the bundled Mesa on a Windows machine
 # without a GPU driver. The installer build runs the same probe; this one is for debugging.
 on:
-  workflow_dispatch:
-    inputs:
-      java_opts:
-        description: 'Extra JVM options for the Mesa run'
-        default: ''
+  push:
+    branches: ['addisortho/software-3d']
+    paths: ['.github/gl-probe/**', '.github/workflows/gl-probe.yml']
 
 permissions:
   contents: read
@@ -26,7 +24,6 @@ jobs:
         env:
           MESA_VERSION: "26.2.3"
           MESA_SHA256: "3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-          JAVA_OPTS_IN: ${{ inputs.java_opts }}
         run: |
           set -uo pipefail
           curl -fsSL -o mesa.7z "https://github.com/pal1000/mesa-dist-win/releases/download/${MESA_VERSION}/mesa3d-${MESA_VERSION}-release-msvc.7z"
@@ -38,4 +35,4 @@ jobs:
           done
           cp .github/gl-probe/GlProbe.java .
           cp="gluegen-rt-2.6.0.jar;jogl-all-2.6.0.jar"
-          java $JAVA_OPTS_IN -cp "$cp" GlProbe.java mesa 2>&1 | grep -v "^WARNING" | head -300
+          java $(cat .github/gl-probe/java-opts.txt) -cp "$cp" GlProbe.java mesa 2>&1 | grep -v "^WARNING" | head -300

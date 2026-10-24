@@ -1,0 +1,1 @@
+-Djogamp.debug.NativeLibrary=true -Djogl.debug.GLContext=true -Djogl.debug.GLDrawable=true
