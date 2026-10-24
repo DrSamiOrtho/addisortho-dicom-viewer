@@ -193,6 +193,7 @@ public final class VolumeBuilder {
         if (volTexture.getId() <= 0) {
           volTexture.init(gl);
         }
+        clearStaleErrors(gl);
         // See https://docs.gl/gl4/glTexSubImage3D
         gl.glTexSubImage3D(
             GL2ES2.GL_TEXTURE_3D,
@@ -208,15 +209,52 @@ public final class VolumeBuilder {
             textureSliceData.buffer());
         int error;
         if ((error = gl.glGetError()) != 0) {
-          LOGGER.error(
-              "Cannot load volume ({} images) in OpenGL texture3D. OpenGL error: {}",
-              volTexture.getDepth(),
-              Error.gluErrorString(error));
-          volumeBuilder.hasError = true;
-          volumeBuilder.stop();
+          fail(
+              String.format(
+                  "OpenGL error %s on slices %d to %d",
+                  Error.gluErrorString(error), offset, offset + slices.size() - 1),
+              null);
         }
       } finally {
         textureSliceData.releaseMemory();
+      }
+    }
+
+    /**
+     * Drops the errors left by earlier calls in this shared context (the renderer of another 3D
+     * view, a mask upload), so that only an error of this upload stops the load.
+     */
+    private static void clearStaleErrors(GL2ES3 gl) {
+      for (int i = 0; i < 16; i++) {
+        int error = gl.glGetError();
+        if (error == 0) {
+          return;
+        }
+        LOGGER.debug(
+            "Stale OpenGL error before the volume upload: {}", Error.gluErrorString(error));
+      }
+    }
+
+    /**
+     * Stops the load and says so: the texture then holds only the slices uploaded so far, which the
+     * view must not show as the whole volume.
+     */
+    private void fail(String reason, Throwable cause) {
+      if (isSuperseded()) {
+        return;
+      }
+      DicomVolTexture volTexture = volumeBuilder.volTexture;
+      LOGGER.error(
+          "The 3D volume ({} slices) did not load: {}", volTexture.getDepth(), reason, cause);
+      volumeBuilder.hasError = true;
+      volumeBuilder.stop();
+      volTexture.notifyLoadFailed();
+      if (EventManager.getInstance().getSelectedViewPane() instanceof View3d view3d) {
+        GuiExecutor.execute(
+            () -> {
+              view3d.setProgressBar(null);
+              view3d.repaint();
+            });
       }
     }
 
@@ -274,24 +312,19 @@ public final class VolumeBuilder {
     public void run() {
       try {
         loadVolume();
-      } catch (RuntimeException e) {
+      } catch (RuntimeException | OutOfMemoryError e) {
         if (isSuperseded()) {
           // Interrupted by a rebuild, which now owns the texture and the builder state.
           LOGGER.debug("Superseded 3D volume load ended", e);
           return;
         }
-        LOGGER.error("Cannot build the 3D volume texture", e);
-        volumeBuilder.hasError = true;
-        volumeBuilder.stop();
-        if (EventManager.getInstance().getSelectedViewPane() instanceof View3d view3d) {
-          view3d.setProgressBar(null);
-          GuiExecutor.execute(view3d::repaint);
-        }
+        fail("cannot build the texture", e);
       }
     }
 
     private void loadVolume() {
       DicomVolTexture volTexture = volumeBuilder.volTexture;
+      volTexture.clearLoadFailed();
       final int size = volTexture.getDepth();
       List<SpecialElementRegion> segList = null;
       ViewCanvas<DicomImageElement> view = EventManager.getInstance().getSelectedViewPane();
@@ -326,13 +359,15 @@ public final class VolumeBuilder {
 
       Volume<?, ?> v = volTexture.getVolume();
       Vector3i vSize = v.getSize();
-      double step = (double) vSize.z / volTexture.depth;
       for (int i = volTexture.depth - 1; i >= 0; i--) {
         if (isInterrupted()) {
           return;
         }
         Instant start = Instant.now();
-        int index = (int) Math.floor(i * step);
+        // Slice i is uploaded at texture depth - 1 - i; VolumeSpace shares this convention.
+        int index =
+            VolumeSpace.sourceSliceOfTextureSlice(
+                volTexture.depth - 1 - i, volTexture.depth, vSize.z);
         PlanarImage imageMLUT = volTexture.getScaledImage(v.getAxialSlice(index));
         LOGGER.debug(
             "Time preparation of {}: {} ms", i, Duration.between(start, Instant.now()).toMillis());
@@ -364,6 +399,12 @@ public final class VolumeBuilder {
       }
       stager.flush();
       if (isSuperseded()) {
+        return;
+      }
+      if (stager.sliceOffset != volTexture.getDepth()) {
+        fail(
+            String.format("%d of %d slices uploaded", stager.sliceOffset, volTexture.getDepth()),
+            null);
         return;
       }
 

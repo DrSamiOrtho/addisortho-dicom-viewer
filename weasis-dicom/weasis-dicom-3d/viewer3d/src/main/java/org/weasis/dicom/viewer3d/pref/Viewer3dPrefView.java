@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.pref;
 
 import java.awt.Color;
@@ -51,6 +52,7 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
       new JComboBox<>(View3DContainer.LAYOUT_LIST.toArray(new MigLayoutModel[0]));
 
   private final JComboBox<CameraView> comboBoxOrientations = new JComboBox<>(CameraView.values());
+  private final JCheckBox openOnBone = new JCheckBox(Messages.getString("open.bone"));
   private final JSpinner spinnerMaxXY;
   private final JSpinner spinnerMaxZ;
 
@@ -250,6 +252,12 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
             labelLayout,
             comboBoxOrientations));
 
+    openOnBone.setToolTipText(Messages.getString("open.bone.tip"));
+    openOnBone.setSelected(
+        localPersistence.getBooleanProperty(
+            RenderingLayer.P_OPEN_CT_ON_BONE, RenderingLayer.DEFAULT_OPEN_CT_ON_BONE));
+    otherPanel.add(GuiUtils.getFlowLayoutPanel(openOnBone));
+
     otherPanel.add(
         GuiUtils.getFlowLayoutPanel(
             new JLabel(Messages.getString("bck.color")),
@@ -279,7 +287,7 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
   private Color getBackgroundColor() {
     return GuiUtils.getUICore()
         .getSystemPreferences()
-        .getColorProperty(RenderingLayer.P_BCK_COLOR, Color.GRAY);
+        .getColorProperty(RenderingLayer.P_BCK_COLOR, RenderingLayer.DEFAULT_BCK_COLOR);
   }
 
   private Color getLightColor() {
@@ -303,6 +311,7 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
     localPersistence.putIntProperty(
         RenderingLayer.P_MAX_TEX_Z,
         spinnerMaxZ.getValue() instanceof Integer val ? val : View3DFactory.getMax3dTextureSize());
+    localPersistence.putBooleanProperty(RenderingLayer.P_OPEN_CT_ON_BONE, openOnBone.isSelected());
     boolean openglEnabled = enableOpenGL.isSelected();
     if (openglEnabled && !View3DFactory.isOpenglEnable()) {
       localPersistence.putBooleanProperty(View3DFactory.P_OPENGL_PREV_INIT, true);
@@ -319,13 +328,14 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
     WProperties preferences = GuiUtils.getUICore().getSystemPreferences();
     WProperties localPersistence = GuiUtils.getUICore().getLocalPersistence();
     enableOpenGL.setSelected(true);
+    openOnBone.setSelected(RenderingLayer.DEFAULT_OPEN_CT_ON_BONE);
     sliderDynamic.setValue(RenderingLayer.DEFAULT_DYNAMIC_QUALITY_RATE);
     int maxSize = View3DFactory.getMax3dTextureSize();
     localPersistence.putIntProperty(RenderingLayer.P_MAX_TEX_XY, maxSize);
     localPersistence.putIntProperty(RenderingLayer.P_MAX_TEX_Z, maxSize);
     spinnerMaxXY.setValue(maxSize);
     spinnerMaxZ.setValue(maxSize);
-    preferences.putColorProperty(RenderingLayer.P_BCK_COLOR, Color.GRAY);
+    preferences.putColorProperty(RenderingLayer.P_BCK_COLOR, RenderingLayer.DEFAULT_BCK_COLOR);
     preferences.putColorProperty(RenderingLayer.P_LIGHT_COLOR, Color.WHITE);
     preferences.put(View3DFactory.P_DEFAULT_LAYOUT, View3DContainer.VIEWS_vr.getId());
     preferences.put(Camera.P_DEFAULT_ORIENTATION, CameraView.INITIAL.name());

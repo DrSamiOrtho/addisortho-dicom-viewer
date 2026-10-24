@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer.main;
 
 import bibliothek.gui.dock.common.CLocation;
@@ -62,6 +63,7 @@ import org.weasis.dicom.explorer.Messages;
 import org.weasis.dicom.explorer.exp.ExplorerTask;
 import org.weasis.dicom.explorer.exp.ExportToolBar;
 import org.weasis.dicom.explorer.imp.ImportToolBar;
+import org.weasis.dicom.explorer.index.FindPatientDialog;
 import org.weasis.dicom.explorer.pref.download.DicomExplorerPrefView;
 
 public class DicomExplorer extends PluginTool
@@ -257,6 +259,14 @@ public class DicomExplorer extends PluginTool
       // Small preferred width so the combos grow to fill the panel but never drive its width
       JPanel patientBar = new JPanel(new MigLayout("ins 1, fillx", "[grow,fill]", "")); // NON-NLS
       patientBar.add(patientCombobox, "growx, width 30lp:30lp:250lp"); // NON-NLS
+      // Addis Ortho: find a patient among the studies stored on this computer.
+      JButton findOnComputer =
+          new JButton(ResourceUtil.getIcon(ResourceUtil.ActionIcon.IMPORT_DICOM));
+      findOnComputer.setToolTipText(Messages.getString("index.button.tip"));
+      findOnComputer.putClientProperty(
+          FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_TOOLBAR_BUTTON);
+      findOnComputer.addActionListener(_ -> FindPatientDialog.show(this, model));
+      patientBar.add(findOnComputer);
       panelMain.add(patientBar, "newline, spanx, growx"); // NON-NLS
 
       filterBar = new JPanel(new MigLayout("ins 1, fillx", "[grow,fill]", "")); // NON-NLS

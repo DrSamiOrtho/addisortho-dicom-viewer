@@ -7,37 +7,24 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.launcher;
 
-import com.formdev.flatlaf.IntelliJTheme;
-import com.formdev.flatlaf.IntelliJTheme.ThemeLaf;
-import com.formdev.flatlaf.util.LoggingFacade;
-import java.io.IOException;
-import java.util.Objects;
+import com.formdev.flatlaf.FlatDarkLaf;
 
-public class FlatWeasisTheme extends ThemeLaf {
+/**
+ * The Addis Ortho dark theme. Its colours and shapes are in {@code
+ * org/weasis/theme/FlatWeasisTheme.properties}, loaded through the custom defaults source
+ * registered in {@link LookAndFeels}. The class name is kept because it is the stored {@code
+ * weasis.theme} preference.
+ */
+public class FlatWeasisTheme extends FlatDarkLaf {
   public static boolean setup() {
     return setup(new FlatWeasisTheme());
   }
 
-  public FlatWeasisTheme() {
-    super(loadTheme("Weasis.theme.json"));
-  }
-
   @Override
   public String getName() {
-    return "Weasis"; // NON-NLS
-  }
-
-  static IntelliJTheme loadTheme(String name) {
-    try {
-      return new IntelliJTheme(
-          Objects.requireNonNull(
-              FlatWeasisTheme.class.getResourceAsStream("/org/weasis/theme/" + name))); // NON-NLS
-    } catch (IOException var3) {
-      String msg = "FlatLaf: Failed to load Weasis theme"; // NON-NLS
-      LoggingFacade.INSTANCE.logSevere(msg, var3);
-      throw new RuntimeException(msg, var3);
-    }
+    return "Addis Ortho"; // NON-NLS
   }
 }

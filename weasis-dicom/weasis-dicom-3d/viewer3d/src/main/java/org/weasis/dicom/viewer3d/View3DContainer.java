@@ -225,12 +225,8 @@ public class View3DContainer extends DicomViewerPlugin
           key,
           true)) {
         toolBars.add(
-            new ViewerToolBar<>(
-                eventManager,
-                eventManager.getMouseActions().getActiveButtons(),
-                preferences,
-                10,
-                false));
+            new View3dViewerToolBar(
+                eventManager, eventManager.getMouseActions().getActiveButtons(), preferences, 10));
       }
       //      if (InsertableUtil.getBooleanProperty(
       //          GuiUtils.getUICore().getSystemPreferences(),
@@ -276,6 +272,15 @@ public class View3DContainer extends DicomViewerPlugin
           key,
           true)) {
         toolBars.add(new View3DToolbar(50));
+      }
+      if (InsertableUtil.getBooleanProperty(
+          preferences,
+          bundleName,
+          componentName,
+          InsertableUtil.getCName(Volume3dToolBar.class),
+          key,
+          true)) {
+        toolBars.add(new Volume3dToolBar(60));
       }
 
       List<DockableTool> tools = UI.tools;
@@ -548,7 +553,9 @@ public class View3DContainer extends DicomViewerPlugin
   public void propertyChange(final PropertyChangeEvent event) {
     String command = event.getPropertyName();
     boolean fullyLoaded = DicomVolTextureFactory.FULLY_LOADED.equals(command);
-    if (fullyLoaded || DicomVolTextureFactory.PARTIALLY_LOADED.equals(command)) {
+    if (fullyLoaded
+        || DicomVolTextureFactory.PARTIALLY_LOADED.equals(command)
+        || DicomVolTextureFactory.LOAD_FAILED.equals(command)) {
       if (event.getNewValue() instanceof DicomVolTexture texture) {
         for (var view : cellManager) {
           if (view instanceof View3d v) {

@@ -77,7 +77,7 @@ async function inflateRaw(bytes, limit) {
 }
 
 // The entries of an archive: Map name -> Uint8Array (a stored entry is a view into u8, not a copy).
-export async function unzip(u8, { maxEntries = 4, maxTotal = 45 * 1024 * 1024 } = {}) {
+export async function unzip(u8, { maxEntries = 4, maxTotal = 85 * 1024 * 1024 } = {}) {
   if (!(u8 instanceof Uint8Array) || u8.length < 22) throw new ZipError('not a project file (too short)');
   const v = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), dec = new TextDecoder('utf-8', { fatal: true });
   let e = -1;

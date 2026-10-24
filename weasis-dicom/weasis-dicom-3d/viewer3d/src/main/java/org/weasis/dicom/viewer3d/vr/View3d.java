@@ -33,8 +33,11 @@ import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.FocusEvent;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.AffineTransform;
+import java.awt.geom.Ellipse2D;
+import java.awt.geom.Line2D;
 import java.awt.geom.Point2D;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
@@ -48,20 +51,29 @@ import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import javax.swing.Action;
 import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JPopupMenu;
 import javax.swing.JProgressBar;
+import javax.swing.SwingUtilities;
+import javax.swing.Timer;
 import javax.swing.ToolTipManager;
+import org.dcm4che3.data.Tag;
 import org.dcm4che3.img.lut.PresetWindowLevel;
 import org.joml.Matrix3d;
 import org.joml.Matrix4d;
 import org.joml.Quaterniond;
 import org.joml.Vector3d;
 import org.joml.Vector3f;
+import org.joml.Vector3i;
+import org.joml.Vector4d;
 import org.weasis.core.api.gui.util.ActionState;
 import org.weasis.core.api.gui.util.ActionW;
 import org.weasis.core.api.gui.util.ComboItemListener;
@@ -81,6 +93,8 @@ import org.weasis.core.api.util.FontItem;
 import org.weasis.core.api.util.FontTools;
 import org.weasis.core.ui.editor.image.*;
 import org.weasis.core.ui.editor.image.DefaultView2d.ZoomType;
+import org.weasis.core.ui.editor.image.ViewCanvas;
+import org.weasis.core.ui.editor.image.ViewerPlugin;
 import org.weasis.core.ui.model.graphic.Graphic;
 import org.weasis.core.ui.model.graphic.imp.seg.SegRegion;
 import org.weasis.core.ui.model.layer.LayerAnnotation;
@@ -89,9 +103,12 @@ import org.weasis.core.ui.model.layer.LayerType;
 import org.weasis.core.ui.model.utils.bean.PanPoint;
 import org.weasis.core.util.LangUtil;
 import org.weasis.dicom.codec.DicomImageElement;
+import org.weasis.dicom.codec.DicomMediaIO;
 import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.SpecialElementRegion;
+import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.codec.geometry.PatientOrientation;
+import org.weasis.dicom.codec.seg.LiveSegmentation;
 import org.weasis.dicom.codec.seg.SegBuildScheduler;
 import org.weasis.dicom.codec.seg.SegSpecialElement;
 import org.weasis.dicom.codec.seg.SegmentationVolume;
@@ -105,13 +122,20 @@ import org.weasis.dicom.viewer2d.mpr.Volume;
 import org.weasis.dicom.viewer3d.ActionVol;
 import org.weasis.dicom.viewer3d.EventManager;
 import org.weasis.dicom.viewer3d.InfoLayer3d;
+import org.weasis.dicom.viewer3d.Messages;
 import org.weasis.dicom.viewer3d.OpenGLInfo;
+import org.weasis.dicom.viewer3d.Shortcuts3d;
+import org.weasis.dicom.viewer3d.View3DContainer;
 import org.weasis.dicom.viewer3d.View3DFactory;
 import org.weasis.dicom.viewer3d.dockable.SegmentationTool.Type;
 import org.weasis.dicom.viewer3d.geometry.Axis;
 import org.weasis.dicom.viewer3d.geometry.Camera;
+import org.weasis.dicom.viewer3d.geometry.MouseToolListener;
 import org.weasis.dicom.viewer3d.geometry.View;
+import org.weasis.dicom.viewer3d.vr.Annotations3d.Item;
+import org.weasis.dicom.viewer3d.vr.Annotations3d.Kind;
 import org.weasis.dicom.viewer3d.vr.TextureData.PixelFormat;
+import org.weasis.dicom.viewer3d.vr.VolumePicker.Hit;
 import org.weasis.opencv.data.PlanarImage;
 import org.weasis.opencv.op.lut.LutShape;
 import org.weasis.opencv.seg.RegionAttributes;
@@ -187,7 +211,9 @@ public class View3d extends VolumeCanvas
   private volatile boolean segBuildRunning;
 
   /** Renders the segments from their trilinear occupancy rather than the nearest label voxel. */
-  private volatile boolean segSmooth = true;
+  // Addis Ortho: off in the Lite edition, where the occupancy texture (one byte per voxel) costs
+  // too much memory.
+  private volatile boolean segSmooth = !RenderingLayer.isLite();
 
   /** 1×1×1 placeholder keeping the occupancy sampler unit complete, see bindSegTextures. */
   private int segOccupancyPlaceholderId;
@@ -195,6 +221,78 @@ public class View3d extends VolumeCanvas
   private volatile boolean cropEnabled;
 
   private volatile CropBox cropBox = CropBox.FULL;
+
+  /** Crop box changes and cuts, undone and redone in the order they were made. */
+  private final EditHistory editHistory = new EditHistory();
+
+  /** The crop box before a slider drag began, recorded as one step when the drag ends. */
+  private EditHistory.CropState cropBeforeAdjust;
+
+  /** The volume the crop box was last fitted to the bone for, see {@link #autoCropToBone}. */
+  private DicomVolTexture autoCroppedTexture;
+
+  /** The volume the preset was chosen for, so reloading it keeps the preset. */
+  private DicomVolTexture presetTexture;
+
+  /** {@code true} while an undo or redo replays a step, which must not record a new one. */
+  private boolean replaying;
+
+  /** Name of the preset a CT opens with, see {@link #defaultPresetFor}. */
+  public static final String CT_DEFAULT_PRESET = "AO Bone"; // NON-NLS
+
+  /** Lowest opacity at which a voxel counts as visible for the keep/remove selection. */
+  private static final double VISIBLE_OPACITY = 0.02;
+
+  /** Erosion depth of the light separation of keep/remove, in grid voxels. */
+  private static final int SEPARATION_VOXELS = 2;
+
+  /** The cuts run one at a time, off the event dispatch thread. */
+  private static final ExecutorService CUT_EXECUTOR =
+      Executors.newSingleThreadExecutor(
+          r -> {
+            Thread t = new Thread(r, "3D cuts"); // NON-NLS
+            t.setDaemon(true);
+            return t;
+          });
+
+  /** Voxels left by the scalpel and keep/remove cuts; {@code null} until the first cut. */
+  private volatile KeptMask keptMask; // NOSONAR visibility reference
+
+  private final KeptMaskTexture keptMaskTexture = new KeptMaskTexture();
+  private final Lasso lasso = new Lasso();
+  private final Annotations3d annotations = new Annotations3d();
+  private final AltLassoHandler altLassoHandler = new AltLassoHandler();
+  private final List<ViewSnapshot> snapshots = new ArrayList<>();
+  private int snapshotIndex = -1;
+  private Vector3d lengthStart;
+  private Vector3d arrowStartTex;
+  private double arrowStartDepth;
+  private Point arrowDragPoint;
+  private volatile boolean cutRunning;
+  private volatile String statusMessage;
+  private Timer statusTimer;
+
+  /** The texture field of the shown volume, kept while its texture and smoothing stay the same. */
+  private TextureField sharedField;
+
+  private FieldKey sharedFieldKey;
+
+  /** Picks run here, one at a time, off the event dispatch thread. */
+  private static final ExecutorService PICK_EXECUTOR =
+      Executors.newSingleThreadExecutor(
+          r -> {
+            Thread t = new Thread(r, "3D picking"); // NON-NLS
+            t.setDaemon(true);
+            return t;
+          });
+
+  /** The pick waiting to start, if any; a newer request replaces it (drag coalescing). */
+  private final java.util.concurrent.atomic.AtomicReference<PickRequest> queuedPick =
+      new java.util.concurrent.atomic.AtomicReference<>();
+
+  private volatile PickRequest runningPick;
+  private Timer movieTimer;
+  private boolean lightSeparation;
 
   /**
    * Per-view auto-sync button rendered as a corner overlay. Lazily created the first time {@link
@@ -350,7 +448,10 @@ public class View3d extends VolumeCanvas
         svt.destroy(gl);
         segVolumeTexture = null;
       }
+      keptMaskTexture.destroy(gl);
     }
+    stopMovie();
+    cancelPicks();
     super.disposeView();
   }
 
@@ -380,6 +481,26 @@ public class View3d extends VolumeCanvas
     if (this.volTexture != null) {
       this.volTexture.unregisterCrossHairRelay();
     }
+    if (this.volTexture != volTexture) {
+      // The cuts and the annotations belong to the volume they were made on.
+      keptMask = null;
+      keptMaskTexture.invalidate();
+      editHistory.clear();
+      cropBeforeAdjust = null;
+      autoCroppedTexture = null;
+      presetTexture = null;
+      seedMarker = null;
+      windowBeforePreview = null;
+      sharedField = null;
+      sharedFieldKey = null;
+      cancelPicks();
+      lasso.clear();
+      annotations.clear();
+      lengthStart = null;
+      arrowStartTex = null;
+      snapshots.clear();
+      snapshotIndex = -1;
+    }
     this.volTexture = volTexture;
     subscribeToCrossHairEvents(volTexture);
     if (volTexture != null && mprCrossHairCutMode != CrosshairCutMode.NONE) {
@@ -396,13 +517,29 @@ public class View3d extends VolumeCanvas
           .getAction(ActionVol.VOL_QUALITY)
           .ifPresent(a -> a.setSliderValue(quality, false));
       renderingLayer.setEnableRepaint(true);
-      // The anatomy volume always uses the modality's default preset.
-      setVolumePreset(Preset.getDefaultPreset(volTexture.getModality()));
+      // A new volume opens with the modality's default preset; the same volume loaded again
+      // (the Smooth option rebuilds it) keeps the preset chosen meanwhile (Addis Ortho).
+      Preset preset =
+          presetTexture == volTexture && volumePreset != null
+              ? volumePreset
+              : defaultPresetFor(volTexture.getModality());
+      presetTexture = volTexture;
+      setVolumePreset(preset);
       // (Re)build the segmentation texture for this volume.
       updateSegmentation();
+      maybeAutoCropToBone();
     } else {
       display();
     }
+  }
+
+  /** The preset a volume opens with: the bone preset for a CT, the modality's default otherwise. */
+  public static Preset defaultPresetFor(org.weasis.dicom.codec.display.Modality modality) {
+    if (modality == org.weasis.dicom.codec.display.Modality.CT) {
+      return Preset.findPreset(CT_DEFAULT_PRESET, modality)
+          .orElseGet(() -> Preset.getDefaultPreset(modality));
+    }
+    return Preset.getDefaultPreset(modality);
   }
 
   protected int getDefaultQuality() {
@@ -460,6 +597,55 @@ public class View3d extends VolumeCanvas
     }
     drawProgressBar(g2d, progressBar);
     drawSegLoadingMessage(g2d);
+    drawLoadFailedMessage(g2d);
+    drawTools(g2d);
+  }
+
+  /** Says, for as long as it is so, that only part of the volume reached the GPU. */
+  private void drawLoadFailedMessage(Graphics2D g2d) {
+    DicomVolTexture tex = volTexture;
+    if (tex == null || !tex.isLoadFailed()) {
+      return;
+    }
+    String msg = Messages.getString("volume.load.failed");
+    g2d.setFont(getLayerFont());
+    FontMetrics fm = g2d.getFontMetrics();
+    float x = (getWidth() - fm.stringWidth(msg)) / 2f;
+    float y = fm.getHeight() * 3f;
+    FontTools.paintColorFontOutline(g2d, msg, x, y, Color.ORANGE);
+  }
+
+  /** The lasso, the lengths and arrows, the arrow being dragged and the status of a cut. */
+  private void drawTools(Graphics2D g2d) {
+    if (volTexture == null) {
+      return;
+    }
+    lasso.draw(g2d);
+    drawSeedMarker(g2d);
+    Font font = getLayerFont();
+    annotations.draw(g2d, this::projectTexCoord, font);
+    if (lengthStart != null) {
+      Point2D p = projectTexCoord(lengthStart);
+      if (p != null) {
+        Annotations3d.drawEndMark(g2d, p);
+      }
+    }
+    if (arrowStartTex != null && arrowDragPoint != null) {
+      Point2D a = projectTexCoord(arrowStartTex);
+      if (a != null) {
+        g2d.setFont(font);
+        Annotations3d.drawItem(
+            g2d, new Item(Kind.ARROW, arrowStartTex, arrowStartTex, ""), a, arrowDragPoint);
+      }
+    }
+    String msg = statusMessage;
+    if (msg != null) {
+      g2d.setFont(font);
+      FontMetrics fm = g2d.getFontMetrics();
+      float x = (getWidth() - fm.stringWidth(msg)) / 2f;
+      float y = getHeight() - fm.getHeight() * 3.5f;
+      FontTools.paintColorFontOutline(g2d, msg, x, y, Color.YELLOW);
+    }
   }
 
   /**
@@ -544,7 +730,8 @@ public class View3d extends VolumeCanvas
     Vector3f lColor =
         new Vector3f(
             lightColor.getRed() / 255f, lightColor.getGreen() / 255f, lightColor.getBlue() / 255f);
-    Color bckColor = preferences.getColorProperty(RenderingLayer.P_BCK_COLOR, Color.GRAY);
+    Color bckColor =
+        preferences.getColorProperty(RenderingLayer.P_BCK_COLOR, RenderingLayer.DEFAULT_BCK_COLOR);
     Vector3f bColor =
         new Vector3f(
             bckColor.getRed() / 255f, bckColor.getGreen() / 255f, bckColor.getBlue() / 255f);
@@ -692,6 +879,8 @@ public class View3d extends VolumeCanvas
       program.allocateUniform(gl, "volTexture", (g, loc) -> g.glUniform1i(loc, 0));
       program.allocateUniform(gl, "colorMap", (g, loc) -> g.glUniform1i(loc, 1));
       program.allocateUniform(gl, "lightingMap", (g, loc) -> g.glUniform1i(loc, 2));
+      program.allocateUniform(
+          gl, "keptTexture", (g, loc) -> g.glUniform1i(loc, KeptMaskTexture.UNIT)); // NON-NLS
       // The crosshair overlay derives the viewport pixel resolution from screen-space
       // derivatives of quadCoordinates in volumeFbo.frag, which is robust to the macOS GLJPanel
       // quirk that lets gl_FragCoord range over physical pixels even when the FBO color
@@ -759,6 +948,10 @@ public class View3d extends VolumeCanvas
         gl, "segMaskMode", (g, loc) -> g.glUniform1i(loc, getSegMaskMode())); // NON-NLS
     program.allocateUniform(
         gl,
+        "segTint", // NON-NLS
+        (g, loc) -> g.glUniform1i(loc, segType == Type.BONES && isSegTextureActive() ? 1 : 0));
+    program.allocateUniform(
+        gl,
         "segSegmentCount", // NON-NLS
         (g, loc) -> {
           SegVolumeTexture svt = segVolumeTexture;
@@ -791,6 +984,9 @@ public class View3d extends VolumeCanvas
           CropBox box = getEffectiveCropBox();
           g.glUniform3f(loc, (float) box.maxX(), (float) box.maxY(), (float) box.maxZ());
         });
+    // Kept mask of the scalpel and keep/remove cuts; off until a cut was made
+    program.allocateUniform(
+        gl, "keptEnabled", (g, loc) -> g.glUniform1i(loc, isKeptMaskActive() ? 1 : 0)); // NON-NLS
 
     quadProgram.init(gl);
     // Blit uniforms: the compute path writes its image to unit 0 and always fills it entirely,
@@ -979,6 +1175,7 @@ public class View3d extends VolumeCanvas
         }
         // Bind segmentation overlay textures (units 4 and 5)
         bindSegTextures(gl4);
+        keptMaskTexture.bind(gl4, isKeptMaskActive() ? keptMask : null);
         texture.render(gl4);
         quadProgram.use(gl4);
         quadProgram.setUniforms(gl4);
@@ -1006,6 +1203,7 @@ public class View3d extends VolumeCanvas
         }
         // Bind segmentation overlay textures (units 4 and 5)
         bindSegTextures(gl2);
+        keptMaskTexture.bind(gl2, isKeptMaskActive() ? keptMask : null);
 
         // Set up the vertex array so FboRenderTexture.render() can call glDrawArrays
         gl2.glEnableVertexAttribArray(0);
@@ -1057,13 +1255,26 @@ public class View3d extends VolumeCanvas
     Type currentType = getSegType();
     DicomVolTexture tex = volTexture;
     Volume<?, ?> volume = tex == null ? null : tex.getVolume();
+    // Addis Ortho: labels edited in memory (the Bones tools) are shown straight from their volume,
+    // in place of the SEG file they stand for.
+    Optional<LiveSegmentation> live =
+        currentType.requiresSegTexture() && volume != null
+            ? liveSegmentation(volume)
+            : Optional.empty();
+    if (live.isPresent()) {
+      showLive(live.get());
+      return;
+    }
     // Only the SEG files actually shown are resampled. Each one costs a full copy of the displayed
     // volume's grid (one byte per image voxel, hundreds of MB for a thin-slice CT), and a study may
     // carry dozens; building the hidden ones exhausts the heap for overlays nobody asked for.
     // Ticking one back on is caught by hasUnrenderedVisibleSeg() and rebuilds the texture.
     List<SpecialElementRegion> segList =
         currentType.requiresSegTexture() && volume != null
-            ? tex.getSegmentations().stream().filter(SpecialElementRegion::isVisible).toList()
+            ? tex.getSegmentations().stream()
+                .filter(SpecialElementRegion::isVisible)
+                .filter(seg -> !LiveSegmentation.isReplaced(seg))
+                .toList()
             : null;
     if (segList == null || segList.isEmpty()) {
       segBuildGeneration.incrementAndGet(); // invalidate any in-flight build
@@ -1269,6 +1480,108 @@ public class View3d extends VolumeCanvas
     return new AlignedSeg(segElement, segVol);
   }
 
+  // ---- Live labels (Addis Ortho) ----
+
+  /** The live labels of the volume's series, when they lie on this volume's grid. */
+  private static Optional<LiveSegmentation> liveSegmentation(Volume<?, ?> volume) {
+    if (volume.getStack() == null) {
+      return Optional.empty();
+    }
+    String uid =
+        TagD.getTagValue(volume.getStack().getSeries(), Tag.SeriesInstanceUID, String.class);
+    return LiveSegmentation.of(uid)
+        .filter(
+            live ->
+                live.fits(
+                    volume.getSizeX(),
+                    volume.getSizeY(),
+                    volume.getSizeZ(),
+                    (x, y, z) -> volume.voxelToLps(x, y, z, new Vector3d())));
+  }
+
+  /**
+   * Shows the live labels: their colours at once when their texture is already in use, else a
+   * texture made from them, uploaded once in the background.
+   */
+  private void showLive(LiveSegmentation live) {
+    SegVolumeTexture svt = segVolumeTexture;
+    if (svt != null && svt.getSegVolume() == live.volume()) {
+      if (!segBuildRunning) {
+        svt.setPendingColorLut(live.volume().buildSegmentColorLUT());
+        display();
+      }
+      return;
+    }
+    int generation = segBuildGeneration.incrementAndGet();
+    setSegBuildRunning(true);
+    CompletableFuture.runAsync(
+            () -> {
+              SegVolumeTexture newSvt =
+                  new SegVolumeTexture(live.volume(), new Vector3d(1.0, 1.0, 1.0));
+              newSvt.uploadVolumeDataAsync();
+              GuiExecutor.execute(() -> installLiveTexture(generation, newSvt, live));
+            })
+        .exceptionally(
+            e -> {
+              LOGGER.error("Building the live segmentation texture", e);
+              GuiExecutor.execute(
+                  () -> {
+                    if (generation == segBuildGeneration.get()) {
+                      setSegBuildRunning(false);
+                    }
+                  });
+              return null;
+            });
+  }
+
+  private void installLiveTexture(int generation, SegVolumeTexture newSvt, LiveSegmentation live) {
+    if (generation != segBuildGeneration.get()) {
+      GL2ES2 gl = OpenglUtils.getGL();
+      if (gl != null) {
+        newSvt.destroy(gl);
+      }
+      return;
+    }
+    this.renderedSegs = List.of();
+    newSvt.setPendingColorLut(live.volume().buildSegmentColorLUT());
+    newSvt.setOccupancyListener(this::display);
+    newSvt.setSmoothSurfaces(segSmooth);
+    SegVolumeTexture old = this.segVolumeTexture;
+    this.segVolumeTexture = newSvt;
+    if (old != null) {
+      GL2ES2 gl = OpenglUtils.getGL();
+      if (gl != null) {
+        old.destroy(gl);
+      }
+    }
+    setSegBuildRunning(false);
+    display();
+  }
+
+  /**
+   * Addis Ortho: the live labels of this view's CT changed in slices {@code z0} to {@code z1} of
+   * the volume ({@code z0 > z1}: only their colours or visibility). Uploads just those slices at
+   * the next frame, or shows the labels when the view does not show them yet.
+   */
+  public void liveSegmentationChanged(int z0, int z1) {
+    DicomVolTexture tex = volTexture;
+    Volume<?, ?> volume = tex == null ? null : tex.getVolume();
+    if (volume == null || !getSegType().requiresSegTexture()) {
+      return;
+    }
+    Optional<LiveSegmentation> live = liveSegmentation(volume);
+    SegVolumeTexture svt = segVolumeTexture;
+    if (live.isEmpty() || svt == null || svt.getSegVolume() != live.get().volume()) {
+      updateSegmentation();
+      return;
+    }
+    if (z0 <= z1) {
+      svt.markDirtySlices(z0, z1);
+    }
+    svt.setPendingColorLut(live.get().volume().buildSegmentColorLUT());
+    display();
+  }
+
   /** EDT part of the asynchronous build: swaps the new texture in and refreshes the view. */
   private void installSegTexture(
       int generation, SegVolumeTexture newSvt, List<RenderedSeg> rendered) {
@@ -1340,6 +1653,16 @@ public class View3d extends VolumeCanvas
       return;
     }
     SegVolumeTexture svt = segVolumeTexture;
+    DicomVolTexture liveTex = volTexture;
+    Optional<LiveSegmentation> live =
+        liveTex == null || liveTex.getVolume() == null
+            ? Optional.empty()
+            : liveSegmentation(liveTex.getVolume());
+    if (live.isPresent()) {
+      // Live labels carry their own colours and visibility.
+      updateSegmentation();
+      return;
+    }
     if (svt == null || hasUnrenderedVisibleSeg()) {
       // No texture yet, or the user enabled a SEG file that is not part of the current texture
       // (e.g. its volume could not be built when the texture was created): rebuild it fully.
@@ -1402,6 +1725,24 @@ public class View3d extends VolumeCanvas
     }
 
     for (RenderedSeg rs : rendered) {
+      Map<Integer, SegStyle> styles = SEGMENT_STYLES.get(sopUIDOf(rs.seg()));
+      if (styles != null) {
+        for (Map.Entry<Integer, SegStyle> e : styles.entrySet()) {
+          int number = e.getKey() + rs.offset();
+          RegionAttributes base = result.get(number);
+          if (base == null) {
+            base = rs.seg().getSegAttributes().get(e.getKey());
+          }
+          if (base instanceof SegRegion<?> region) {
+            SegRegion<?> styled = region.copy();
+            styled.setVisible(e.getValue().visible());
+            if (e.getValue().color() != null) {
+              styled.setColor(e.getValue().color());
+            }
+            result.put(number, styled);
+          }
+        }
+      }
       if (!rs.seg().isVisible()) {
         for (Map.Entry<Integer, ? extends RegionAttributes> e :
             rs.seg().getSegAttributes().entrySet()) {
@@ -1430,6 +1771,83 @@ public class View3d extends VolumeCanvas
       }
     }
     return null;
+  }
+
+  // ---- Segment styles of the Bones panel (Addis Ortho) ----
+
+  /**
+   * How a segment is shown: hidden or not, and in which colour ({@code null} keeps its own).
+   *
+   * @param visible whether the segment is drawn; a hidden bone is gone from the Bones in colour
+   *     picture, since the CT is shown only inside visible segments
+   */
+  public record SegStyle(boolean visible, Color color) {}
+
+  /**
+   * Styles set by the Bones panel, by SEG instance UID, then segment number. Static so that a 3D
+   * view built again on the same CT shows the bones as they were left: the panel holds the state,
+   * not the view.
+   */
+  private static final Map<String, Map<Integer, SegStyle>> SEGMENT_STYLES =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
+  /**
+   * Sets the styles of the segments of one segmentation, replacing the ones set before, and
+   * refreshes the colour table of every 3D view (a cheap step: no texture is built again).
+   *
+   * @param styles by segment number; an empty map clears them
+   */
+  public static void setSegmentStyles(String sopInstanceUID, Map<Integer, SegStyle> styles) {
+    if (sopInstanceUID == null) {
+      return;
+    }
+    if (styles.isEmpty()) {
+      SEGMENT_STYLES.remove(sopInstanceUID);
+    } else {
+      SEGMENT_STYLES.put(sopInstanceUID, Map.copyOf(styles));
+    }
+    for (View3d view : openViews()) {
+      if (view.getSegType().requiresSegTexture()) {
+        view.refreshSegColorLUT();
+      }
+    }
+  }
+
+  private static String sopUIDOf(SegSpecialElement seg) {
+    String uid = TagD.getTagValue(seg, Tag.SOPInstanceUID, String.class);
+    if (uid == null && seg.getMediaReader() instanceof DicomMediaIO reader) {
+      uid = reader.getDicomObject().getString(Tag.SOPInstanceUID);
+    }
+    return uid;
+  }
+
+  /** The 3D views on screen. */
+  private static List<View3d> openViews() {
+    List<View3d> views = new ArrayList<>();
+    List<ViewerPlugin<?>> plugins = GuiUtils.getUICore().getViewerPlugins();
+    List<ViewerPlugin<?>> copy;
+    synchronized (plugins) {
+      copy = List.copyOf(plugins);
+    }
+    for (ViewerPlugin<?> plugin : copy) {
+      if (plugin instanceof View3DContainer container) {
+        for (ViewCanvas<DicomImageElement> canvas : container.getImagePanels()) {
+          if (canvas instanceof View3d view) {
+            views.add(view);
+          }
+        }
+      }
+    }
+    return views;
+  }
+
+  /** Told on the event dispatch thread when the bone of a view was isolated (Addis Ortho). */
+  private static final List<java.util.function.Consumer<View3d>> BONE_ISOLATED =
+      new java.util.concurrent.CopyOnWriteArrayList<>();
+
+  /** Adds a listener told each time a view's bone has been isolated from the cast and table. */
+  public static void addBoneIsolatedListener(java.util.function.Consumer<View3d> listener) {
+    BONE_ISOLATED.add(listener);
   }
 
   /** Returns this view's segmentation display mode (never {@code null}). */
@@ -1464,7 +1882,10 @@ public class View3d extends VolumeCanvas
    * removed from the rendering).
    */
   private int getSegMaskMode() {
-    if (segType == Type.SEG_MASK_INCLUDE) {
+    if (!isSegTextureActive()) {
+      return 0; // no segment to mask with yet: show the anatomy rather than nothing
+    }
+    if (segType == Type.SEG_MASK_INCLUDE || segType == Type.BONES) {
       return 1;
     }
     return segType == Type.SEG_MASK_EXCLUDE ? 2 : 0;
@@ -1506,14 +1927,1568 @@ public class View3d extends VolumeCanvas
    * @param adjusting {@code true} while a slider is dragged, to render at the interactive quality
    */
   public void setCropBox(boolean enabled, CropBox box, boolean adjusting) {
+    Objects.requireNonNull(box);
+    EditHistory.CropState before =
+        cropBeforeAdjust != null
+            ? cropBeforeAdjust
+            : new EditHistory.CropState(cropEnabled, cropBox);
+    EditHistory.CropState after = new EditHistory.CropState(enabled, box);
+    if (adjusting) {
+      cropBeforeAdjust = before;
+    } else {
+      cropBeforeAdjust = null;
+      if (!replaying && !before.equals(after)) {
+        editHistory.push(EditHistory.crop(before, after, this::applyCropState));
+      }
+    }
+    applyCrop(enabled, box, adjusting);
+    if (!adjusting) {
+      notifyToolState();
+    }
+  }
+
+  /** The crop box state now, for the history and the panels. */
+  public EditHistory.CropState getCropState() {
+    return new EditHistory.CropState(cropEnabled, cropBox);
+  }
+
+  private void applyCropState(EditHistory.CropState state) {
+    applyCrop(state.enabled(), state.box(), false);
+    notifyCropListeners();
+  }
+
+  private void applyCrop(boolean enabled, CropBox box, boolean adjusting) {
     this.cropEnabled = enabled;
-    this.cropBox = Objects.requireNonNull(box);
+    this.cropBox = box;
     camera.setAdjusting(adjusting);
+    updatePivot();
     display();
+  }
+
+  /**
+   * Tells the crop panel and the tool bar that the crop box changed outside of the panel (undo,
+   * redo, auto-crop): they listen to the mouse tool changes of the event manager.
+   */
+  private void notifyCropListeners() {
+    notifyToolState();
   }
 
   private CropBox getEffectiveCropBox() {
     return cropEnabled ? cropBox : CropBox.FULL;
+  }
+
+  /** Rotation and zoom centre on the crop box when it is on, on the volume otherwise. */
+  private void updatePivot() {
+    VolumeSpace space = volumeSpace();
+    if (space == null) {
+      return;
+    }
+    CropBox box = getEffectiveCropBox();
+    Vector3d centre =
+        space.worldOfCrop(
+            (box.minX() + box.maxX()) / 2.0,
+            (box.minY() + box.maxY()) / 2.0,
+            (box.minZ() + box.maxZ()) / 2.0,
+            new Vector3d());
+    camera.setPivot(centre);
+  }
+
+  /** The zoom at which the crop box fills the view, or the best fit when the crop is off. */
+  private double fitZoomForVisible() {
+    VolumeSpace space = volumeSpace();
+    if (space == null || !cropEnabled || cropBox.isFull()) {
+      return -getBestFitViewScale();
+    }
+    return org.weasis.dicom.viewer3d.geometry.CameraFraming.fitZoom(
+        space.worldOfCrop(cropBox.minX(), cropBox.minY(), cropBox.minZ(), new Vector3d()),
+        space.worldOfCrop(cropBox.maxX(), cropBox.maxY(), cropBox.maxZ(), new Vector3d()),
+        camera.getRotation(),
+        camera.getFieldOfView(),
+        getAspectRatio());
+  }
+
+  /** Centres the view on the visible part of the volume and zooms so that it fills the view. */
+  public void fitToVisible() {
+    if (volTexture == null) {
+      return;
+    }
+    camera.resetPan();
+    if (cropEnabled && !cropBox.isFull()) {
+      camera.setZoomFactor(fitZoomForVisible());
+    } else {
+      zoom(0.0);
+    }
+    eventManager
+        .getAction(ActionW.ZOOM)
+        .ifPresent(a -> a.setRealValue(camera.getZoomFactor(), false));
+  }
+
+  // ---- Crop fitted to the bone (Addis Ortho) ----
+
+  /** {@code true} while the bone is being searched for the crop. */
+  private volatile boolean autoCropRunning;
+
+  public boolean isAutoCropRunning() {
+    return autoCropRunning;
+  }
+
+  /** Whether {@link #autoCropToBone} can run: a fully loaded CT and no search running. */
+  public boolean canAutoCropToBone() {
+    DicomVolTexture tex = volTexture;
+    return tex != null
+        && tex.getModality() == org.weasis.dicom.codec.display.Modality.CT
+        && tex.isFullyLoaded()
+        && !autoCropRunning;
+  }
+
+  /** Fits the crop box to the bone, as an undoable step; Fit to bone in the crop panel. */
+  public void autoCropToBone() {
+    startAutoCrop(true);
+  }
+
+  /** Once per CT, when it is fully loaded, if the preference to open on the bone is on. */
+  private void maybeAutoCropToBone() {
+    DicomVolTexture tex = volTexture;
+    if (tex == null || tex == autoCroppedTexture || !canAutoCropToBone()) {
+      return;
+    }
+    boolean onBone =
+        GuiUtils.getUICore()
+            .getLocalPersistence()
+            .getBooleanProperty(
+                RenderingLayer.P_OPEN_CT_ON_BONE, RenderingLayer.DEFAULT_OPEN_CT_ON_BONE);
+    if (!onBone) {
+      return;
+    }
+    autoCroppedTexture = tex;
+    startAutoCrop(false);
+  }
+
+  private void startAutoCrop(boolean asked) {
+    DicomVolTexture tex = volTexture;
+    Volume<?, ?> volume = tex == null ? null : tex.getVolume();
+    if (!canAutoCropToBone() || volume == null) {
+      return;
+    }
+    Vector3i texture = new Vector3i(tex.getWidth(), tex.getHeight(), tex.getDepth());
+    Vector3d spacing = volume.getPixelRatio();
+    Vector3i size = volume.getSize();
+    Vector3d texelMm =
+        new Vector3d(
+            spacing.x * size.x / texture.x,
+            spacing.y * size.y / texture.y,
+            spacing.z * size.z / texture.z);
+    VoxelSampler sampler = voxelSampler();
+    autoCropRunning = true;
+    notifyToolState();
+    CUT_EXECUTOR.execute(
+        () -> {
+          Optional<CropBox> box = Optional.empty();
+          try {
+            box =
+                BoneExtent.find(
+                    sampler,
+                    texture,
+                    texelMm,
+                    BoneExtent.DEFAULT_THRESHOLD_HU,
+                    BoneExtent.DEFAULT_MARGIN_MM,
+                    () -> volTexture != tex);
+          } catch (Throwable e) { // NOSONAR the view must not stay locked
+            LOGGER.error("Crop to the bone", e);
+          } finally {
+            Optional<CropBox> found = box;
+            GuiExecutor.execute(() -> finishAutoCrop(tex, found, asked));
+          }
+        });
+  }
+
+  private void finishAutoCrop(DicomVolTexture tex, Optional<CropBox> box, boolean asked) {
+    autoCropRunning = false;
+    try {
+      if (volTexture != tex) {
+        return;
+      }
+      if (box.isPresent() && cropBeforeAdjust != null) {
+        // A crop slider is being dragged: the user's crop wins over the automatic one.
+        LOGGER.info("Crop to the bone dropped: the crop box is being adjusted");
+      } else if (box.isPresent()) {
+        EditHistory.CropState cropBefore = getCropState();
+        ViewSnapshot viewBefore = ViewSnapshot.of(this);
+        applyCrop(true, box.get(), false);
+        fitToVisible();
+        EditHistory.CropState cropAfter = getCropState();
+        ViewSnapshot viewAfter = ViewSnapshot.of(this);
+        // One step that also takes back the zoom and pan of the fit.
+        editHistory.push(
+            new EditHistory.Edit() {
+              @Override
+              public boolean undo() {
+                applyCropState(cropBefore);
+                viewBefore.applyCameraTo(View3d.this);
+                return true;
+              }
+
+              @Override
+              public boolean redo() {
+                applyCropState(cropAfter);
+                viewAfter.applyCameraTo(View3d.this);
+                return true;
+              }
+            });
+        notifyCropListeners();
+        showStatus(Messages.getString("crop.auto.done"));
+        if (!asked) {
+          startIsolateBone(false);
+        }
+      } else if (asked) {
+        showStatus(Messages.getString("crop.auto.none"));
+      }
+    } finally {
+      notifyToolState();
+    }
+  }
+
+  // ---- Bone isolated from the cast, the table and the rest (Addis Ortho) ----
+
+  /** Whether {@link #isolateBone} can run: a fully loaded CT, no cut and no crop search running. */
+  public boolean canIsolateBone() {
+    return canAutoCropToBone() && !cutRunning;
+  }
+
+  /**
+   * Keeps only the bone, as one undoable cut: the cast, the splint, the table, the clothing and the
+   * soft tissue are cut away, an implant in or on the bone stays. See {@link BoneIsolation}.
+   */
+  public void isolateBone() {
+    startIsolateBone(true);
+  }
+
+  private void startIsolateBone(boolean asked) {
+    DicomVolTexture tex = volTexture;
+    if (!canIsolateBone()) {
+      return;
+    }
+    KeptMask mask = getOrCreateKeptMask();
+    if (mask == null) {
+      return;
+    }
+    VoxelSampler sampler = voxelSampler();
+    Vector3d spacing = tex.getVolume().getPixelRatio();
+    Vector3i size = tex.getVolume().getSize();
+    Vector3i grid = mask.space().grid();
+    Vector3d gridVoxelMm =
+        new Vector3d(
+            spacing.x * size.x / grid.x, spacing.y * size.y / grid.y, spacing.z * size.z / grid.z);
+    runCut(
+        mask,
+        Messages.getString("isolate.busy"),
+        () -> {
+          Optional<BoneIsolation.Result> found =
+              BoneIsolation.find(
+                  mask.space(),
+                  sampler,
+                  gridVoxelMm,
+                  BoneExtent.DEFAULT_THRESHOLD_HU,
+                  () -> volTexture != tex,
+                  WorkingMemory.ofFreeHeap());
+          if (found.isEmpty()) {
+            return null;
+          }
+          BoneIsolation.Result r = found.get();
+          LOGGER.info(
+              "Bone isolated: {} voxels kept, {} bone pieces, {} joined, {} dropped, {} external,"
+                  + " {} implants, in {} ms ({} MB peak)",
+              r.voxels(),
+              r.bonePieces(),
+              r.joinedPieces(),
+              r.droppedPieces(),
+              r.externalPieces(),
+              r.implants(),
+              r.millis(),
+              r.peakBytes() >> 20);
+          return VoxelFlood.keepOnly(mask.bits(), r.region());
+        },
+        () -> BONE_ISOLATED.forEach(l -> l.accept(this)),
+        new CutText(
+            Messages.getString(asked ? "isolate.none" : "crop.auto.done"),
+            Messages.getString("isolate.done")));
+  }
+
+  // ---- Seed marker and threshold preview of the Bones panel (Addis Ortho) ----
+
+  /** Texture coordinate of the region grow seed, drawn as a target, or {@code null}. */
+  private volatile Vector3d seedMarker;
+
+  /** The window and level before the threshold preview, or {@code null} without a preview. */
+  private int[] windowBeforePreview;
+
+  /** Shows the region grow seed at a patient position (LPS, mm); {@code null} hides it. */
+  public void setSeedMarker(Vector3d lps) {
+    Vector3d marker = null;
+    DicomVolTexture tex = volTexture;
+    VolumeSpace space = volumeSpace();
+    if (lps != null && tex != null && space != null) {
+      try {
+        Vector3d v = tex.getVolume().lpsToVoxel(lps, new Vector3d());
+        Vector3d t = space.texCoordOfVolume(v.x, v.y, v.z, new Vector3d());
+        if (t.x >= 0 && t.x <= 1 && t.y >= 0 && t.y <= 1 && t.z >= 0 && t.z <= 1) {
+          marker = t;
+        }
+      } catch (UnsupportedOperationException e) {
+        // a volume without geometry has no patient position
+      }
+    }
+    seedMarker = marker;
+    repaint();
+  }
+
+  /**
+   * Previews a bone threshold: the window is narrowed to {@code hu}, so what is at or above it is
+   * shown opaque in the preset's colours and the rest is clear; {@code null} puts the window back.
+   * The window/level tool or a preset change ends the preview as well.
+   */
+  public void previewThreshold(Double hu) {
+    if (hu == null) {
+      int[] before = windowBeforePreview;
+      windowBeforePreview = null;
+      if (before != null) {
+        renderingLayer.setWindowWidth(before[0]);
+        renderingLayer.setWindowCenter(before[1], true);
+      }
+      return;
+    }
+    if (windowBeforePreview == null) {
+      windowBeforePreview =
+          new int[] {renderingLayer.getWindowWidth(), renderingLayer.getWindowCenter()};
+    }
+    renderingLayer.setWindowWidth(2);
+    renderingLayer.setWindowCenter((int) Math.round(hu) + 1, true);
+  }
+
+  public boolean isPreviewingThreshold() {
+    return windowBeforePreview != null;
+  }
+
+  private void drawSeedMarker(Graphics2D g2d) {
+    Vector3d t = seedMarker;
+    Point2D p = t == null ? null : projectTexCoord(t);
+    if (p == null) {
+      return;
+    }
+    Stroke stroke = g2d.getStroke();
+    double r = 9;
+    g2d.setStroke(new BasicStroke(3f));
+    g2d.setColor(Color.BLACK);
+    g2d.draw(new Ellipse2D.Double(p.getX() - r, p.getY() - r, 2 * r, 2 * r));
+    g2d.setStroke(new BasicStroke(1.5f));
+    g2d.setColor(Color.YELLOW);
+    g2d.draw(new Ellipse2D.Double(p.getX() - r, p.getY() - r, 2 * r, 2 * r));
+    g2d.draw(new Line2D.Double(p.getX() - r - 4, p.getY(), p.getX() - 3, p.getY()));
+    g2d.draw(new Line2D.Double(p.getX() + 3, p.getY(), p.getX() + r + 4, p.getY()));
+    g2d.draw(new Line2D.Double(p.getX(), p.getY() - r - 4, p.getX(), p.getY() - 3));
+    g2d.draw(new Line2D.Double(p.getX(), p.getY() + 3, p.getX(), p.getY() + r + 4));
+    g2d.setStroke(stroke);
+  }
+
+  // ---- Kept mask, scalpel and keep/remove (Addis Ortho) ----
+
+  /** The cuts made on this volume, or {@code null} when none was made. */
+  public KeptMask getKeptMask() {
+    return keptMask;
+  }
+
+  private boolean isKeptMaskActive() {
+    KeptMask mask = keptMask;
+    return mask != null && !mask.isFull();
+  }
+
+  /** The coordinate systems of the displayed volume, or {@code null} without a volume. */
+  public VolumeSpace volumeSpace() {
+    DicomVolTexture tex = volTexture;
+    if (tex == null || tex.getVolume() == null) {
+      return null;
+    }
+    KeptMask mask = keptMask;
+    Vector3i texture = new Vector3i(tex.getWidth(), tex.getHeight(), tex.getDepth());
+    Vector3i grid = mask != null ? mask.space().grid() : KeptMask.gridFor(texture);
+    return new VolumeSpace(grid, texture, tex.getVolume().getSize(), tex.getNormalizedTexelSize());
+  }
+
+  private KeptMask getOrCreateKeptMask() {
+    KeptMask mask = keptMask;
+    if (mask == null) {
+      VolumeSpace space = volumeSpace();
+      if (space == null) {
+        return null;
+      }
+      mask = new KeptMask(space);
+      keptMask = mask;
+      LOGGER.info(
+          "Kept mask {}x{}x{} ({} MB on the CPU, {} MB on the GPU)",
+          space.grid().x,
+          space.grid().y,
+          space.grid().z,
+          mask.bytes() / (1024 * 1024),
+          space.gridVoxels() / (1024 * 1024));
+    }
+    return mask;
+  }
+
+  /** The renderer's opacity of a voxel value: preset, window/level and LUT shape. */
+  public TransferFunction transferFunction() {
+    return new TransferFunction(
+        volumePreset.getColors(),
+        renderingLayer.getWindowWidth(),
+        renderingLayer.getWindowCenter(),
+        renderingLayer.getOpacity(),
+        isSegMode() ? TransferFunction.LINEAR : renderingLayer.getLutShapeId());
+  }
+
+  /**
+   * The field the renderer samples, texture voxel by texture voxel: the volume as uploaded, scaled
+   * and smoothed as the texture is. A new instance per operation; its slices are made on demand.
+   */
+  public synchronized VoxelSampler voxelSampler() {
+    DicomVolTexture tex = volTexture;
+    Volume<?, ?> volume = tex == null ? null : tex.getVolume();
+    if (volume == null) {
+      return (x, y, z) -> Double.NaN;
+    }
+    FieldKey key =
+        new FieldKey(
+            tex,
+            isUploadSmoothed(tex),
+            new Vector3i(tex.getWidth(), tex.getHeight(), tex.getDepth()));
+    if (sharedField == null || !key.equals(sharedFieldKey)) {
+      Vector3d texel = tex.getTexelSize();
+      VolumeSmoother smoother =
+          TextureField.smootherOf(key.smoothed(), key.size().x, key.size().y, texel.x, texel.z);
+      sharedField = new TextureField(new VolumeSliceSource(volume), key.size(), smoother);
+      sharedFieldKey = key;
+    }
+    return sharedField;
+  }
+
+  /** What the shared texture field was built for; a change means a new field. */
+  private record FieldKey(DicomVolTexture texture, boolean smoothed, Vector3i size) {}
+
+  /** Whether VolumeBuilder smooths this texture: a smoothed, single-channel, 16-bit volume. */
+  private static boolean isUploadSmoothed(DicomVolTexture tex) {
+    int cvType = tex.getVolume().getCvType();
+    int depth = org.opencv.core.CvType.depth(cvType);
+    return tex.isSmoothing()
+        && org.opencv.core.CvType.channels(cvType) == 1
+        && (depth == org.opencv.core.CvType.CV_16S || depth == org.opencv.core.CvType.CV_16U);
+  }
+
+  /** The axial slices of the CPU volume as the upload reads them, one at a time. */
+  private static final class VolumeSliceSource implements TextureField.SliceSource {
+    private final Volume<?, ?> volume;
+    private final int cvDepth;
+    private final int channels;
+
+    VolumeSliceSource(Volume<?, ?> volume) {
+      this.volume = volume;
+      this.cvDepth = org.opencv.core.CvType.depth(volume.getCvType());
+      this.channels = org.opencv.core.CvType.channels(volume.getCvType());
+    }
+
+    @Override
+    public int width() {
+      return volume.getSizeX();
+    }
+
+    @Override
+    public int height() {
+      return volume.getSizeY();
+    }
+
+    @Override
+    public int depth() {
+      return volume.getSizeZ();
+    }
+
+    @Override
+    public int unsignedOffset() {
+      return cvDepth == org.opencv.core.CvType.CV_16S ? 32768 : 0;
+    }
+
+    @Override
+    public float[] slice(int z) {
+      int n = width() * height();
+      float[] out = new float[n];
+      if (channels != 1) {
+        // A colour volume is windowed on its luminance in the shaders.
+        for (int y = 0; y < height(); y++) {
+          for (int x = 0; x < width(); x++) {
+            out[y * width() + x] = (float) volume.getNearestDouble(x, y, z, 0);
+          }
+        }
+        return out;
+      }
+      PlanarImage image = volume.getAxialSlice(z);
+      try {
+        switch (cvDepth) {
+          case org.opencv.core.CvType.CV_16S, org.opencv.core.CvType.CV_16U -> {
+            short[] data = new short[n];
+            image.get(0, 0, data);
+            boolean signed = cvDepth == org.opencv.core.CvType.CV_16S;
+            for (int i = 0; i < n; i++) {
+              out[i] = signed ? data[i] : data[i] & 0xFFFF;
+            }
+          }
+          case org.opencv.core.CvType.CV_8U, org.opencv.core.CvType.CV_8S -> {
+            byte[] data = new byte[n];
+            image.get(0, 0, data);
+            boolean signed = cvDepth == org.opencv.core.CvType.CV_8S;
+            for (int i = 0; i < n; i++) {
+              out[i] = signed ? data[i] : data[i] & 0xFF;
+            }
+          }
+          case org.opencv.core.CvType.CV_32F -> image.get(0, 0, out);
+          default -> {
+            for (int y = 0; y < height(); y++) {
+              for (int x = 0; x < width(); x++) {
+                out[y * width() + x] = (float) volume.getNearestDouble(x, y, z, 0);
+              }
+            }
+          }
+        }
+      } finally {
+        image.release();
+      }
+      return out;
+    }
+  }
+
+  /** The segmentation's part in the rendering, as the shaders' uniforms get it. */
+  private VolumePicker.SegMode segMode() {
+    if (!isSegTextureActive()) {
+      return VolumePicker.SegMode.NONE;
+    }
+    return switch (segType) {
+      case SEG_ONLY -> VolumePicker.SegMode.SEG_ONLY;
+      case SEG_OVERLAY -> VolumePicker.SegMode.OVERLAY;
+      case SEG_MASK_INCLUDE, BONES -> VolumePicker.SegMode.MASK_INCLUDE;
+      case SEG_MASK_EXCLUDE -> VolumePicker.SegMode.MASK_EXCLUDE;
+      default -> VolumePicker.SegMode.NONE;
+    };
+  }
+
+  /** The visible segments as rendered; one instance per operation. */
+  private SegmentField segmentField() {
+    SegVolumeTexture svt = segVolumeTexture;
+    if (svt == null || !isSegTextureActive() || svt.getSegVolume().isDisposed()) {
+      return SegmentField.NONE;
+    }
+    // The smooth surfaces are rendered only once their occupancy matches this visibility, which
+    // is exactly when the CPU field must read the occupancy too.
+    return new SegVolumeField(svt.getSegVolume(), svt.getColorLut(), isSegSmoothReady());
+  }
+
+  /**
+   * Why a point of the volume cannot be picked now, or {@code null} when it can: the rendering
+   * shows a segmentation that is still being built, so the CPU cannot tell what is on screen.
+   */
+  public String pickUnavailableReason() {
+    if (!segType.requiresSegTexture()) {
+      return null;
+    }
+    SegVolumeTexture svt = segVolumeTexture;
+    if (segBuildRunning || svt == null || !svt.isReady() || svt.getSegVolume().isDisposed()) {
+      return Messages.getString("pick.unavailable.loading");
+    }
+    return null;
+  }
+
+  /**
+   * Why keep only this and remove this cannot act now, or {@code null}: as {@link
+   * #pickUnavailableReason()}, and the segmentation-only mode, which shows no anatomy to cut.
+   */
+  public String keepRemoveUnavailableReason() {
+    String reason = pickUnavailableReason();
+    if (reason != null) {
+      return reason;
+    }
+    return isSegOnly() ? Messages.getString("pick.unavailable.segonly") : null;
+  }
+
+  /** Whether a texture coordinate is removed by the cuts or the MPR crosshair cut. */
+  private boolean isCutAway(Vector3d t) {
+    KeptMask mask = keptMask;
+    if (mask != null && !mask.isKeptAt(t)) {
+      return true;
+    }
+    return isCrosshairCut(t);
+  }
+
+  /** The {@code isCrosshairCut} of vrFunctions.glsl. */
+  private boolean isCrosshairCut(Vector3d t) {
+    CrosshairCutMode mode = getCrossHairCutMode();
+    Vector3d pos = mprCrossHairPosition;
+    if (mode == CrosshairCutMode.NONE || pos == null) {
+      return false;
+    }
+    Quaterniond rot = mprCrossHairRotation;
+    Vector3d v = new Vector3d(t).sub(pos);
+    if (rot != null) {
+      new Matrix3d().set(rot).transform(v);
+    }
+    return switch (mode.getId()) {
+      case 1 -> v.x < 0;
+      case 2 -> v.x > 0;
+      case 3 -> v.y < 0;
+      case 4 -> v.y > 0;
+      case 5 -> v.z > 0;
+      case 6 -> v.z < 0;
+      case 7 -> v.x < 0 && v.z > 0;
+      case 8 -> v.x > 0 && v.z > 0;
+      case 9 -> v.x < 0 && v.z < 0;
+      case 10 -> v.x > 0 && v.z < 0;
+      case 11 -> v.x < 0 && v.z > 0 && v.y < 0;
+      case 12 -> v.x > 0 && v.z > 0 && v.y < 0;
+      case 13 -> v.x < 0 && v.z < 0 && v.y < 0;
+      case 14 -> v.x > 0 && v.z < 0 && v.y < 0;
+      case 15 -> v.x < 0 && v.z > 0 && v.y > 0;
+      case 16 -> v.x > 0 && v.z > 0 && v.y > 0;
+      case 17 -> v.x < 0 && v.z < 0 && v.y > 0;
+      case 18 -> v.x > 0 && v.z < 0 && v.y > 0;
+      default -> false;
+    };
+  }
+
+  /**
+   * Everything a pick reads, taken on the event dispatch thread when the pick is asked for, so the
+   * worker never looks at a view that moved on; the key tells whether the view still matches when
+   * the result comes back.
+   */
+  private record PickSnapshot(
+      PickStateKey key,
+      VolumeSpace space,
+      VoxelSampler sampler,
+      TransferFunction transfer,
+      java.util.function.Predicate<Vector3d> cutAway,
+      VolumePicker.SegMode segMode,
+      SegmentField segments,
+      Matrix4d viewInverse,
+      Matrix4d projectionInverse,
+      Vector3d cropMin,
+      Vector3d cropMax,
+      int width,
+      int height) {}
+
+  /** The state a pick depends on; a result for another state is stale. */
+  private record PickStateKey(
+      Matrix4d view,
+      Matrix4d projection,
+      int maskGeneration,
+      Type segType,
+      boolean segSmooth,
+      boolean cropEnabled,
+      CropBox cropBox,
+      Preset preset,
+      int windowWidth,
+      int windowCenter,
+      double opacity,
+      int lutShape,
+      CrosshairCutMode cutMode,
+      Vector3d crosshairPos) {}
+
+  private PickStateKey pickStateKey() {
+    KeptMask mask = keptMask;
+    Vector3d pos = mprCrossHairPosition;
+    return new PickStateKey(
+        camera.getViewMatrix(),
+        camera.getProjectionMatrix(),
+        mask == null ? -1 : mask.generation(),
+        segType,
+        isSegSmoothReady(),
+        cropEnabled,
+        cropBox,
+        volumePreset,
+        renderingLayer.getWindowWidth(),
+        renderingLayer.getWindowCenter(),
+        renderingLayer.getOpacity(),
+        renderingLayer.getLutShapeId(),
+        getCrossHairCutMode(),
+        pos == null ? null : new Vector3d(pos));
+  }
+
+  /** The snapshot of the current view for a pick, or {@code null} when nothing can be picked. */
+  private PickSnapshot pickSnapshot() {
+    VolumeSpace space = volumeSpace();
+    if (space == null || !hasValidContent() || getWidth() <= 0 || getHeight() <= 0) {
+      return null;
+    }
+    if (pickUnavailableReason() != null) {
+      return null;
+    }
+    CropBox box = getEffectiveCropBox();
+    // The cut-away test reads the mask's bits, which only the event dispatch thread changes; the
+    // crosshair cut is frozen in the key and read through the same method.
+    return new PickSnapshot(
+        pickStateKey(),
+        space,
+        voxelSampler(),
+        transferFunction(),
+        this::isCutAway,
+        segMode(),
+        segmentField(),
+        camera.getViewMatrix().invert(),
+        camera.getProjectionMatrix().invert(),
+        new Vector3d(box.minX(), box.minY(), box.minZ()),
+        new Vector3d(box.maxX(), box.maxY(), box.maxZ()),
+        getWidth(),
+        getHeight());
+  }
+
+  private static Optional<Hit> pick(PickSnapshot s, Point p, PickRequest request) {
+    VolumePicker picker =
+        new VolumePicker(
+                s.space(), s.sampler(), s.transfer(), s.cutAway(), s.segMode(), s.segments())
+            .withCancel(() -> request != null && request.cancelled);
+    return picker.pick(
+        s.viewInverse(),
+        s.projectionInverse(),
+        p.getX() * 2.0 / s.width() - 1.0,
+        1.0 - 2.0 * p.getY() / s.height(),
+        s.cropMin(),
+        s.cropMax());
+  }
+
+  /**
+   * The first visible point of the volume under a view point: the renderer's own ray marched on the
+   * CPU until it is half opaque. Empty when the ray meets nothing. Blocks the caller; the tools use
+   * {@link #pickAsync} instead.
+   */
+  public Optional<Hit> pick(Point p) {
+    PickSnapshot snapshot = pickSnapshot();
+    return snapshot == null ? Optional.empty() : pick(snapshot, p, null);
+  }
+
+  /** A pick asked for by a tool, run on the pick worker. */
+  private static final class PickRequest {
+    final PickSnapshot snapshot;
+    final Point point;
+    final java.util.function.Consumer<Optional<Hit>> onResult;
+    volatile boolean cancelled;
+
+    PickRequest(
+        PickSnapshot snapshot, Point point, java.util.function.Consumer<Optional<Hit>> onResult) {
+      this.snapshot = snapshot;
+      this.point = point;
+      this.onResult = onResult;
+    }
+  }
+
+  /**
+   * Picks under a view point on the pick worker and hands the result to {@code onResult} on the
+   * event dispatch thread, unless the view changed meanwhile (the result is then dropped) or a
+   * newer pick replaced this one before it started (a drag's requests coalesce).
+   */
+  public void pickAsync(Point p, java.util.function.Consumer<Optional<Hit>> onResult) {
+    PickSnapshot snapshot = pickSnapshot();
+    if (snapshot == null) {
+      onResult.accept(Optional.empty());
+      return;
+    }
+    PickRequest request = new PickRequest(snapshot, new Point(p), onResult);
+    PickRequest replaced = queuedPick.getAndSet(request);
+    if (replaced != null) {
+      replaced.cancelled = true;
+    }
+    PickRequest running = runningPick;
+    if (running != null) {
+      running.cancelled = true;
+    }
+    PICK_EXECUTOR.execute(
+        () -> {
+          PickRequest mine = queuedPick.getAndSet(null);
+          if (mine == null) {
+            return; // taken by a later submission
+          }
+          runningPick = mine;
+          Optional<Hit> hit;
+          try {
+            hit = mine.cancelled ? Optional.empty() : pick(mine.snapshot, mine.point, mine);
+          } catch (RuntimeException e) {
+            LOGGER.error("3D pick", e);
+            hit = Optional.empty();
+          } finally {
+            runningPick = null;
+          }
+          Optional<Hit> result = hit;
+          GuiExecutor.execute(
+              () -> {
+                if (mine.cancelled) {
+                  return;
+                }
+                if (volTexture == null || !mine.snapshot.key().equals(pickStateKey())) {
+                  LOGGER.debug("3D pick dropped: the view changed");
+                  return;
+                }
+                mine.onResult.accept(result);
+              });
+        });
+  }
+
+  private void cancelPicks() {
+    PickRequest queued = queuedPick.getAndSet(null);
+    if (queued != null) {
+      queued.cancelled = true;
+    }
+    PickRequest running = runningPick;
+    if (running != null) {
+      running.cancelled = true;
+    }
+  }
+
+  /** Patient position (LPS, mm) of a picked point, when the volume knows its geometry. */
+  public Optional<Vector3d> lpsOf(Hit hit) {
+    Volume<?, ?> volume = volTexture == null ? null : volTexture.getVolume();
+    if (volume == null) {
+      return Optional.empty();
+    }
+    try {
+      Vector3d v = hit.volume();
+      return Optional.of(volume.voxelToLps(v.x, v.y, v.z, new Vector3d()));
+    } catch (UnsupportedOperationException e) {
+      return Optional.empty();
+    }
+  }
+
+  /** View pixel of a texture coordinate, {@code null} behind the camera. */
+  private Point2D projectTexCoord(Vector3d t) {
+    VolumeSpace space = volumeSpace();
+    if (space == null) {
+      return null;
+    }
+    Vector3d w = space.worldOfTexCoord(t, new Vector3d());
+    Vector4d c = camera.getViewProjectionMatrix().transform(new Vector4d(w, 1.0));
+    if (c.w <= 1e-9) {
+      return null;
+    }
+    return new Point2D.Double(
+        (c.x / c.w + 1.0) / 2.0 * getWidth(), (1.0 - c.y / c.w) / 2.0 * getHeight());
+  }
+
+  /**
+   * Texture coordinate of the point of a view pixel's ray at the given distance from the camera.
+   */
+  private Vector3d texCoordAtDepth(Point p, double depth) {
+    VolumeSpace space = volumeSpace();
+    if (space == null) {
+      return null;
+    }
+    Matrix4d viewInverse = camera.getViewMatrix().invert();
+    Vector4d o = viewInverse.transform(new Vector4d(0, 0, 0, 1));
+    Vector4d d =
+        camera
+            .getProjectionMatrix()
+            .invert()
+            .transform(
+                new Vector4d(
+                    p.getX() * 2.0 / getWidth() - 1.0, 1.0 - 2.0 * p.getY() / getHeight(), 0, 1));
+    Vector4d dir = viewInverse.transform(new Vector4d(d.x, d.y, d.z, 0));
+    Vector3d world = new Vector3d(dir.x, dir.y, dir.z).normalize().mul(depth).add(o.x, o.y, o.z);
+    return space.texCoordOfWorld(world, new Vector3d());
+  }
+
+  public Lasso getLasso() {
+    return lasso;
+  }
+
+  public void lassoStart(Point p) {
+    if (volTexture == null) {
+      return;
+    }
+    lasso.start(p);
+    repaint();
+  }
+
+  public void lassoExtend(Point p) {
+    lasso.extend(p);
+    repaint();
+  }
+
+  public void lassoClose() {
+    lasso.close();
+    repaint();
+    notifyToolState();
+  }
+
+  public void lassoClear() {
+    lasso.clear();
+    repaint();
+    notifyToolState();
+  }
+
+  /** Tells the tool bars that what the cut commands can do changed. */
+  private void notifyToolState() {
+    if (eventManager instanceof EventManager manager) {
+      manager.fireMouseToolChanged();
+    }
+  }
+
+  public boolean isCutRunning() {
+    return cutRunning;
+  }
+
+  public boolean isLightSeparation() {
+    return lightSeparation;
+  }
+
+  public void setLightSeparation(boolean separation) {
+    this.lightSeparation = separation;
+  }
+
+  /** Cuts away the voxels inside or outside the lasso, through the whole depth. */
+  public void cutLasso(LassoCut.Side side) {
+    if (!lasso.isClosed() || cutRunning) {
+      return;
+    }
+    KeptMask mask = getOrCreateKeptMask();
+    if (mask == null) {
+      return;
+    }
+    List<Point2D> polygon = List.copyOf(lasso.points());
+    Matrix4d vp = camera.getViewProjectionMatrix();
+    int w = getWidth();
+    int h = getHeight();
+    runCut(
+        mask,
+        Messages.getString("cut.busy"),
+        () -> {
+          LassoCut.Result r = LassoCut.compute(mask.space(), vp, w, h, polygon, side, mask.bits());
+          LOGGER.info(
+              "Scalpel cut {}: {} voxels in {} ms ({} rows visited, {} skipped)",
+              side,
+              r.diff().voxels(),
+              r.millis(),
+              r.rowsVisited(),
+              r.rowsSkipped());
+          return r.diff();
+        },
+        lasso::clear);
+  }
+
+  /** Keeps only the structure under the point; everything else is cut away. */
+  public void keepOnlyAt(Point p) {
+    growAndCut(p, true);
+  }
+
+  /** Cuts away the structure under the point. */
+  public void removeAt(Point p) {
+    growAndCut(p, false);
+  }
+
+  private void growAndCut(Point p, boolean keep) {
+    if (cutRunning) {
+      return;
+    }
+    String unavailable = keepRemoveUnavailableReason();
+    if (unavailable != null) {
+      showStatus(unavailable);
+      return;
+    }
+    pickAsync(p, hit -> growAndCut(hit, keep, false));
+  }
+
+  /**
+   * Cuts away, or keeps alone, the structure at a patient position, as Remove this and Keep only
+   * this do for a click on the 3D view: for a click on a slice of the same CT, in an MPR view. A
+   * slice shows no surface to aim at, so touching bones are always separated at their joint, and a
+   * click in the marrow or just beside the bone finds the bone nearby.
+   */
+  public void cutStructureAt(
+      Vector3d lps, boolean keep, java.util.function.Consumer<String> report) {
+    if (cutRunning) {
+      report.accept(Messages.getString("cut.wait"));
+      return;
+    }
+    String unavailable = keepRemoveUnavailableReason();
+    if (unavailable != null) {
+      showStatus(unavailable);
+      report.accept(unavailable);
+      return;
+    }
+    Volume<?, ?> volume = volTexture == null ? null : volTexture.getVolume();
+    VolumeSpace space = volumeSpace();
+    if (volume == null || space == null) {
+      return;
+    }
+    Vector3d v;
+    try {
+      v = volume.lpsToVoxel(new Vector3d(lps), new Vector3d());
+    } catch (UnsupportedOperationException e) {
+      report.accept(Messages.getString("cut.nothing"));
+      return;
+    }
+    Vector3d t = space.texCoordOfVolume(v.x, v.y, v.z, new Vector3d());
+    if (t.x < 0 || t.y < 0 || t.z < 0 || t.x > 1 || t.y > 1 || t.z > 1) {
+      report.accept(Messages.getString("cut.nothing"));
+      return;
+    }
+    Vector3i grid = space.gridOfTexCoord(t, new Vector3i());
+    cutReport = report;
+    growAndCut(Optional.of(new Hit(t, grid, v, 0)), keep, true);
+  }
+
+  /** Grid voxels searched around a click on a slice for the bone, which may be in the marrow. */
+  private static final int SLICE_SEED_SEARCH = 12;
+
+  /** Where the cut started from a slice reports its outcome, besides the view; {@code null}. */
+  private java.util.function.Consumer<String> cutReport;
+
+  /** Shows the outcome of a cut in the view, and to whoever started it from a slice. */
+  private void reportCut(String message) {
+    showStatus(message);
+    java.util.function.Consumer<String> report = cutReport;
+    cutReport = null;
+    if (report != null) {
+      report.accept(message);
+    }
+  }
+
+  private void growAndCut(Optional<Hit> hit, boolean keep, boolean separate) {
+    if (cutRunning) {
+      return;
+    }
+    KeptMask mask = hit.isPresent() ? getOrCreateKeptMask() : null;
+    if (mask == null) {
+      reportCut(Messages.getString("cut.nothing"));
+      return;
+    }
+    // A click on a selected bone drawn over the anatomy takes that bone alone, whatever touches it.
+    SegmentField segments =
+        segMode() == VolumePicker.SegMode.OVERLAY ? segmentField() : SegmentField.NONE;
+    int bone = segments.visibleLabel(hit.get().texCoord());
+    VoxelFlood.Visibility visible =
+        bone > 0 ? visibilityOfBone(segments, bone) : visibilityForSelection();
+    VoxelSampler sampler = voxelSampler();
+    Vector3i seed = hit.get().grid();
+    int separation = bone == 0 && (lightSeparation || separate) ? SEPARATION_VOXELS : 0;
+    int seedSearch = separate ? SLICE_SEED_SEARCH : VoxelFlood.SEED_SEARCH;
+    runCut(
+        mask,
+        Messages.getString("cut.selecting"),
+        () -> {
+          Optional<VoxelFlood.Result> region =
+              VoxelFlood.grow(
+                  mask.space(),
+                  mask.bits(),
+                  sampler,
+                  visible,
+                  seed,
+                  separation,
+                  seedSearch,
+                  WorkingMemory.ofFreeHeap());
+          if (region.isEmpty()) {
+            return null;
+          }
+          VoxelFlood.Result r = region.get();
+          LOGGER.info(
+              "{} {} of {} voxels (separated {}) in {} ms",
+              keep ? "Keep" : "Remove",
+              bone > 0 ? "segment " + bone : "structure",
+              r.voxels(),
+              r.separated(),
+              r.millis());
+          return keep
+              ? VoxelFlood.keepOnly(mask.bits(), r.region())
+              : VoxelFlood.remove(mask.bits(), r.region());
+        },
+        () -> {});
+  }
+
+  /**
+   * Cuts away one segment of a segmentation shown in colour, or keeps it alone, as one undoable
+   * step: what lies behind a bone shows once the bone is cut away. Does nothing, with a message in
+   * the view, while the segmentation is not shown or another cut runs.
+   *
+   * @param segmentation which shown segmentation holds the segment
+   * @param segmentNumber the segment's number in that segmentation
+   * @param keep {@code true} to keep the segment alone, {@code false} to cut it away
+   */
+  public void cutSegment(
+      java.util.function.Predicate<SegSpecialElement> segmentation,
+      int segmentNumber,
+      boolean keep) {
+    if (cutRunning) {
+      return;
+    }
+    String unavailable = keepRemoveUnavailableReason();
+    if (unavailable != null) {
+      showStatus(unavailable);
+      return;
+    }
+    SegVolumeTexture svt = segVolumeTexture;
+    RenderedSeg shown =
+        renderedSegs.stream().filter(rs -> segmentation.test(rs.seg())).findFirst().orElse(null);
+    if (svt == null || shown == null || svt.getSegVolume().isDisposed()) {
+      showStatus(Messages.getString("cut.segment.notShown"));
+      return;
+    }
+    KeptMask mask = getOrCreateKeptMask();
+    if (mask == null) {
+      return;
+    }
+    boolean[] ids = svt.getSegVolume().storageIdsOf(segmentNumber + shown.offset());
+    SegVolumeField field = new SegVolumeField(svt.getSegVolume(), svt.getColorLut(), false);
+    runCut(
+        mask,
+        Messages.getString("cut.selecting"),
+        () -> {
+          long start = System.nanoTime();
+          VoxelBits region = field.regionOf(mask.space(), ids);
+          LOGGER.info(
+              "{} segment {}: {} voxels in {} ms",
+              keep ? "Keep" : "Remove",
+              segmentNumber,
+              region.count(),
+              (System.nanoTime() - start) / 1_000_000);
+          if (region.count() == 0) {
+            return null; // keeping nothing would cut the whole volume away
+          }
+          return keep
+              ? VoxelFlood.keepOnly(mask.bits(), region)
+              : VoxelFlood.remove(mask.bits(), region);
+        },
+        () -> {});
+  }
+
+  /**
+   * Adds a step done outside the view, such as a change of the selected bones, to the view's undo
+   * history, so that Ctrl+Z and Ctrl+Y walk through it with the cuts and crops.
+   */
+  public void pushEdit(EditHistory.Edit edit) {
+    editHistory.push(edit);
+    notifyToolState();
+  }
+
+  /** The voxels of one visible segment, its marrow included, whatever their opacity. */
+  private VoxelFlood.Visibility visibilityOfBone(SegmentField segments, int bone) {
+    VolumeSpace space = volumeSpace();
+    return new VoxelFlood.Visibility() {
+      @Override
+      public boolean visible(int x, int y, int z, double value) {
+        Vector3d t = space.texCoordOfTextureVoxel(x, y, z, new Vector3d());
+        return segments.visibleLabel(t) == bone;
+      }
+
+      @Override
+      public long workingBytes() {
+        return segments.workingBytes();
+      }
+    };
+  }
+
+  /**
+   * What the renderer shows of the anatomy, voxel by voxel: its opacity, and in the mask modes its
+   * place inside or outside the visible segments.
+   */
+  private VoxelFlood.Visibility visibilityForSelection() {
+    VoxelFlood.Visibility opaque =
+        VoxelFlood.Visibility.ofOpacity(transferFunction(), VISIBLE_OPACITY);
+    VolumePicker.SegMode mode = segMode();
+    if (mode != VolumePicker.SegMode.MASK_INCLUDE && mode != VolumePicker.SegMode.MASK_EXCLUDE) {
+      return opaque;
+    }
+    SegmentField segments = segmentField();
+    VolumeSpace space = volumeSpace();
+    return new VoxelFlood.Visibility() {
+      @Override
+      public boolean visible(int x, int y, int z, double value) {
+        if (!opaque.visible(x, y, z, value)) {
+          return false;
+        }
+        Vector3d t = space.texCoordOfTextureVoxel(x, y, z, new Vector3d());
+        return !mode.masksAnatomy(segments.insideVisible(t));
+      }
+
+      @Override
+      public long workingBytes() {
+        return segments.workingBytes();
+      }
+    };
+  }
+
+  /**
+   * What a cut says when it is over: {@code nothing} when it found nothing to cut, {@code done}
+   * when it cut something ({@code null} counts the voxels).
+   */
+  private record CutText(String nothing, String done) {
+    static final CutText DEFAULT = new CutText(Messages.getString("cut.nothing"), null);
+  }
+
+  /** Computes a cut on the worker thread and applies it on the event dispatch thread. */
+  private void runCut(KeptMask mask, String message, Supplier<MaskDiff> work, Runnable after) {
+    runCut(mask, message, work, after, CutText.DEFAULT);
+  }
+
+  private void runCut(
+      KeptMask mask, String message, Supplier<MaskDiff> work, Runnable after, CutText text) {
+    cutRunning = true;
+    statusMessage = message;
+    setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
+    repaint();
+    CUT_EXECUTOR.execute(
+        () -> {
+          MaskDiff diff = null;
+          String failure = null;
+          try {
+            diff = work.get();
+          } catch (VoxelFlood.BudgetException e) {
+            LOGGER.warn("3D cut refused: {}", e.getMessage());
+            failure =
+                String.format(
+                    Messages.getString("cut.memory"),
+                    e.neededBytes() >> 20,
+                    e.availableBytes() >> 20);
+          } catch (Throwable e) { // NOSONAR an OutOfMemoryError must not leave the view locked
+            LOGGER.error("3D cut", e);
+            failure = Messages.getString("cut.failed");
+          } finally {
+            MaskDiff result = diff;
+            String why = failure;
+            GuiExecutor.execute(() -> finishCut(mask, result, why, after, text));
+          }
+        });
+  }
+
+  /** EDT part of {@link #runCut}: always clears the running state, then applies the result. */
+  private void finishCut(
+      KeptMask mask, MaskDiff result, String failure, Runnable after, CutText text) {
+    cutRunning = false;
+    statusMessage = null;
+    setCursor(null);
+    try {
+      if (failure != null) {
+        reportCut(failure);
+      } else if (result != null && keptMask == mask) {
+        mask.apply(result);
+        if (!result.isEmpty()) {
+          editHistory.push(EditHistory.cut(mask));
+        }
+        after.run();
+        if (result.isEmpty()) {
+          reportCut(text.nothing());
+        } else {
+          reportCut(
+              text.done() != null
+                  ? text.done()
+                  : String.format(Messages.getString("cut.removed"), result.voxels()));
+        }
+      } else if (keptMask == mask) {
+        reportCut(text.nothing());
+      }
+    } finally {
+      cutReport = null;
+      cutChanged();
+    }
+  }
+
+  private void cutChanged() {
+    notifyToolState();
+    display();
+  }
+
+  /** The crop and cut history of this view. */
+  public EditHistory getEditHistory() {
+    return editHistory;
+  }
+
+  /** Takes back the last cut or crop box change. */
+  public boolean undoEdit() {
+    cropBeforeAdjust = null;
+    if (cutRunning || !replay(editHistory::undo)) {
+      return false;
+    }
+    cutChanged();
+    notifyCropListeners();
+    return true;
+  }
+
+  /** Does again the last cut or crop box change taken back. */
+  public boolean redoEdit() {
+    cropBeforeAdjust = null;
+    if (cutRunning || !replay(editHistory::redo)) {
+      return false;
+    }
+    cutChanged();
+    notifyCropListeners();
+    return true;
+  }
+
+  private boolean replay(BooleanSupplier step) {
+    replaying = true;
+    try {
+      return step.getAsBoolean();
+    } finally {
+      replaying = false;
+    }
+  }
+
+  /** {@code true} when neither a crop box nor a cut hides any part of the volume. */
+  public boolean isWholeVolumeShown() {
+    KeptMask mask = keptMask;
+    return (!cropEnabled || cropBox.isFull()) && (mask == null || mask.isFull());
+  }
+
+  /**
+   * Shows the whole volume again, with the crop box off and every cut restored, as one undoable
+   * step, and clears the lasso.
+   */
+  public void restoreVolume() {
+    KeptMask mask = keptMask;
+    if (cutRunning) {
+      return;
+    }
+    lasso.clear();
+    cropBeforeAdjust = null;
+    EditHistory.Group group = new EditHistory.Group();
+    if (mask != null && !mask.isFull()) {
+      mask.restore();
+      group.add(EditHistory.cut(mask));
+    }
+    EditHistory.CropState before = getCropState();
+    EditHistory.CropState after = new EditHistory.CropState(false, CropBox.FULL);
+    if (!before.equals(after)) {
+      applyCrop(false, CropBox.FULL, false);
+      group.add(EditHistory.crop(before, after, this::applyCropState));
+    }
+    if (!group.isEmpty()) {
+      editHistory.push(group.build());
+    }
+    cutChanged();
+    notifyCropListeners();
+  }
+
+  public void clearCutHistory() {
+    KeptMask mask = keptMask;
+    if (mask != null) {
+      mask.clearHistory();
+    }
+    editHistory.clear();
+    cutChanged();
+  }
+
+  private void showStatus(String message) {
+    statusMessage = message;
+    repaint();
+    if (statusTimer != null) {
+      statusTimer.stop();
+    }
+    statusTimer =
+        new Timer(
+            2000,
+            _ -> {
+              if (!cutRunning) {
+                statusMessage = null;
+                repaint();
+              }
+            });
+    statusTimer.setRepeats(false);
+    statusTimer.start();
+  }
+
+  // ---- Lengths and arrows ----
+
+  public Annotations3d getAnnotations() {
+    return annotations;
+  }
+
+  /** First click sets the first end of a length, the second one the other end. */
+  public void lengthClick(Point p) {
+    String unavailable = pickUnavailableReason();
+    if (unavailable != null) {
+      showStatus(unavailable);
+      return;
+    }
+    pickAsync(p, this::lengthPicked);
+  }
+
+  private void lengthPicked(Optional<Hit> hit) {
+    if (hit.isEmpty()) {
+      showStatus(Messages.getString("cut.nothing"));
+      return;
+    }
+    if (lengthStart == null) {
+      lengthStart = hit.get().texCoord();
+    } else {
+      VolumeSpace space = volumeSpace();
+      Volume<?, ?> volume = volTexture.getVolume();
+      Vector3d a = space.volumeOfTexCoord(lengthStart, new Vector3d());
+      double mm = Annotations3d.lengthMm(a, hit.get().volume(), volume.getPixelRatio());
+      annotations.add(
+          new Item(Kind.LENGTH, lengthStart, hit.get().texCoord(), String.format("%.1f mm", mm)));
+      lengthStart = null;
+    }
+    repaint();
+  }
+
+  public void arrowStart(Point p) {
+    String unavailable = pickUnavailableReason();
+    if (unavailable != null) {
+      showStatus(unavailable);
+      arrowStartTex = null;
+      return;
+    }
+    arrowDragPoint = p;
+    pickAsync(
+        p,
+        hit -> {
+          if (hit.isEmpty()) {
+            arrowStartTex = null;
+            arrowDragPoint = null;
+            return;
+          }
+          arrowStartTex = hit.get().texCoord();
+          arrowStartDepth = hit.get().depth();
+          repaint();
+        });
+  }
+
+  public void arrowDrag(Point p) {
+    if (arrowStartTex != null) {
+      arrowDragPoint = p;
+      repaint();
+    }
+  }
+
+  /** Ends the arrow on the surface under the point, or at the depth of its tail when it misses. */
+  public void arrowEnd(Point p) {
+    Vector3d tail = arrowStartTex;
+    double tailDepth = arrowStartDepth;
+    if (tail == null) {
+      return;
+    }
+    arrowDragPoint = p;
+    pickAsync(
+        p,
+        hit -> {
+          if (arrowStartTex != tail) {
+            return; // the arrow was cancelled or restarted meanwhile
+          }
+          Vector3d end = hit.map(Hit::texCoord).orElseGet(() -> texCoordAtDepth(p, tailDepth));
+          if (end != null && !end.equals(tail)) {
+            annotations.add(new Item(Kind.ARROW, tail, end, ""));
+          }
+          arrowStartTex = null;
+          arrowDragPoint = null;
+          repaint();
+        });
+  }
+
+  /** Drops the first point of a length being measured, if any. */
+  public boolean cancelPendingMeasure() {
+    if (lengthStart == null && arrowStartTex == null) {
+      return false;
+    }
+    lengthStart = null;
+    arrowStartTex = null;
+    arrowDragPoint = null;
+    repaint();
+    return true;
+  }
+
+  public void clearAnnotations() {
+    annotations.clear();
+    cancelPendingMeasure();
+    repaint();
+  }
+
+  // ---- View state snapshots and the quick movie ----
+
+  public void takeSnapshot() {
+    if (volTexture == null) {
+      return;
+    }
+    snapshots.add(ViewSnapshot.of(this));
+    snapshotIndex = snapshots.size() - 1;
+    showStatus(String.format(Messages.getString("view.snapshot.taken"), snapshotIndex + 1));
+  }
+
+  public int snapshotCount() {
+    return snapshots.size();
+  }
+
+  /** Restores the previous ({@code -1}) or next ({@code +1}) snapshot. */
+  public void showSnapshot(int step) {
+    if (snapshots.isEmpty()) {
+      return;
+    }
+    int index = Math.clamp(snapshotIndex < 0 ? 0 : snapshotIndex + step, 0, snapshots.size() - 1);
+    snapshotIndex = index;
+    snapshots.get(index).applyTo(this);
+    showStatus(
+        String.format(Messages.getString("view.snapshot.shown"), index + 1, snapshots.size()));
+  }
+
+  public boolean isMovieRunning() {
+    return movieTimer != null;
+  }
+
+  /** Starts or stops the turn about the vertical axis of the screen. */
+  public void toggleMovie() {
+    if (movieTimer != null) {
+      stopMovie();
+      return;
+    }
+    movieTimer =
+        new Timer(
+            40,
+            _ -> {
+              if (volTexture == null) {
+                stopMovie();
+                return;
+              }
+              camera.rotateAboutView(new Vector3d(0, 1, 0), Math.toRadians(2));
+            });
+    movieTimer.start();
+  }
+
+  private void stopMovie() {
+    if (movieTimer != null) {
+      movieTimer.stop();
+      movieTimer = null;
+      camera.setAdjusting(false);
+      repaint();
+    }
+  }
+
+  /** Alt + left drag draws the lasso whatever the current mouse tool, as the scalpel key does. */
+  private final class AltLassoHandler extends MouseAdapter {
+    private boolean active;
+
+    @Override
+    public void mousePressed(MouseEvent e) {
+      if (!e.isConsumed()
+          && SwingUtilities.isLeftMouseButton(e)
+          && MouseToolListener.isAltDown(e)
+          && hasValidContent()) {
+        active = true;
+        lassoStart(e.getPoint());
+        e.consume();
+      }
+    }
+
+    @Override
+    public void mouseDragged(MouseEvent e) {
+      if (active) {
+        lassoExtend(e.getPoint());
+        e.consume();
+      }
+    }
+
+    @Override
+    public void mouseReleased(MouseEvent e) {
+      if (active) {
+        active = false;
+        lassoClose();
+        e.consume();
+      }
+    }
   }
 
   private void destroySegTexture() {
@@ -1800,6 +3775,9 @@ public class View3d extends VolumeCanvas
 
   @Override
   public void iniDefaultMouseListener() {
+    // The Alt + left drag lasso comes first so the mouse tools see its events as consumed.
+    this.addMouseListener(altLassoHandler);
+    this.addMouseMotionListener(altLassoHandler);
     // focus listener is always on
     this.addMouseListener(focusHandler);
     this.addMouseMotionListener(focusHandler);
@@ -1892,7 +3870,8 @@ public class View3d extends VolumeCanvas
     initActionWState();
 
     View c = Camera.getDefaultOrientation();
-    camera.set(c.position(), c.rotation(), -getBestFitViewScale(), false);
+    camera.clearPan();
+    camera.set(c.position(), c.rotation(), fitZoomForVisible(), false);
     renderingLayer.setEnableRepaint(false);
     renderingLayer.setQuality(getDefaultQuality());
     renderingLayer.setOpacity(1.0);
@@ -1998,7 +3977,9 @@ public class View3d extends VolumeCanvas
 
   @Override
   public void keyPressed(KeyEvent e) {
-    defaultKeyPressed(eventManager, e);
+    if (!Shortcuts3d.handle(this, e)) {
+      defaultKeyPressed(eventManager, e);
+    }
   }
 
   @Override
@@ -2046,8 +4027,10 @@ public class View3d extends VolumeCanvas
           continue;
         }
         if (command.equals(ActionW.WINDOW.cmd())) {
+          windowBeforePreview = null; // the user's window ends a threshold preview
           renderingLayer.setWindowWidth(((Double) val).intValue(), forceRepaint);
         } else if (command.equals(ActionW.LEVEL.cmd())) {
+          windowBeforePreview = null;
           renderingLayer.setWindowCenter(((Double) val).intValue(), forceRepaint);
         } else if (command.equals(ActionW.PRESET.cmd())) {
           if (val instanceof PresetWindowLevel preset) {
@@ -2214,6 +4197,7 @@ public class View3d extends VolumeCanvas
 
   private void setPresetWindowLevel(PresetWindowLevel preset, boolean repaint) {
     if (preset != null) {
+      windowBeforePreview = null;
       renderingLayer.setEnableRepaint(false);
       renderingLayer.setWindowWidth((int) preset.getWindow());
       renderingLayer.setWindowCenter((int) preset.getLevel());

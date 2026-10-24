@@ -20,10 +20,16 @@ import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.viewer3d.EventManager;
 
-/** Adds the Bone select (region grow) tool to the 3D viewer when it shows a CT. */
+/**
+ * Adds the Bones panel to the 3D viewer and to the 2D viewer, whose tools the MPR shares, when they
+ * show a CT. The panels share one state; see {@link BoneGrowTool}.
+ */
 @Component(
     service = InsertableFactory.class,
-    property = {"org.weasis.dicom.viewer3d.View3DContainer=true"})
+    property = {
+      "org.weasis.dicom.viewer3d.View3DContainer=true",
+      "org.weasis.dicom.viewer2d.View2dContainer=true"
+    })
 public class BoneGrowToolFactory extends ExtToolFactory<DicomImageElement> {
 
   public BoneGrowToolFactory() {

@@ -76,6 +76,8 @@ public class SegmentationTool extends PluginTool implements SeriesViewerListener
     NONE(Messages.getString("segmentation.none")),
     SEG_ONLY(Messages.getString("segmentation.only")),
     SEG_OVERLAY(Messages.getString("segmentation.overlay")),
+    /** The CT itself, shown only inside the visible segments and tinted in their colours. */
+    BONES(Messages.getString("segmentation.bones")),
     SEG_MASK_INCLUDE(Messages.getString("segmentation.mask.include")),
     SEG_MASK_EXCLUDE(Messages.getString("segmentation.mask.exclude"));
 

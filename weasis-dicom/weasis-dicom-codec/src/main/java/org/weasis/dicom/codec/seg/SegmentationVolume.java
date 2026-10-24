@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.codec.seg;
 
 import java.io.File;
@@ -444,6 +445,48 @@ public final class SegmentationVolume {
     }
     markOccupied(x, y, z);
     addLabelAt(linearIndex(x, y, z), segmentNumber);
+  }
+
+  /**
+   * Addis Ortho, for live editing of non-overlapping labels: makes voxel (x, y, z) hold {@code
+   * segmentNumber} alone, whatever it held, or nothing when {@code segmentNumber} is 0. A segment
+   * number this volume was not created with is ignored.
+   */
+  public void setLabel(int x, int y, int z, int segmentNumber) {
+    if (x < 0 || x >= size.x || y < 0 || y >= size.y || z < 0 || z >= size.z) {
+      return;
+    }
+    long index = linearIndex(x, y, z);
+    if (segmentNumber <= 0) {
+      writeId(index, 0);
+      return;
+    }
+    if (segmentNumber >= segNumToSoloId.length || segNumToSoloId[segmentNumber] == 0) {
+      return;
+    }
+    markOccupied(x, y, z);
+    writeId(index, segNumToSoloId[segmentNumber]);
+  }
+
+  /**
+   * Addis Ortho: whether voxel (x, y, z) holds {@code segmentNumber} alone, as {@link #setLabel}
+   * leaves it.
+   */
+  public boolean hasLabel(int x, int y, int z, int segmentNumber) {
+    if (x < 0 || x >= size.x || y < 0 || y >= size.y || z < 0 || z >= size.z) {
+      return false;
+    }
+    if (segmentNumber <= 0
+        || segmentNumber >= segNumToSoloId.length
+        || segNumToSoloId[segmentNumber] == 0) {
+      return false;
+    }
+    return readId(linearIndex(x, y, z)) == segNumToSoloId[segmentNumber];
+  }
+
+  /** Addis Ortho: the largest segment number this volume can hold. */
+  public int maxSegmentNumber() {
+    return segNumToSoloId.length - 1;
   }
 
   /**
@@ -1007,6 +1050,21 @@ public final class SegmentationVolume {
     bounds[4] = Math.min(bounds[4], p.z);
     bounds[5] = Math.max(bounds[5], p.z);
     return bounds;
+  }
+
+  /**
+   * The storage IDs holding a segment, alone or overlapping others, as a table indexed by storage
+   * ID; empty when the segment is unknown.
+   */
+  public boolean[] storageIdsOf(int segmentNumber) {
+    synchronized (idLock) {
+      List<Integer>[] table = segmentsByIdTable();
+      boolean[] ids = new boolean[table.length];
+      for (int id = 1; id < table.length; id++) {
+        ids[id] = table[id] != null && table[id].contains(segmentNumber);
+      }
+      return ids;
+    }
   }
 
   /** Snapshots {@link #idToSegments} as an array indexed by storage ID. */

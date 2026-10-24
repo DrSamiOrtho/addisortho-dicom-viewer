@@ -87,6 +87,8 @@ uniform int  segSegmentCount = 0;
 // Segmentation voxel mask: 0 = none, 1 = include (render only the real voxels inside visible
 // segments), 2 = exclude (remove those voxels from the rendering). No colour overlay is drawn.
 uniform int  segMaskMode = 0;
+// Bones in colour: inside a visible segment the anatomy is tinted with the segment colour.
+uniform bool segTint = false;
 // Smooth segment surfaces: the visible segments are found as the 0.5 level of segOccTexture, the
 // trilinear occupancy of the visible segments, instead of from the nearest label voxel.
 uniform bool segSmooth = false;
@@ -102,3 +104,7 @@ uniform vec3 cropMax = vec3(1.0);
 // it covers (one in-plane voxel is the unit), so the result no longer depends on the sampling rate.
 uniform bool smoothShading = false;
 uniform bool accurateBlending = false;
+
+// Kept mask (Addis Ortho scalpel): when on, keptTexture holds 255 where the volume is shown and 0
+// where a cut removed it; a removed voxel contributes nothing to any rendering mode.
+uniform bool keptEnabled = false;
