@@ -1,1 +1,1 @@
--Djogamp.debug.NativeLibrary=true
+
