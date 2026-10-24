@@ -43,13 +43,16 @@ import java.awt.Dialog;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Frame;
+import java.awt.Graphics2D;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
+import java.awt.Image;
 import java.awt.Insets;
 import java.awt.MouseInfo;
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.Robot;
 import java.awt.Taskbar;
 import java.awt.Taskbar.Feature;
@@ -60,6 +63,7 @@ import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -331,9 +335,28 @@ public class WeasisWin {
       }
     }
 
-    if (!taskBarIcon) frame.setIconImage(imageIcon.getImage());
+    // Windows has no taskbar icon API: the taskbar shows the window's own icon. Give it real
+    // pictures at the sizes Windows uses (16 to 256 px); the lazily drawn SVG image alone showed
+    // a blank taskbar button there.
+    if (!taskBarIcon) frame.setIconImages(windowIconImages(logoIcon));
 
     DesktopAdapter.buildDesktopMenu(this);
+  }
+
+  private static List<Image> windowIconImages(LogoIcon logoIcon) {
+    List<Image> images = new ArrayList<>();
+    for (int size : new int[] {16, 20, 24, 32, 40, 48, 64, 128, 256}) {
+      FlatSVGIcon icon = ResourceUtil.getIcon(logoIcon, size, size);
+      BufferedImage image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+      Graphics2D g = image.createGraphics();
+      g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+      // The icon size includes the user interface scale; draw it at exactly size x size.
+      g.scale((double) size / icon.getIconWidth(), (double) size / icon.getIconHeight());
+      icon.paintIcon(null, g, 0, 0);
+      g.dispose();
+      images.add(image);
+    }
+    return images;
   }
 
   public Frame getFrame() {
