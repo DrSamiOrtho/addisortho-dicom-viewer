@@ -1,0 +1,41 @@
+name: Software 3D probe (Windows)
+
+# Addis Ortho: quick check that JOGL reaches OpenGL through the bundled Mesa on a Windows machine
+# without a GPU driver. The installer build runs the same probe; this one is for debugging.
+on:
+  workflow_dispatch:
+    inputs:
+      java_opts:
+        description: 'Extra JVM options for the Mesa run'
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95  # v5.6.0
+        with:
+          distribution: 'temurin'
+          java-version: '26'
+      - name: Probe
+        shell: bash
+        env:
+          MESA_VERSION: "26.2.3"
+          MESA_SHA256: "3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
+          JAVA_OPTS_IN: ${{ inputs.java_opts }}
+        run: |
+          set -uo pipefail
+          curl -fsSL -o mesa.7z "https://github.com/pal1000/mesa-dist-win/releases/download/${MESA_VERSION}/mesa3d-${MESA_VERSION}-release-msvc.7z"
+          echo "${MESA_SHA256}  mesa.7z" | sha256sum -c - || exit 1
+          7z e -y -omesa mesa.7z x64/opengl32.dll x64/libgallium_wgl.dll >/dev/null
+          base=https://repo1.maven.org/maven2/org/jogamp
+          for j in gluegen/gluegen-rt/2.6.0/gluegen-rt-2.6.0 jogl/jogl-all/2.6.0/jogl-all-2.6.0; do
+            curl -fsSLO "$base/$j.jar"; curl -fsSLO "$base/$j-natives-windows-amd64.jar"
+          done
+          cp .github/gl-probe/GlProbe.java .
+          cp="gluegen-rt-2.6.0.jar;jogl-all-2.6.0.jar"
+          java $JAVA_OPTS_IN -cp "$cp" GlProbe.java mesa 2>&1 | grep -v "^WARNING" | head -300
