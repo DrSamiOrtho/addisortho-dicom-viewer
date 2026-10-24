@@ -94,7 +94,9 @@ final class LiveBones {
     if (live == null) {
       GridMap map = GridMap.of(ct.grid(), ct.volume());
       if (map == null) {
-        LOGGER.info("Bones are shown from the SEG file: the CT grid is not the 3D volume grid");
+        LOGGER.info(
+            "Bones are shown from the SEG file: the CT grid is not the 3D volume grid ({})",
+            GridMap.describe(ct.grid(), ct.volume()));
         return java.util.Optional.empty();
       }
       live = new LiveBones(ct.seriesUID(), session.segSeriesUID(), ct.volume(), map);
@@ -251,81 +253,81 @@ final class LiveBones {
   }
 
   /**
-   * How a voxel of the CT grid (the bones' grid) lands on a voxel of the image volume: each axis of
-   * one is an axis of the other, maybe reversed, with an offset. Only such a mapping is taken, so a
-   * bone voxel is exactly one image voxel.
+   * How a voxel of the CT grid (the bones' grid) lands on a voxel of the image volume: the linear
+   * map through patient space, rounded to the nearest image voxel. Only taken when one CT voxel
+   * step moves at most one image voxel along each axis, so the bones keep their shape (no holes, no
+   * stretching); a flipped or swapped axis or a half-voxel offset is fine.
    *
-   * @param axis the image-volume axis each CT axis runs along
-   * @param sign +1 or -1 for each CT axis
-   * @param offset image-volume voxel of CT voxel (0, 0, 0)
+   * @param m image-voxel change per CT voxel step, m[t][i] for image axis t and CT axis i
+   * @param origin image voxel of CT voxel (0, 0, 0), not rounded
    */
-  record GridMap(int[] axis, int[] sign, int[] offset) {
-
-    /** Farthest, in voxels, a mapped voxel may be from a voxel centre. */
-    private static final double TOLERANCE = 0.05;
+  record GridMap(double[][] m, double[] origin) {
 
     void apply(int[] src, int[] dst) {
-      dst[0] = offset[0];
-      dst[1] = offset[1];
-      dst[2] = offset[2];
-      for (int i = 0; i < 3; i++) {
-        dst[axis[i]] += sign[i] * src[i];
+      for (int t = 0; t < 3; t++) {
+        dst[t] =
+            (int) Math.round(origin[t] + m[t][0] * src[0] + m[t][1] * src[1] + m[t][2] * src[2]);
       }
     }
 
-    /** The mapping, or {@code null} when the two grids are not the same voxels. */
+    /** The mapping, or {@code null} when CT voxels are not image voxels one for one. */
     static GridMap of(CtGrid grid, Volume<?, ?> volume) {
-      int[] sizes = {grid.columns(), grid.rows(), grid.sliceCount()};
-      double[] origin = toVoxel(grid, volume, 0, 0, 0);
-      int[] offset = new int[3];
-      for (int t = 0; t < 3; t++) {
-        offset[t] = (int) Math.round(origin[t]);
-        if (Math.abs(origin[t] - offset[t]) > TOLERANCE) {
-          return null;
-        }
-      }
-      int[] axis = new int[3];
-      int[] sign = new int[3];
-      boolean[] used = new boolean[3];
+      int[] n = {grid.columns(), grid.rows(), grid.sliceCount()};
+      double[] o = toVoxel(grid, volume, 0, 0, 0);
+      double[][] m = new double[3][3];
       for (int i = 0; i < 3; i++) {
         int[] step = new int[3];
         step[i] = 1;
         double[] p = toVoxel(grid, volume, step[0], step[1], step[2]);
-        int found = -1;
+        double length = 0;
         for (int t = 0; t < 3; t++) {
-          double d = p[t] - origin[t];
-          if (Math.abs(Math.abs(d) - 1) <= TOLERANCE) {
-            if (found >= 0) {
-              return null;
-            }
-            found = t;
-            sign[i] = d > 0 ? 1 : -1;
-          } else if (Math.abs(d) > TOLERANCE) {
+          m[t][i] = p[t] - o[t];
+          length += m[t][i] * m[t][i];
+        }
+        // One CT step must be one image voxel: else bones would get holes or be squeezed.
+        if (Math.abs(Math.sqrt(length) - 1) > 0.05) {
+          return null;
+        }
+      }
+      GridMap map = new GridMap(m, o);
+      // The far corner lands where the linear map says, inside the volume.
+      int[] far = {n[0] - 1, n[1] - 1, n[2] - 1};
+      double[] p = toVoxel(grid, volume, far[0], far[1], far[2]);
+      int[] size = {volume.getSizeX(), volume.getSizeY(), volume.getSizeZ()};
+      int[] mapped = new int[3];
+      for (int[] corner : new int[][] {{0, 0, 0}, far}) {
+        map.apply(corner, mapped);
+        for (int t = 0; t < 3; t++) {
+          if (mapped[t] < -1 || mapped[t] > size[t]) {
             return null;
           }
         }
-        if (found < 0 || used[found]) {
-          return null;
-        }
-        used[found] = true;
-        axis[i] = found;
       }
-      GridMap map = new GridMap(axis, sign, offset);
-      // The far corner lands where the mapping says, inside the volume: no drift between slices.
-      int[] far = {sizes[0] - 1, sizes[1] - 1, sizes[2] - 1};
-      int[] mapped = new int[3];
       map.apply(far, mapped);
-      double[] p = toVoxel(grid, volume, far[0], far[1], far[2]);
-      int[] volumeSize = {volume.getSizeX(), volume.getSizeY(), volume.getSizeZ()};
       for (int t = 0; t < 3; t++) {
-        if (Math.abs(p[t] - mapped[t]) > 0.25 || mapped[t] < 0 || mapped[t] >= volumeSize[t]) {
-          return null;
-        }
-        if (offset[t] < 0 || offset[t] >= volumeSize[t]) {
+        if (Math.abs(p[t] - mapped[t]) > 0.6) {
           return null;
         }
       }
       return map;
+    }
+
+    /** Where CT voxels land in the image volume, for the log. */
+    static String describe(CtGrid grid, Volume<?, ?> volume) {
+      int[] n = {grid.columns(), grid.rows(), grid.sliceCount()};
+      return String.format(
+          "CT %dx%dx%d, volume %dx%dx%d, (0,0,0)->%s (1,0,0)->%s (0,1,0)->%s (0,0,1)->%s far->%s",
+          n[0],
+          n[1],
+          n[2],
+          volume.getSizeX(),
+          volume.getSizeY(),
+          volume.getSizeZ(),
+          java.util.Arrays.toString(toVoxel(grid, volume, 0, 0, 0)),
+          java.util.Arrays.toString(toVoxel(grid, volume, 1, 0, 0)),
+          java.util.Arrays.toString(toVoxel(grid, volume, 0, 1, 0)),
+          java.util.Arrays.toString(toVoxel(grid, volume, 0, 0, 1)),
+          java.util.Arrays.toString(toVoxel(grid, volume, n[0] - 1, n[1] - 1, n[2] - 1)));
     }
 
     private static double[] toVoxel(CtGrid grid, Volume<?, ?> volume, int x, int y, int z) {
