@@ -33,6 +33,8 @@ public class LoadLocalDicom extends LoadDicom {
 
   private final File[] files;
   private final boolean recursive;
+  private int totalFiles;
+  private int doneFiles;
 
   public LoadLocalDicom(
       File[] files, boolean recursive, DataExplorerModel explorerModel, OpeningViewer openingMode) {
@@ -54,9 +56,40 @@ public class LoadLocalDicom extends LoadDicom {
     startLoadingEvent();
     if (files.length > 0) {
       openingStrategy.prepareImport();
+      totalFiles = countFiles(files, true);
       addSelectionAndNotify(files, true);
     }
     return true;
+  }
+
+  /** Counts the files {@link #addSelectionAndNotify} will visit, so loading can show a percentage. */
+  private int countFiles(File[] file, boolean firstLevel) {
+    int count = 0;
+    if (file != null) {
+      for (File value : file) {
+        if (isCancelled()) {
+          return count;
+        }
+        if (value == null || !value.canRead()) {
+          continue;
+        }
+        if (value.isDirectory()) {
+          if (firstLevel || recursive) {
+            count += countFiles(value.listFiles(), false);
+          }
+        } else {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
+
+  private void fileDone() {
+    doneFiles++;
+    if (totalFiles > 0) {
+      showProgress(null, doneFiles * 100 / totalFiles);
+    }
   }
 
   protected void addSelectionAndNotify(File[] file, boolean firstLevel) {
@@ -78,29 +111,9 @@ public class LoadLocalDicom extends LoadDicom {
         if (firstLevel || recursive) {
           folders.add(value);
         }
-      } else if (FileUtil.isFileExtensionMatching(value.toPath(), DicomCodec.FILE_EXTENSIONS)
-          || MimeInspector.isMatchingMimeTypeFromMagicNumber(value, DicomMediaIO.DICOM_MIMETYPE)) {
-        DicomMediaIO loader = new DicomMediaIO(value);
-        Reading reading = loader.getReadingStatus();
-        if (reading == Reading.READABLE) {
-          if (value.getPath().startsWith(AppProperties.APP_TEMP_DIR.toString())) {
-            loader.getFileCache().setOriginalTempFile(value.toPath());
-          }
-          uniqueSeriesSet.add(buildDicomStructure(loader));
-
-          File gpxFile = new File(value.getPath() + ".xml");
-          GraphicModel graphicModel = XmlSerializer.readPresentationModel(gpxFile);
-          if (graphicModel != null) {
-            loader.setTag(TagW.PresentationModel, graphicModel);
-          }
-        } else if (reading == Reading.ERROR) {
-          errors.incrementAndGet();
-        } else if (reading == Reading.UNSUPPORTED) {
-          unsupported.incrementAndGet();
-        }
-      } else if (FileUtil.isFileExtensionMatching(value.toPath(), DicomZipCodec.FILE_EXTENSIONS)
-          || MimeInspector.isMatchingMimeTypeFromMagicNumber(value, DicomZipMediaIO.MIME_TYPE)) {
-        new DicomZipMediaIO(value.toURI(), null).delegate(dicomModel);
+      } else {
+        addFile(value, uniqueSeriesSet);
+        fileDone();
       }
     }
 
@@ -114,6 +127,38 @@ public class LoadLocalDicom extends LoadDicom {
 
     for (File folder : folders) {
       addSelectionAndNotify(folder.listFiles(), false);
+    }
+  }
+
+  private void addFile(File value, Set<DicomSeries> uniqueSeriesSet) {
+    if (FileUtil.isFileExtensionMatching(value.toPath(), DicomCodec.FILE_EXTENSIONS)
+        || MimeInspector.isMatchingMimeTypeFromMagicNumber(value, DicomMediaIO.DICOM_MIMETYPE)) {
+      DicomMediaIO loader = new DicomMediaIO(value);
+      Reading reading = loader.getReadingStatus();
+      if (reading == Reading.READABLE) {
+        if (value.getPath().startsWith(AppProperties.APP_TEMP_DIR.toString())) {
+          loader.getFileCache().setOriginalTempFile(value.toPath());
+        }
+        uniqueSeriesSet.add(buildDicomStructure(loader));
+
+        File gpxFile = new File(value.getPath() + ".xml");
+        GraphicModel graphicModel = XmlSerializer.readPresentationModel(gpxFile);
+        if (graphicModel != null) {
+          loader.setTag(TagW.PresentationModel, graphicModel);
+        }
+      } else if (reading == Reading.ERROR) {
+        errors.incrementAndGet();
+      } else if (reading == Reading.UNSUPPORTED) {
+        unsupported.incrementAndGet();
+      }
+    } else if (FileUtil.isFileExtensionMatching(value.toPath(), DicomZipCodec.FILE_EXTENSIONS)
+        || MimeInspector.isMatchingMimeTypeFromMagicNumber(value, DicomZipMediaIO.MIME_TYPE)) {
+      DicomZipMediaIO.loadDicomZip(
+          value,
+          dicomModel,
+          OpeningViewer.ALL_PATIENTS,
+          GuiUtils.getUICore().getApplicationWindow(),
+          percent -> showProgress(Messages.getString("DicomZipImport.unzipping"), percent));
     }
   }
 

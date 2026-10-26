@@ -73,6 +73,18 @@ public class LoadingTaskPanel extends JPanel {
         SpinnerProgress globalProgress = task.getBar();
         this.add(globalProgress);
         globalProgress.setIndeterminate(true);
+        // The spinner turns into a percentage once the task reports how far it has got.
+        task.addPropertyChangeListener(
+            evt -> {
+              if ("progress".equals(evt.getPropertyName()) // NON-NLS
+                  && evt.getNewValue() instanceof Integer percent) {
+                globalProgress.setIndeterminate(false);
+                globalProgress.setValue(percent);
+              } else if (ExplorerTask.STEP_PROPERTY.equals(evt.getPropertyName())
+                  && evt.getNewValue() instanceof String step) {
+                message.setText(step);
+              }
+            });
       }
     }
     if (task != null) {

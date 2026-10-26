@@ -26,8 +26,11 @@
     <?define JpUpgradeVersionOnlyDetectDowngrade="yes"?>
   <?endif?>
 
+  <!-- A fresh product code for every build: jpackage derives it from the name and version, so two
+       4.7.3 builds had the same code and Windows refused the second with "Another version of this
+       product is already installed". With its own code, a new build replaces the old one. -->
   <Product
-    Id="$(var.JpProductCode)"
+    Id="*"
     Name="$(var.JpAppName)"
     Language="$(var.JpProductLanguage)"
     Version="$(var.JpAppVersion)"
@@ -44,19 +47,21 @@
 
     <Media Id="1" Cabinet="Data.cab" EmbedCab="yes" CompressionLevel="high" />
 
+    <!-- The same version counts as an upgrade (IncludeMaximum), not a downgrade, so installing a
+         rebuilt 4.7.3 over an older 4.7.3 removes the old one first, as the macOS pkg does. -->
     <Upgrade Id="$(var.JpProductUpgradeCode)">
       <UpgradeVersion
         OnlyDetect="$(var.JpUpgradeVersionOnlyDetectUpgrade)"
         Property="JP_UPGRADABLE_FOUND"
         Maximum="$(var.JpAppVersion)"
         MigrateFeatures="yes"
-        IncludeMaximum="$(var.JpUpgradeVersionOnlyDetectUpgrade)" />
+        IncludeMaximum="yes" />
       <UpgradeVersion
         OnlyDetect="$(var.JpUpgradeVersionOnlyDetectDowngrade)"
         Property="JP_DOWNGRADABLE_FOUND"
         Minimum="$(var.JpAppVersion)"
         MigrateFeatures="yes"
-        IncludeMinimum="$(var.JpUpgradeVersionOnlyDetectDowngrade)" />
+        IncludeMinimum="no" />
     </Upgrade>
 
     <?ifndef JpAllowUpgrades ?>
