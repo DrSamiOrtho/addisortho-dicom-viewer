@@ -23,10 +23,12 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 import java.util.Vector;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultComboBoxModel;
@@ -69,6 +71,7 @@ import org.weasis.core.api.image.WindowOp;
 import org.weasis.core.api.image.ZoomOp;
 import org.weasis.core.api.media.data.MediaElement;
 import org.weasis.core.api.media.data.MediaSeries;
+import org.weasis.core.api.media.data.MediaSeriesGroup;
 import org.weasis.core.api.media.data.Series;
 import org.weasis.core.api.media.data.TagW;
 import org.weasis.core.api.util.FontItem;
@@ -119,6 +122,8 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   public static final String DICOM_ONLY_RAW = "exp.dicom.only.raw"; // NON-NLS
   public static final String DICOM_NEW_UID = "exp.dicom.new.uid"; // NON-NLS
   public static final String CD_COMPATIBLE = "exp.cd";
+  /** Addis Ortho: a single patient's export goes into a folder named after the patient. */
+  public static final String PATIENT_FOLDER = "exp.patient.folder"; // NON-NLS
 
   public enum Format {
     DICOM("DICOM", "dcm"),
@@ -169,6 +174,8 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
           TransferSyntax.JPEGXL_RECOMPRESSION,
           TransferSyntax.JPEGXL);
   protected final JComboBox<Format> comboBoxImgFormat;
+  private final JCheckBox checkBoxPatientFolder =
+      new JCheckBox(Messages.getString("LocalExport.patient_folder"));
 
   public LocalExport(DicomModel dicomModel, CheckTreeModel treeModel) {
     this(Messages.getString("LocalExport.local_dev"), 0, dicomModel, treeModel);
@@ -202,7 +209,57 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   }
 
   protected List<JComponent> getAdditionalOption() {
-    return Collections.emptyList();
+    // Untick for an export leaving the hospital: the folder or zip is then not named.
+    checkBoxPatientFolder.setSelected(
+        Boolean.parseBoolean(getPreferences().getProperty(PATIENT_FOLDER, "true")));
+    checkBoxPatientFolder.addActionListener(
+        _ ->
+            getPreferences()
+                .setProperty(
+                    PATIENT_FOLDER, String.valueOf(checkBoxPatientFolder.isSelected())));
+    return List.of(GuiUtils.boxHorizontalStrut(ITEM_SEPARATOR), checkBoxPatientFolder);
+  }
+
+  /**
+   * The patient of the selection as "NAME FIRSTNAME ID", or null when the selection holds several
+   * patients or none.
+   */
+  public static String getSelectedPatient(CheckTreeModel model) {
+    Set<MediaSeriesGroup> patients = new LinkedHashSet<>();
+    TreePath[] paths = model.getCheckingPaths();
+    if (paths != null) {
+      for (TreePath path : paths) {
+        if (path.getPathCount() > 1
+            && path.getPathComponent(1) instanceof DefaultMutableTreeNode node
+            && node.getUserObject() instanceof MediaSeriesGroup pt) {
+          patients.add(pt);
+        }
+      }
+    }
+    if (patients.size() != 1) {
+      return null;
+    }
+    MediaSeriesGroup pt = patients.iterator().next();
+    String name = TagD.getTagValue(pt, Tag.PatientName, String.class);
+    String id = TagD.getTagValue(pt, Tag.PatientID, String.class);
+    String text =
+        ((name == null ? "" : name.replace('^', ' ')) + " " + (id == null ? "" : id))
+            .replaceAll("\\s+", " ")
+            .trim();
+    return text.isEmpty() ? null : text;
+  }
+
+  /** A folder named after the patient inside {@code parent}, numbered if one already exists. */
+  static File patientFolder(File parent, String patient) {
+    String name = FileUtil.getValidFileNameWithoutHTML(patient).trim();
+    if (name.isEmpty()) {
+      return parent;
+    }
+    File dir = new File(parent, name);
+    for (int i = 2; dir.exists(); i++) {
+      dir = new File(parent, name + " (" + i + ")");
+    }
+    return dir;
   }
 
   protected Properties getPreferences() {
@@ -414,6 +471,13 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   }
 
   public void browseImgFile(Format format) {
+    browseImgFile(format, null);
+  }
+
+  /**
+   * @param patient the patient of the selection, or null: names the zip file
+   */
+  public void browseImgFile(Format format, String patient) {
     Properties pref = getPreferences();
     String targetDirectoryPath = pref.getProperty(LAST_DIR, "");
 
@@ -445,6 +509,10 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
           fileChooser.setSelectedFile(new File(newExportSelectionName));
         }
       }
+    }
+    if (isSaveFileMode && patient != null) {
+      fileChooser.setSelectedFile(
+          new File(targetDirectoryPath, FileUtil.getValidFileNameWithoutHTML(patient) + ".zip"));
     }
 
     File selectedFile;
@@ -480,9 +548,12 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   @Override
   public void exportDICOM(final CheckTreeModel model, JProgressBar info) throws IOException {
     Format format = (Format) comboBoxImgFormat.getSelectedItem();
-    browseImgFile(format);
+    String patient = checkBoxPatientFolder.isSelected() ? getSelectedPatient(model) : null;
+    browseImgFile(format, patient);
     if (outputFolder != null) {
-      final File exportDir = outputFolder.getCanonicalFile();
+      File chosen = outputFolder.getCanonicalFile();
+      final File exportDir =
+          patient == null || format == Format.DICOM_ZIP ? chosen : patientFolder(chosen, patient);
 
       final ExplorerTask<Boolean, String> task =
           new ExplorerTask<>(Messages.getString("LocalExport.exporting"), false) {

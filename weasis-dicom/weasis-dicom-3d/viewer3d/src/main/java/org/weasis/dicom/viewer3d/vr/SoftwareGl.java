@@ -63,6 +63,26 @@ public final class SoftwareGl {
         && Files.isRegularFile(dir.resolve(OPENGL_DLL));
   }
 
+  /**
+   * Why software 3D cannot be offered on this Windows PC (a Mesa file is missing, for example
+   * removed by an antivirus), or null when it can or this is not Windows.
+   */
+  public static String unavailableReason() {
+    if (!System.getProperty("os.name", "").startsWith("Windows")) { // NON-NLS
+      return null;
+    }
+    Path dir = mesaDir();
+    if (dir == null) {
+      return "the viewer's install folder is unknown"; // NON-NLS
+    }
+    for (String dll : new String[] {GALLIUM_DLL, OPENGL_DLL}) {
+      if (!Files.isRegularFile(dir.resolve(dll))) {
+        return dir.resolve(dll) + " is missing"; // NON-NLS
+      }
+    }
+    return null;
+  }
+
   /** Whether the user chose software 3D (it takes effect at the next start). */
   public static boolean isChosen() {
     if (Boolean.getBoolean(P_FORCE_SOFTWARE)) {

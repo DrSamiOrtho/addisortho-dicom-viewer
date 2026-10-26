@@ -132,6 +132,13 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
       softwareGl.setSelected(SoftwareGl.isChosen());
       openglPanel.add(
           GuiUtils.getFlowLayoutPanel(ITEM_SEPARATOR_SMALL, ITEM_SEPARATOR, softwareGl));
+    } else if (SoftwareGl.unavailableReason() != null) {
+      // Say why instead of hiding the choice, so a PC that lost the files can be put right.
+      openglPanel.add(
+          GuiUtils.getFlowLayoutPanel(
+              new JLabel(
+                  Messages.getString("software.3d.missing")
+                      .formatted(SoftwareGl.unavailableReason()))));
     }
 
     OpenGLInfo info = View3DFactory.getOpenGLInfo();

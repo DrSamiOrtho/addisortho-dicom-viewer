@@ -305,28 +305,7 @@ public class IsoImageExport extends LocalExport {
    * patients or none.
    */
   static String getPatientOfDisc(CheckTreeModel model) {
-    Set<MediaSeriesGroup> patients = new LinkedHashSet<>();
-    TreePath[] paths = model.getCheckingPaths();
-    if (paths != null) {
-      for (TreePath path : paths) {
-        if (path.getPathCount() > 1
-            && path.getPathComponent(1) instanceof javax.swing.tree.DefaultMutableTreeNode node
-            && node.getUserObject() instanceof MediaSeriesGroup pt) {
-          patients.add(pt);
-        }
-      }
-    }
-    if (patients.size() != 1) {
-      return null;
-    }
-    MediaSeriesGroup pt = patients.iterator().next();
-    String name = TagD.getTagValue(pt, Tag.PatientName, String.class);
-    String id = TagD.getTagValue(pt, Tag.PatientID, String.class);
-    String text =
-        ((name == null ? "" : name.replace('^', ' ')) + " " + (id == null ? "" : id))
-            .replaceAll("\\s+", " ")
-            .trim();
-    return text.isEmpty() ? null : text;
+    return getSelectedPatient(model);
   }
 
   /** ISO 9660 volume label: at most 32 of A-Z, 0-9 and _. */
