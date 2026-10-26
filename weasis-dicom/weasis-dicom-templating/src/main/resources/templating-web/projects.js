@@ -91,8 +91,8 @@ export const tooManyPixels = (w, h) => `This image is ${w} × ${h} pixels (${(w 
 // the knee case's long leg and skyline films (contract section 12) have no implants; their landmarks are the case's own
 // (condW, platW: the femoral condylar and tibial plateau widths; patThick: patella thickness; patW, trochAnt: the skyline's
 // patella and anterior condyle lines)
-const WFS = { hip: ['cupR', 'stemR', 'cupL', 'stemL'], kneeAP: ['femur', 'tibia'], kneeLat: ['femur', 'tibia'], kneeLong: [], kneeSky: [] };
-const LM_KEY = /^(?:(?:td|lt|head|canal|ac)[RL]|hip|femShaft|knee|condMed|condLat|platMed|platLat|ankle|tibShaft|antCortex|postCond|platAnt|platPost|tibAxis|condW|platW|patThick|patW|trochAnt|sulcus|patApex|postCondSky)$/;
+const WFS = { hip: ['cupR', 'stemR', 'cupL', 'stemL'], kneeAP: ['femur', 'tibia'], kneeLat: ['femur', 'tibia'], kneeLong: [], kneeSky: [], shoulder: ['humerus'] };   // r33: the shoulder
+const LM_KEY = /^(?:(?:td|lt|head|canal|ac|gt)[RL]|hip|femShaft|knee|condMed|condLat|platMed|platLat|ankle|tibShaft|antCortex|postCond|platAnt|platPost|tibAxis|condW|platW|patThick|patW|trochAnt|sulcus|patApex|postCondSky|humHead|gtub|humShaft)$/;   // r33: the shoulder's
 const ORIENT_FROM = ['header', 'marker', 'assumed', 'user'];
 const SETTINGS = { cupRule: ['anatomic', 'teardrop', 'head', 'mirror'], legTarget: ['equal', 'keep'], mirrorRef: ['native', 'plan'], offsetTarget: ['auto', 'own', 'none'], stemRule: ['cup', 'offset'] };
 const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -151,7 +151,7 @@ export function stateProblems(st, W, H, patient = null) {
   oneOf(st.wf, Object.keys(WFS), 'plan type', false);
   oneOf(st.side, ['R', 'L'], 'surgery side', false);
   if (patient && st.side !== patient.side) bad('the plan and the patient disagree on the side');
-  if (patient && WFS[st.wf] && (st.wf === 'hip') !== (patient.procedure === 'hip')) bad('the plan and the patient disagree on hip or knee');
+  if (patient && WFS[st.wf] && (st.wf === 'hip' ? 'hip' : st.wf === 'shoulder' ? 'shoulder' : 'knee') !== patient.procedure) bad('the plan and the patient disagree on hip, knee or shoulder');   // r33
   bool(st.sideSet, 'side chosen'); bool(st.mirrored, 'mirrored'); bool(st.prepDone, 'preparation done'); bool(st.wlAuto, 'auto contrast');
   oneOf(st.scope, ['both', 'one'], 'hips on the film'); oneOf(st.ref, ['own', 'other'], 'reference hip'); oneOf(st.cranial, ['up', 'down', 'left', 'right'], 'head direction');
   if (st.orient !== undefined && (!isObj(st.orient) || !ORIENT_FROM.includes(st.orient.from) || (st.orient.prevFrom !== undefined && !ORIENT_FROM.includes(st.orient.prevFrom)))) bad('orientation is not valid');
@@ -282,7 +282,7 @@ export function stateProblems(st, W, H, patient = null) {
 // system has and its neck one that head has; a tibial tray's total thickness one of the tray's. A family the library does
 // not have (a range not open to the account) is kept aside as it is (contract 7), and a plan from another build has its
 // implants placed again (app.js applyPlan), so neither is held against this library. lib: library.json as loaded.
-const KIND_OF = { cupR: 'cup', cupL: 'cup', stemR: 'stem', stemL: 'stem', femur: 'tka-femur', tibia: 'tka-tibia' };
+const KIND_OF = { cupR: 'cup', cupL: 'cup', stemR: 'stem', stemL: 'stem', femur: 'tka-femur', tibia: 'tka-tibia', humerus: 'humeral-body' };   // r33
 // a tumour body's resection values (r22): the extent's source ('' until chosen, MRI or CT), extent and margin in mm or null
 export const tumOk = v => isObj(v) && ['', 'MRI', 'CT'].includes(v.src) && [[v.extent, 400], [v.margin, 100], [v.c, 100]].every(([x, hi]) => x === null || x === undefined || (typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= hi))
   && Object.keys(v).every(k => ['src', 'extent', 'margin', 'c'].includes(k));   // c: the stem collar picked with an option
@@ -308,6 +308,7 @@ export function libraryProblems(st, lib) {
         else if (!own(heads[t.headKind].sizes, t.head)) bad(`${what}: no ${String(t.head).slice(0, 8)} mm head in that head system`);
         else if (!own(heads[t.headKind].sizes[t.head], t.neck)) bad(`${what}: no neck "${String(t.neck).slice(0, 16)}" for that head`);
       }
+      if (f.kind === 'humeral-body' && t.head !== undefined && !(Array.isArray(f.humHeads) && f.humHeads.some(q => isObj(q) && String(q.d) === String(t.head)))) bad(`${what}: ${name} has no ${String(t.head).slice(0, 8)} mm head`);   // r33
       if (f.kind === 'tka-tibia' && Array.isArray(f.thicknesses) && t.thick !== undefined && !f.thicknesses.includes(t.thick)) bad(`${what}: ${name} has no ${String(t.thick).slice(0, 8)} mm total thickness`);
       if (t.stem !== undefined) {   // only a stem the maker's sheet draws for that component size (r20)
         const z = f.sizes.find(q => isObj(q) && q.size === t.size), sf = typeof f.stems === 'string' && own(fams, f.stems) ? fams[f.stems] : null;
@@ -426,7 +427,7 @@ export function projectProblems(p) {
   if (!isStr(p.savedAt, 40)) out.push('the date it was saved is missing');
   if (!isStr(p.libraryId, 40) || !/^[A-Za-z0-9._-]{1,40}$/.test(p.libraryId)) out.push('the implant library it was made with is missing');
   const pt = p.patient;
-  if (!isObj(pt) || !['R', 'L'].includes(pt.side) || !['hip', 'knee'].includes(pt.procedure)) out.push('patient side and procedure are missing');
+  if (!isObj(pt) || !['R', 'L'].includes(pt.side) || !['hip', 'knee', 'shoulder'].includes(pt.procedure)) out.push('patient side and procedure are missing');
   else if (identProblem(pt)) out.push('patient details are not valid');
   const im = p.image;
   if (!isObj(im) || !isStr(im.fileName, 255) || !MIME_EXT[im.mime] || !SHA_RE.test(String(im.sha256)) || !Number.isInteger(im.size) || !Number.isInteger(im.width) || !Number.isInteger(im.height)) return [...out, 'the image description is missing or not valid'];
@@ -1270,7 +1271,7 @@ export function showList(box) {
   // of its cases share an X-ray (sha256) or the same side and joint (a mark only; nothing is done about it here)
   const filmsOf = m => (isObj(m.images) ? Object.values(m.images).filter(isObj).length : 1);
   const shasOf = m => { const s = new Set(); if (isObj(m.image) && typeof m.image.sha256 === 'string' && m.image.sha256) s.add(m.image.sha256); if (isObj(m.images)) for (const f of Object.values(m.images)) if (isObj(f) && typeof f.sha256 === 'string' && f.sha256) s.add(f.sha256); return s; };
-  const sjOf = m => `${m.side === 'L' ? 'L' : 'R'} ${m.procedure === 'knee' ? 'knee' : 'hip'}`;
+  const sjOf = m => `${m.side === 'L' ? 'L' : 'R'} ${m.procedure === 'knee' ? 'knee' : m.procedure === 'shoulder' ? 'shoulder' : 'hip'}`;
   function maybeDup(cs) {
     const sj = new Set(), sh = new Set();
     for (const m of cs) {
@@ -1366,7 +1367,7 @@ export function showList(box) {
     const pt0 = isObj(m.patient) ? m.patient : {}, pt = H.S.set.share ? { hospital: pt0.hospital } : pt0;   // sharing mode: identity hidden
     const who = H.S.set.share ? 'Patient details hidden (sharing mode)' : pt.name || (pt.recordNo ? `Record ${pt.recordNo}` : 'Name left out');
     const kc = isObj(m.images);   // a knee case (contract section 12): its films under it (a button each)
-    const side = `${m.side === 'L' ? 'Left' : 'Right'} ${m.procedure === 'knee' ? 'knee' : 'hip'}${kc ? ' case' : ''}`;
+    const side = `${m.side === 'L' ? 'Left' : 'Right'} ${m.procedure === 'knee' ? 'knee' : m.procedure === 'shoulder' ? 'shoulder' : 'hip'}${kc ? ' case' : ''}`;
     const open = node('button', 'copen'); open.type = 'button';
     const top = node('span', 'ctop'); top.append(node('b', 'cname' + (inGroup ? ' sr-only' : ''), who), node('span', 'cside', side), node('span', 'cdate', fmtWhen(m.updatedAt)));
     const imp = node('span', 'cimp', implantsText(m.implants) || 'no implants placed');
@@ -1803,7 +1804,7 @@ export function filmClosing() {
 // hash; never the patient's name or record number (round 13b re-review: the store is in the browser)
 function labelOf(F) {
   const m = F.snap ? F.snap.meta : (() => { try { return H.metaNow(); } catch (e) { return null; } })();
-  const side = m && m.side === 'L' ? 'Left' : 'Right', joint = m && m.procedure === 'knee' ? 'knee' : 'hip';
+  const side = m && m.side === 'L' ? 'Left' : 'Right', joint = m && m.procedure === 'knee' ? 'knee' : m && m.procedure === 'shoulder' ? 'shoulder' : 'hip';
   if (F.kc) { let n = 0; try { n = Object.keys((F.snap ? F.snap.project : H.projectNow()).films || {}).length; } catch (e) { n = 0; } return `${side} knee case opened ${hhmm(new Date(F.openedAt || Date.now()))}, ${n} film${n === 1 ? '' : 's'}, case ${String(F.ck).slice(2, 8)}`; }
   return `${side} ${joint} X-ray opened ${hhmm(new Date(F.openedAt || Date.now()))}, image ${String((F.orig && F.orig.sha256) || '').slice(0, 6)}`;
 }

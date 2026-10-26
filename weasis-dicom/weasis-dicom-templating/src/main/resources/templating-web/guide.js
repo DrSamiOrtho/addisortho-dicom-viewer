@@ -51,7 +51,7 @@ function kneeAP(what) {
 
 function longLeg(what) {   // femoral head at the top, ankle at the bottom
   const mark = (x, y) => `<circle cx="${x}" cy="${y}" r="4.2" fill="${ORANGE}" stroke="#000" stroke-width="1"/>`;
-  const mk = what === 'hip' ? mark(92, 12) + mark(104, 10) + mark(108, 22) : mark(100, 112);
+  const mk = what === 'hip' ? mark(92, 12) + mark(104, 10) + mark(108, 22) : mark(102, 111);   // the ankle: the centre of the talus (Sami, 23 Oct)
   return `<svg viewBox="0 0 200 122" width="200" height="122" role="img" aria-label="where to click"><rect width="200" height="122" fill="#fff"/>`
     + `<circle cx="100" cy="16" r="9" ${bone}/><path d="M104,22 L116,30 L110,58 L104,58 L104,32 Z" ${bone}/>`
     + `<path d="M98,62 L114,62 L112,104 L104,104 Z" ${bone}/><path d="M90,106 L114,106 L112,116 L92,116 Z" ${bone}/>`

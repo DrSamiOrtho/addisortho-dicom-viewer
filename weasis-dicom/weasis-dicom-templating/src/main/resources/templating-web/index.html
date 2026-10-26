@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-mode="viewer" data-release="r28">
+<html lang="en" data-mode="viewer" data-release="r33">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -149,15 +149,29 @@
   .dlg .fields label { display: grid; gap: 3px; font-size: 13px; color: #234; }
   .dlg .fields input { font: inherit; padding: 8px; border: 1px solid #9bb; border-radius: 4px; min-height: 44px; }
   /* the knee's plan-values question (Sami, 16 Oct 2026): phone-friendly, 44 px targets, scrolls inside the box */
-  .pvq .pvbox { max-width: min(560px, 94vw); overflow-y: auto; }
-  .pvq .pvqrow { display: grid; gap: 3px; padding: 6px 0; border-bottom: 1px solid #e3eceb; }
-  .pvq .pvqrow label { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; font-weight: 600; color: #034537; }
-  .pvq .pvqin { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; }
-  .pvq input, .pvq select, .pvq button { min-height: 44px; font: inherit; }
-  .pvq input[type=number] { width: 6.5em; padding: 6px 8px; border: 1px solid #9bb; border-radius: 4px; }
-  .pvq select { max-width: 100%; }
-  .pvq .pvqbtn button { min-width: 44px; padding: 8px 14px; }
-  .pvq .pvqmsg:empty { display: none; }
+  /* the knee plan card (23 Oct): label and tag on one line, the value below it, then the note and the editor; 44 px targets on a phone */
+  details.kplan #kplanb { font-size: 13px; }
+  .kphead { font-weight: 600; color: var(--green); margin: 2px 0 4px; }
+  .kprow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); }
+  .kprow .kpl { color: #34514b; }
+  .kprow .kpv { grid-column: 1 / -1; font-weight: 600; font-size: 15px; color: #034537; }
+  .kprow .kpn, .kprow .kped { grid-column: 1 / -1; font-size: 11.5px; line-height: 1.35; color: #5b6b68; }
+  .kprow.warn .kpn { color: var(--warn); }
+  .kped { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .kped input[type=number] { width: 5.5em; padding: 3px 6px; border: 1px solid #9bb; border-radius: 4px; font: inherit; }
+  .kped select { max-width: 100%; font: inherit; }
+  .kptag { font-size: 11px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; background: #eef3f2; color: #34514b; }
+  .kptag.m { background: #e3f1ec; color: #034537; }
+  .kptag.t { background: #034537; color: #fff; }
+  .kptag.d { background: #eef3f2; color: #34514b; }
+  .kptag.w { background: #fdf0d5; color: #7a4f00; }
+  .kptag.s { background: #eaf0fb; color: #23436e; }
+  .kptag.x { background: #f2f2f2; color: #5b5b5b; }
+  .kpok { font-size: 11px; color: #4d5d5a; }
+  .kpchk { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--line); font-size: 12px; color: #4d5d5a; }
+  .kpchk.warn { color: var(--warn); } .kpchk.bad { color: var(--bad); }
+  details.resd, details.pvd { margin: 4px 0; } details.resd > summary, details.pvd > summary { cursor: pointer; color: var(--green); font-weight: 600; font-size: 13px; padding: 4px 0; }
+  @media (pointer: coarse) { .kped input, .kped select, .kped button, .kpchk button, details.kplan .row button, details.resd > summary, details.pvd > summary { min-height: 44px; } }
   /* the implant choice card (13 Oct 2026): families as rows to tap, the best geometric match marked, ranges without
      template files greyed and not selectable */
   .choice { width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin: 6px 0; font-size: 13px; }

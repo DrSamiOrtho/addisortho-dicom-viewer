@@ -16,7 +16,7 @@ import { reduceFilm, REDUCE_OVER } from './reduce.js';
 import { cleanCopy, addStroke } from './clean.js';
 import { focusKind, shortcut, keepPanel, restorePanel, makeSheet } from './uikit.js';
 import * as PJ from './projects.js';
-import { teardropCentre, anatomicCentre, anatomicRoofFit, cupVsTeardrop, faceHalf, cupSizeFor, offsetClasses, chooseStem, scaleUncertainty, latDirOf, longLegAngles, turnToward, scaleFromAp, overhangEach, patellarTilt, skylineAngles, XN_KNEE, traysFor, kneeGrade, kneePairCheck, insertGroupOf, kneeStd, planVal, planLabel, isXnFemur } from './autoplan.js';
+import { teardropCentre, anatomicCentre, anatomicRoofFit, cupVsTeardrop, faceHalf, cupSizeFor, offsetClasses, chooseStem, scaleUncertainty, latDirOf, longLegAngles, turnToward, scaleFromAp, overhangEach, patellarTilt, skylineAngles, patellaSuggest, XN_KNEE, traysFor, kneeGrade, kneePairCheck, insertGroupOf, kneeStd, planVal, planLabel, isXnFemur } from './autoplan.js';
 
 const $ = id => document.getElementById(id);
 // Standalone build (build_standalone.sh, for the login-gated t.addisortho.com): local files only, no archive, no Send to
@@ -36,7 +36,10 @@ const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 // ---------- workflows: landmarks and templates per kind of film ----------
 // Hip landmarks are kept by anatomical side (tdR, tdL, ...), so changing the operated side changes only which side is
 // reported as operated. Order: what the operated side needs, then the other side (optional, for comparison and mirroring).
-function hipLm(o, scope = (typeof S !== 'undefined' && S.scope) || 'both', ref = (typeof S !== 'undefined' && S.ref) || 'own') {
+// r32 (23 Oct 2026): the tip of the greater trochanter, only where a proximal femoral replacement is planned on that side
+// (its tumour resection is measured from it); gtAll: every side (the list of all landmarks)
+const gtLm = (sides, gtAll) => sides.filter(sd => gtAll || pfrIn(sd)).map(sd => ({ key: 'gt' + sd, g: 'gt', short: `GT ${sd}`, type: 'point', label: `Tip of the greater trochanter, ${SIDE[sd]} (tumour resection)`, hint: 'its highest point', optional: true }));
+function hipLm(o, scope = (typeof S !== 'undefined' && S.scope) || 'both', ref = (typeof S !== 'undefined' && S.ref) || 'own', gtAll = false) {
   const n = other(o), O = SIDE[o], N = SIDE[n];
   // surgery-side hip too deformed to plan from (Sami, 11 Oct, case 2): the other hip's head and canal are the reference
   // and are needed; this hip's own head is optional and not used
@@ -50,6 +53,7 @@ function hipLm(o, scope = (typeof S !== 'undefined' && S.scope) || 'both', ref =
     { key: 'head' + o, g: 'head', short: `head ${o}`, type: 'circle', label: `Femoral head, ${O} (deformed; not used)`, hint: '3 points spread round its rim', optional: true },
     { key: 'canal' + o, g: 'canal', short: `canal ${o}`, type: 'line', label: `Femoral canal, ${O} (not templated; optional)`, hint: 'the middle of the canal, high then low', optional: true },
     { key: 'ac' + n, g: 'ac', short: `roof ${n}`, type: 'point', label: `Acetabular roof edge, ${N}`, hint: 'the outer end of the roof', optional: true },
+    ...gtLm([o, n], gtAll),
   ];
   const all = [
     { key: 'td' + o, g: 'td', short: `TD ${o}`, type: 'point', label: `Teardrop, ${O} (surgery side)`, hint: 'its lowest point' },
@@ -62,6 +66,7 @@ function hipLm(o, scope = (typeof S !== 'undefined' && S.scope) || 'both', ref =
     { key: 'head' + n, g: 'head', short: `head ${n}`, type: 'circle', label: `Femoral head, ${N}`, hint: '3 points spread round its rim', optional: true },
     { key: 'canal' + n, g: 'canal', short: `canal ${n}`, type: 'line', label: `Femoral canal, ${N}`, hint: 'the middle of the canal, high then low', optional: true },
     { key: 'ac' + n, g: 'ac', short: `roof ${n}`, type: 'point', label: `Acetabular roof edge, ${N}`, hint: 'the outer end of the roof', optional: true },
+    ...gtLm([o, n], gtAll),
   ];
   // a film of one hip: only what is on it (the other side's teardrop and trochanter are not there; Astra, 11 Oct)
   return scope === 'one' ? all.filter(d => d.key.endsWith(o)) : all;
@@ -89,6 +94,7 @@ const KNEE_LAT_LM = [
   { key: 'platPost', short: 'plateau back', type: 'point', label: 'Tibial plateau, back edge' },
   { key: 'tibAxis', short: 'tibial axis', type: 'line', label: 'Tibial shaft axis', hint: 'centre of the shaft, high then low' },
 ];
+const WIDTH_LM = ['condW', 'platW'];   // landmarks that are measurements: their length shown on the film
 const KC_LAT_EXTRA = [{ key: 'patThick', short: 'patella', type: 'line', label: 'Patella thickness', hint: 'its anterior and posterior surfaces where it is thickest', optional: true }];
 const KC_LONG_LM = [
   { key: 'hip', short: 'hip centre', type: 'circle', label: 'Femoral head centre', hint: '3 points spread round the rim of the head' },
@@ -97,7 +103,7 @@ const KC_LONG_LM = [
   { key: 'condLat', short: 'LC', type: 'point', label: 'Lateral condyle, lowest point' },
   { key: 'platMed', short: 'MP', type: 'point', label: 'Medial tibial plateau', hint: 'joint surface (subchondral line), middle of the plateau' },
   { key: 'platLat', short: 'LP', type: 'point', label: 'Lateral tibial plateau', hint: 'joint surface (subchondral line), middle of the plateau' },
-  { key: 'ankle', short: 'ankle', type: 'point', label: 'Ankle centre', hint: 'the middle of the talar dome' },
+  { key: 'ankle', short: 'ankle', type: 'point', label: 'Ankle centre', hint: 'the centre of the talus (midway between its medial and lateral borders, halfway down its body)' },
   { key: 'femShaft', short: 'femoral shaft', type: 'line', label: 'Femoral anatomic axis', hint: 'the middle of the femoral shaft about 5 cm and about 15 cm above the joint (as on the knee AP)' },
   { key: 'tibShaft', short: 'tibial shaft', type: 'line', label: 'Tibial anatomic axis', hint: 'the middle of the tibial shaft about 5 cm and about 15 cm below the joint (as on the knee AP)' },
   { key: 'condW', short: 'condylar width', type: 'line', label: 'Femoral condylar width (to scale from the AP)', hint: 'the same two points as on the AP: the most medial and most lateral bony points of the condyles at their widest, osteophytes excluded', optional: true },
@@ -122,6 +128,8 @@ const WF = {
     label: 'Knee lateral: total knee', short: 'Knee lat', view: 'LAT', slots: ['femur', 'tibia'],
     get lm() { return S.kc ? [...KNEE_LAT_LM, ...KC_LAT_EXTRA] : KNEE_LAT_LM; },
   },
+  // r33 (24 Oct 2026): the shoulder AP, for a proximal humeral replacement (tumour)
+  shoulder: { label: 'Shoulder AP: proximal humeral replacement', short: 'Shoulder', view: 'AP', slots: ['humerus'], get lm() { return SHOULDER_LM; } },
   // the knee case's own films: no implants (so never offered in the Plan list), angles measured without a scale
   kneeLong: { label: 'Knee case: long leg', view: 'AP', slots: [], lm: KC_LONG_LM },
   kneeSky: { label: 'Knee case: skyline', view: 'SKY', slots: [], lm: KC_SKY_LM },
@@ -134,14 +142,22 @@ const KNEE_AP_LM = [   // the knee AP film of one image (also a long-leg film): 
       { key: 'condLat', short: 'LC', type: 'point', label: 'Lateral condyle, lowest point' },
       { key: 'platMed', short: 'MP', type: 'point', label: 'Medial tibial plateau', hint: 'joint surface, middle of the plateau' },
       { key: 'platLat', short: 'LP', type: 'point', label: 'Lateral tibial plateau', hint: 'joint surface, middle of the plateau' },
-      { key: 'ankle', short: 'ankle', type: 'point', label: 'Ankle centre (long-leg film)', hint: 'centre of the talus', optional: true },
+      { key: 'ankle', short: 'ankle', type: 'point', label: 'Ankle centre (long-leg film)', hint: 'the centre of the talus (midway between its medial and lateral borders, halfway down its body)', optional: true },
       { key: 'tibShaft', short: 'tibial shaft', type: 'line', label: 'Tibial shaft axis (short film)', hint: 'centre of the shaft, high then low', optional: true },
+];
+// r33: the shoulder AP's landmarks: the native head (its centre is where the implant's head centre goes), the tip of the
+// greater tuberosity (the resection is measured from it), the humeral shaft axis (the implant's axis)
+const SHOULDER_LM = [
+  { key: 'humHead', short: 'humeral head', type: 'circle', label: 'Humeral head', hint: '3 points spread round its rim' },
+  { key: 'gtub', short: 'GT', type: 'point', label: 'Greater tuberosity, its highest point', hint: 'its tip: the tumour resection is measured from it' },
+  { key: 'humShaft', short: 'humeral shaft', type: 'line', label: 'Humeral shaft axis', hint: 'the middle of the shaft below the tumour, high then low' },
 ];
 const NPTS = { point: 1, line: 2, circle: 3 };
 const SLOT = {
   cupR: { kind: 'cup', side: 'R', label: 'Cup' }, stemR: { kind: 'stem', side: 'R', label: 'Stem' },
   cupL: { kind: 'cup', side: 'L', label: 'Cup' }, stemL: { kind: 'stem', side: 'L', label: 'Stem' },
   femur: { kind: 'tka-femur', label: 'Femoral component' }, tibia: { kind: 'tka-tibia', label: 'Tibial tray' },
+  humerus: { kind: 'humeral-body', label: 'Proximal humerus' },   // r33
 };
 const slotSide = slot => SLOT[slot].side || S.side;
 const slotName = slot => SLOT[slot].side ? `${SLOT[slot].label}, ${SIDE[SLOT[slot].side]}${SLOT[slot].side === S.side ? ' (surgery side)' : ''}` : SLOT[slot].label;
@@ -278,7 +294,7 @@ async function boot() {
   const q = new URLSearchParams(location.search);
   // wording that stays true once projects are saved to the server (Astra, 13 Oct: "nothing is uploaded" would not be)
   if (STANDALONE) $('foot').textContent = 'Addis Ortho Trading PLC · X-ray templating for surgeons. A planning aid: the plan is a draft and the surgeon decides. The X-ray opens in this browser; a saved project is stored for your team.';
-  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r28). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
+  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r33). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
   pendingNote();
   for (const [text, fn] of kcOpenItems()) { const li = document.createElement('li'), a = document.createElement('a'); a.href = '#'; a.textContent = text; a.onclick = e => { e.preventDefault(); fn(); }; li.appendChild(a); $('openList').appendChild(li); }
   // the short part on top and the rest under the templated-patients list, so a phone sees the list without scrolling far
@@ -820,7 +836,7 @@ const pxOf = vmm => vmm / mm();
 
 // ---------- landmarks ----------
 const lmDefs = () => WF[S.wf].lm;
-const ALL_LM = () => [...hipLm('R', 'both', 'own'), ...KNEE_AP_LM, ...KNEE_LAT_LM, ...KC_AP_LM, ...KC_LAT_EXTRA, ...KC_LONG_LM, ...KC_SKY_LM];
+const ALL_LM = () => [...hipLm('R', 'both', 'own', true), ...KNEE_AP_LM, ...KNEE_LAT_LM, ...KC_AP_LM, ...KC_LAT_EXTRA, ...KC_LONG_LM, ...KC_SKY_LM, ...SHOULDER_LM];
 const lmDef = key => ALL_LM().find(d => d.key === key);
 // what the surgery side is planned from: its own anatomy, or the other hip mirrored (both hips on the film only)
 const refMode = () => (S.wf === 'hip' && S.scope === 'both' ? S.ref : 'own');
@@ -928,6 +944,92 @@ const isTumourBody = f => !!(f && (f.kind === 'tka-tibia' || f.kind === 'tka-fem
 // surface (no insert on the femur, Sami), the resection runs proximally along the body's taper axis (stemPort.dir)
 const isTumFemur = f => isTumourBody(f) && f.kind === 'tka-femur';
 const tumSide = f => (isTumFemur(f) ? 'above' : 'below');
+// r32 (23 Oct 2026): the proximal femoral replacement (Chunli PFR, vendor-families/ao-pfr.json) is a hip stem with tumour
+// 'pfr'. It is placed, never sized: its head centre on the cup centre or the native head, its axis along the canal; no stem
+// rule offers it. Its resection runs from the tip of the greater trochanter (MRI/CT extent + margin); its stack (body + gap +
+// extension + gap + stem collar) from the 0 head centre's level on the body axis (tumOrigin). Both are measured along the
+// body axis on this film, so the GT tip's height against that level is part of the plan (Fable's design read, 23 Oct, 1).
+function isPfr(f) { return !!(f && f.kind === 'stem' && f.tumour === 'pfr'); }
+function pfrIn(sd) { return typeof S !== 'undefined' && S.wf === 'hip' && !!S.tpl && !!S.tpl['stem' + sd] && !!S.fam && isPfr(S.fam[S.tpl['stem' + sd].fam]); }
+function pfrFrame(t) {   // {o, d} in the image: the 0 head centre's level on the body axis, and the axis distally
+  const g = geomOf(t); if (!g || !g.tumOrigin || !g.stemPort) return null;
+  return { o: xf(t)(g.tumOrigin), d: dirOf(t, g.stemPort.dir) };
+}
+// the plan on this film, mm along the body axis from tumOrigin (+ distal): sGT the GT tip, sPlan the planned osteotomy
+function pfrPlan(t, side, gtKey = 'gt' + side) {   // r33: the shoulder's tuberosity (gtub) too
+  const tp = tumPlan(t), F = pfrFrame(t), gt = lmGeom(gtKey), k = mm(), out = { tp, gt: !!gt };
+  if (!F || !k) return out;
+  if (gt) out.sGT = G.dot(G.sub(gt.p, F.o), F.d) * k;
+  if (tp.ok && gt) out.sPlan = out.sGT + tp.resection;
+  return out;
+}
+function pfrOptions(f, sPlan) {   // every length and stem collar within 5 mm of the planned osteotomy, closest first
+  const out = [];
+  for (const z of f.sizes) for (const c of collarsOf(f)) { const tot = z.reconstructionMm + c; if (Math.abs(tot - sPlan) <= 5) out.push({ z, c, tot }); }
+  return out.sort((a, b) => Math.abs(a.tot - sPlan) - Math.abs(b.tot - sPlan) || a.z.extensionMm - b.z.extensionMm);
+}
+function pfrPlace(slot) {   // placed, not sized: the axis along the canal (when marked), the head centre on the cup centre or the native head
+  const t = S.tpl[slot], side = slotSide(slot);
+  if (!alignStem(t, side)) t.angle = filmTurn();
+  const lp = levelPlan(side), target = lp ? lp.target : stemStart(side);
+  if (target) { const H = headAt(t); t.x += target.x - H.x; t.y += target.y - H.y; }
+  S.notes['fit' + side] = null; delete S.notes['stemPlan' + side]; S.notes['offset' + side] = '';
+  return null;
+}
+// how far the chosen neck puts the head centre above the neck-0 level the stack is measured from (mm, along the body axis)
+function pfrNeckRise(t) { const g = geomOf(t); return g ? -(headSet(t)[t.neck] ?? 0) * g.neckDir[1] : 0; }
+const pfrLevelTxt = t => { const r = pfrNeckRise(t); return Math.abs(r) < 0.05 ? 'its head centre level (neck 0)' : `its neck-0 head centre level (with neck ${neckLabel(t, t.neck)} the head centre sits ${f1(Math.abs(r))} mm ${r > 0 ? 'higher' : 'lower'})`; };
+// r33 (24 Oct 2026): the proximal humeral replacement (Chunli, vendor-families/ao-phr.json): kind humeral-body, tumour 'phr'.
+// Placed with its head centre (the middle of its head face: hemispherical heads) on the native head and its axis along the
+// humeral shaft; the resection from the tip of the greater tuberosity; the stack as the PFR's (extension 35, stem collar L1).
+function isPhr(f) { return !!(f && f.kind === 'humeral-body' && f.tumour === 'phr'); }
+function phrPlace(slot) {
+  const t = S.tpl[slot], f = S.fam[t.fam], g = geomOf(t), sh = lmGeom('humShaft'), hd = lmGeom('humHead');
+  if (sh && g && g.axis) { let up = G.unit(G.sub(sh.b, sh.a)); if (G.dot(up, cranVec()) < 0) up = G.mul(up, -1); const ax = dirOf(t, [g.axis[1][0] - g.axis[0][0], g.axis[1][1] - g.axis[0][1]]); t.angle = normA(t.angle + G.turn(ax, up)); }
+  else t.angle = filmTurn();
+  if (hd) { const H = xf(t)([0, 0]); t.x += hd.c.x - H.x; t.y += hd.c.y - H.y;
+    if (!t.userHead && f.humHeads && mm()) { const dn = 2 * hd.r * mm(); t.head = String(f.humHeads.reduce((b, q) => (Math.abs(q.d - dn) < Math.abs(b.d - dn) ? q : b)).d); } }
+  if (!t.head && f.humHeads) t.head = String(f.humHeads[Math.floor(f.humHeads.length / 2)].d);
+  return null;
+}
+function shoulderResults(R, k) {
+  const hd = lmGeom('humHead'); R.push([`Native shoulder (${SIDE[S.side]})`]);
+  if (hd && k) R.push(['Humeral head diameter', `${f1(2 * hd.r * k)} mm`]);
+  if (!lmGeom('humShaft')) R.push(['Humeral shaft axis', 'not marked: the implant is turned to the film, not to the shaft', 'warn']);
+  const t = S.tpl.humerus, f = t && t.on !== false && S.fam[t.fam]; if (!isPhr(f) || !k) return;
+  const z = sizeOf(t), g = geomOf(t);
+  R.push(['Proximal humerus']); R.push([f.label, z.label || z.size]);
+  if (g.headSource) R.push(['Head centre from', g.headSource, 'warn']);
+  R.push(['Head', t.head ? `${t.head} mm humeral head (Chunli's standard heads, hemispherical; which fit the tumour upper end is not confirmed)` : 'not chosen', 'warn']);
+  if (hd) { const H = xf(t)([0, 0]), d = G.dist(H, hd.c) * k; R.push(['Head centre vs native', `${f1(d)} mm apart (as placed)`, d > 3 ? 'warn' : '']);
+    if (t.head) { const dd = +t.head - 2 * hd.r * k; R.push(['Head size vs native', `${dd >= 0 ? '+' : ''}${f1(dd)} mm`]); } }
+  phrRows(R, t);
+}
+// the resection rows of a PHR (as pfrRows, from the tip of the greater tuberosity)
+function phrRows(R, t) {
+  const f = S.fam[t.fam], z = sizeOf(t), P = pfrPlan(t, S.side, 'gtub'), tp = P.tp, c = tumCollar(t), st = stemOf(t);
+  R.push(['Tumour resection (proximal humerus)']);
+  if (!tp.ok) R.push(['Resection', `not planned: ${tp.why}`, 'warn']);
+  else {
+    R.push(['Tumour extent', `${f1(tp.extent)} mm below the tip of the greater tuberosity, from the ${tp.src} (entered by the surgeon)`]);
+    R.push(['Margin', `${f1(tp.margin)} mm (your choice)`]);
+    R.push(['Resection length', `${f1(tp.resection)} mm below the tip of the greater tuberosity`]);
+  }
+  if (!P.gt) R.push(['Greater tuberosity', 'not marked: mark its tip; the resection is measured from it', 'warn']);
+  else if (Number.isFinite(P.sGT)) R.push(['GT tip vs head centre', `the tuberosity tip is ${f1(Math.abs(P.sGT))} mm ${P.sGT >= 0 ? 'below' : 'above'} this implant's head centre level, along its axis (this film, as placed)`]);
+  if (c === null) R.push(['Reconstruction', `${z.label || z.size}: ${fmm(z.reconstructionMm)} mm below its head centre level without the stem collar; choose an option or a stem (${tumParts(z, null)})`, 'warn']);
+  else {
+    const tot = z.reconstructionMm + c, d = Number.isFinite(P.sPlan) ? tot - P.sPlan : null;
+    R.push(['Reconstruction', `${z.label || z.size} + stem collar ${c}: ${tumParts(z, c)} = ${fmm(tot)} mm below its head centre level`]);
+    if (Number.isFinite(P.sGT)) R.push(['Osteotomy of this stack', `${fmm(tot - P.sGT)} mm below the tuberosity tip${d !== null ? ` (${d >= 0 ? '+' : ''}${fmm(d)} mm against the planned resection)` : ''}`, d !== null && Math.abs(d) > 5 ? 'warn' : '']);
+  }
+  R.push(['Stem', st ? `${st.s.label || st.s.size}: ${st.s.diameterMm} mm below its collar, ${f1(st.s.drawnLengthMm - (c || 0))} mm beyond its collar as drawn; check the canal width with the ruler` : 'not chosen yet: choose the universal stem; check its diameter against the canal with the ruler', st ? '' : 'warn']);
+  R.push(['Taper junctions', pfrGapNote(z).replace("the knee's Ø24 tapers, assumed for this body", "the knee's Ø24 tapers, assumed for this Ø22 system"), 'warn']);
+  for (const a of f.assumptions || []) R.push(['Assumed (not confirmed by Chunli)', a, 'warn']);
+  R.push(['Placement', 'placed, not sized: the head centre on the native head centre, the axis along the humeral shaft; drag and turn to fine-tune', 'warn']);
+  R.push(['Scale', 'lengths use this film\'s ball; the resection level lies further from it, where magnification may differ (not validated)', 'warn']);
+}
+const pfrGapNote = z => `Each taper junction is taken as ${z.junctionGapMm} mm open after impaction (Chunli's figure for the knee's Ø24 tapers, assumed for this body): ${z.junctions} junction${z.junctions > 1 ? 's' : ''}, so the stack can sit up to about ${f1(z.junctions * 0.25)} mm longer or shorter: check the length with the trial.`;
 function tumAxis(t) {   // {p0, dir} in the template's frame: where the body's axis crosses the joint line, and up/down it into the bone
   const g = geomOf(t), z = sizeOf(t);
   if (!g || !g.stemPort || !z || !Number.isFinite(z.reconstructionMm)) return { p0: [0, 0], dir: [0, 1] };
@@ -939,7 +1041,7 @@ function tumPlan(t) {   // {ok, why, src, extent, margin, resection} from the va
   const u = (t && t.tum) || {}, src = TUM_SRC[u.src] ? u.src : '', ex = Number(u.extent), mg = Number(u.margin);
   if (!src) return { ok: false, why: 'enter where the tumour extent comes from (MRI or CT): the plain film does not show it' };
   const fem = isTumFemur(S.fam[t.fam]);
-  if (!(Number.isFinite(ex) && ex > 0 && ex <= 400)) return { ok: false, src, why: fem ? `enter the tumour's proximal extent above the joint line, measured on the ${src}` : `enter the tumour's distal extent below the joint line, measured on the ${src}` };
+  if (!(Number.isFinite(ex) && ex > 0 && ex <= 400)) return { ok: false, src, why: isPfr(S.fam[t.fam]) ? `enter the tumour's distal extent below the tip of the greater trochanter, measured on the ${src}` : isPhr(S.fam[t.fam]) ? `enter the tumour's distal extent below the tip of the greater tuberosity, measured on the ${src}` : fem ? `enter the tumour's proximal extent above the joint line, measured on the ${src}` : `enter the tumour's distal extent below the joint line, measured on the ${src}` };
   if (!(Number.isFinite(mg) && mg >= 0 && mg <= 100)) return { ok: false, src, why: 'enter your margin (mm)' };
   return { ok: true, src, extent: ex, margin: mg, resection: ex + mg };
 }
@@ -997,6 +1099,7 @@ function pivotOf(t, g) {
   const f = S.fam[t.fam];
   if (f.kind === 'cup') return [0, 0];
   if (f.kind === 'stem') return g.headM;   // the head centre: sizing up or changing family keeps the head where it was
+  if (f.kind === 'humeral-body') return [0, 0];   // r33: its head centre
   if (f.kind === 'tka-femur' && viewOf() === 'AP') return [0, g.jointLineY];
   if (f.kind === 'tka-tibia' && viewOf() === 'AP') return [0, g.cutY];
   if (f.kind === 'tka-tibia') return [(g.cutLine[0][0] + g.cutLine[1][0]) / 2, (g.cutLine[0][1] + g.cutLine[1][1]) / 2];
@@ -1021,7 +1124,7 @@ const latVec = (side = S.side) => G.mul(leftVec(), side === 'R' ? -1 : 1);
 const filmTurn = () => G.turn(G.P(0, -1), cranVec());              // rotation of this film against a standard one
 const lateralSign = (side = S.side) => Math.sign(G.dot(latVec(side), G.rot(G.P(1, 0), filmTurn()))) || 1;   // in the film's own frame
 function defaultFlip(kind, side = S.side) {
-  if (kind === 'cup' || kind === 'stem') return lateralSign(side) === 1;
+  if (kind === 'cup' || kind === 'stem' || kind === 'humeral-body') return lateralSign(side) === 1;   // r33: the humerus as the femur
   return viewOf() === 'AP' ? S.mirrored : false;
 }
 function refreshFlips() {   // a mirrored template also mirrors its angle; a stem that was on the canal is put back on it
@@ -1051,7 +1154,8 @@ function newTemplate(slot) {
   const kind = SLOT[slot].kind, side = slotSide(slot);
   const twin0 = SLOT[slot].side ? S.tpl[SLOT[slot].kind + other(side)] : null;   // the other side's choice is the start
   const picked = chosenFam(kind);   // the family picked on the choice card comes first (design C)
-  const fam = picked || (twin0 ? S.fam[twin0.fam] : famsFor(kind)[0]); if (!fam) return null;
+  const twinF = twin0 && !isPfr(S.fam[twin0.fam]) ? S.fam[twin0.fam] : null;   // r32 (Fable P2 5): a PFR is never copied to the other hip
+  const fam = picked || twinF || famsFor(kind).find(g => !isPfr(g)) || famsFor(kind)[0]; if (!fam) return null;
   const twin = twin0 && twin0.fam === fam.id ? twin0 : null, shown = sizesShown(fam);
   const t = { fam: fam.id, size: twin ? twin.size : shown[Math.floor(shown.length / 2)].size, thick: 10, x: 0, y: 0, angle: 0, flip: defaultFlip(kind, side), on: true };
   if (picked) t.userFam = true;
@@ -1112,6 +1216,7 @@ function autoPlace(slot, opt = {}) {
   const t = S.tpl[slot], f = S.fam[t.fam];
   if (f.kind === 'cup') return autoCup(slot, opt);
   if (f.kind === 'stem') return autoStem(slot, opt);
+  if (f.kind === 'humeral-body') return phrPlace(slot);   // r33
   autoKnee(slot);
 }
 // Cup. Size: from the acetabular roof edge when marked (the cup's outer rim reaches it at the planned angle), else the
@@ -1247,6 +1352,7 @@ function reflect(p, H) { const M = G.mid(H.T, H.Tc); return G.sub(p, G.mul(H.u, 
 // a high offset version that would restore combined offset more than 5 mm over the native hip.
 function autoStem(slot, { keepSize = true, keepFam = false, target = null } = {}) {
   const t = S.tpl[slot], side = slotSide(slot);
+  if (isPfr(S.fam[t.fam])) return pfrPlace(slot);   // r32: placed, never sized by canal fill
   const place = tt => (target ? bestNeck(tt, side, target) : placeStem(tt, side));
   const start = stemStart(side);
   if (!start && refOther() && side === S.side) { S.notes['fit' + side] = { none: true, why: `no reference: plan the ${SIDE[other(side)]} side (or mark its head) first` }; return null; }   // Astra, 11 Oct
@@ -1854,7 +1960,8 @@ function jlCard() {
 // is placed with its own outline, neck-shaft angle and offset (the library's sizes), never by a formula.
 function stemVersions(fid) {
   const f = S.fam[fid]; if (!f || f.kind !== 'stem') return [];
-  const stems = famsFor('stem'), out = new Set([fid]), be2 = /^chunli-be2-/;
+  if (isPfr(f)) return [fid];   // r32
+  const stems = famsFor('stem').filter(g => !isPfr(g)), out = new Set([fid]), be2 = /^chunli-be2-/;
   if (be2.test(fid)) for (const g of stems) if (be2.test(g.id)) out.add(g.id);
   const links = g => [].concat(Array.isArray(g.offsetPair) ? g.offsetPair : typeof g.offsetPair === 'string' ? [g.offsetPair] : [], OFFSET_PAIR[g.id] || []);
   for (let grew = true, n = 0; grew && n < 20; n++) {
@@ -1894,7 +2001,7 @@ function combinedNow(sd) {
 // keepSize: only its size too (set by hand). The slot itself is not changed.
 function stemCandidates(sd, { keepFam = false, keepSize = false } = {}) {
   const t = S.tpl['stem' + sd], cup = S.tpl['cup' + sd], c = canalOf(sd), k = mm();
-  if (!t || !cup || !cup.on || !c || !k) return null;
+  if (!t || !cup || !cup.on || !c || !k || isPfr(S.fam[t.fam])) return null;   // r32: a PFR is no candidate
   const L = levelPlan(sd); if (!L) return null;
   const H = hipFrame(sd), u = H ? H.u : latVec(sd), v = vertical(), C = xf(cup)([0, 0]), tr = canalTraceFor(sd), nat = nativeCombined(sd);
   const accNew = H ? G.dot(G.sub(C, H.T), H.u) * k : null;
@@ -1985,6 +2092,7 @@ function stemWhy(sd, pick, P, { keepFam, keepSize }) {
 // femoral offset ({mm, what}).
 function planStem(sd, keep = {}, target = null) {
   const t = S.tpl['stem' + sd]; if (!t) return null;
+  if (isPfr(S.fam[t.fam])) { pfrPlace('stem' + sd); return null; }   // r32
   const cup = S.tpl['cup' + sd];
   if (S.set.stemRule !== 'offset' && cup && cup.on && canalOf(sd)) { const n = stemToCup(sd, keep); if (n) return n; }
   delete S.notes['stemPlan' + sd];
@@ -2052,7 +2160,7 @@ function mirrorOtherNow(quiet) {
     if (S.tpl['stem' + o] && !S.tpl['stem' + o].byHand) delete S.tpl['stem' + o];   // one added by hand stays (14 Oct)
     const cutN = stemN && stemN.on ? neckCutAboveLT(stemN, n) : null;
     S.notes['fit' + o] = { copied: true, cut: cutN }; S.notes['offset' + o] = '';
-    info.push(stemN && stemN.on ? `stem as on the ${SIDE[n]}: ${S.fam[stemN.fam].label} ${stemN.size}, ${stemN.head} mm head, neck ${neckLabel(stemN, stemN.neck)}; ${cutN !== null ? `neck cut ${f1(cutN)} mm above the lesser trochanter` : `mark the ${SIDE[n]} lesser trochanter to measure the neck cut`}` : `plan the ${SIDE[n]} stem: it is the stem for the ${SIDE[o]}`);
+    info.push(stemN && stemN.on ? `stem as on the ${SIDE[n]}: ${S.fam[stemN.fam].label} ${stemN.size}, ${stemN.head} mm head, neck ${neckLabel(stemN, stemN.neck)}; ${isPfr(S.fam[stemN.fam]) ? 'a proximal femoral replacement: its resection and stack are in the results' : cutN !== null ? `neck cut ${f1(cutN)} mm above the lesser trochanter` : `mark the ${SIDE[n]} lesser trochanter to measure the neck cut`}` : `plan the ${SIDE[n]} stem: it is the stem for the ${SIDE[o]}`);
     S.mirror = { note: info.join('; '), at: new Date().toISOString() };
     S.active = 'cup' + o; if (quiet) return true; save(); panel(); draw(); return true;
   }
@@ -2063,7 +2171,7 @@ function mirrorOtherNow(quiet) {
   const had0 = !!S.tpl['stem' + o], t = tplFor('stem' + o);
   if (!t) { S.mirror = { note: info.join('; '), at: new Date().toISOString() }; S.active = cup ? 'cup' + o : null; if (quiet) return true; save(); panel(); draw(); return true; }
   const t0 = guardedStem() ? { ...stemKeep(t), userHead: t.userHead } : null;
-  if (stemN && stemN.fam !== t.fam && !t.userFam && !t.userSize) {   // the other side's family (unless this stem's family or size was set by hand), at the size nearest in canal fill
+  if (stemN && stemN.fam !== t.fam && !t.userFam && !t.userSize && !isPfr(S.fam[stemN.fam])) {   // r32: never a PFR by Mirror   // the other side's family (unless this stem's family or size was set by hand), at the size nearest in canal fill
     const w = widthAt(sizeOf(t), 60), shown = sizesShown(S.fam[stemN.fam]);
     const pick = Number.isFinite(w) ? shown.reduce((b, z) => Math.abs(widthAt(z, 60) - w) < Math.abs(widthAt(b, 60) - w) ? z : b) : shown[Math.floor(shown.length / 2)];
     t.fam = stemN.fam; t.size = pick.size; setHead(t, t.headKind, t.head);
@@ -2099,12 +2207,17 @@ function autoTemplate(opt = {}) {
   const nr = notReady(); if (nr) return prompt(nr);
   if (!mm()) return prompt('Calibrate first: implants are drawn true size.');
   if (S.noRange) return prompt(`No implant range with template files is open to your account yet (${PENDING.map(pendingText).join('; ')}).`);
+  if (S.wf === 'shoulder') {   // r33: the proximal humerus placed on the head and the shaft (no rules beyond that)
+    const t = tplFor('humerus'); if (t) { S.active = 'humerus'; phrPlace('humerus'); } save(); panel(); draw();
+    return prompt(t ? 'Placed on the humeral head and the shaft axis: enter the resection, then choose the length and the stem from the options.' : 'No proximal humeral replacement is open to your account.');
+  }
   if (S.wf !== 'hip') {
     { const w = kneeRevWhy(); if (w) { S.segHand.tpl = true; panel(); draw(); return prompt(w); } }   // revision: insufficient evidence, nothing placed
     // placement only on valid landmarks (Astra, 16 Oct, P1 3): one the placement reads that is marked red stops it
     { const lm = kneeLmGate(); if (lm) { S.segHand.lm = true; panel(); draw(); return prompt(lm); } }
-    // the plan values asked once, pre-filled (Sami 16 Oct (2)); Cancel places nothing
-    if (pvNeedsAsk()) { askPlanValues().then(ok => { if (ok) kneePlace(); else { panel(); draw(); prompt('Nothing placed: the plan values were not confirmed. Auto template asks for them again.'); } }); return; }
+    // no question (Sami, 23 Oct, replacing his 16 Oct (2) question): the values on the knee plan card are used as shown, an
+    // unchecked default stays "default"; pressed for these films, Auto template may run by itself again (nextStep)
+    if (pvNeedsAsk()) pvSetAsked(pvAskKey());
     return kneePlace();
   }
   { const nU = exOpen().length; if (nU) { S.segHand.prep = true; panel(); draw(); return prompt(`${nU} possible hardware region${nU > 1 ? 's are' : ' is'} not yet confirmed or dismissed (2 · Prepare, Existing implants): nothing is placed automatically until then.`); } }   // (Astra, 16 Oct, P1 5)
@@ -2137,69 +2250,6 @@ function kneePlace() {
   S.arm = null; save(); panel(); draw();
   const v = kneeVals(), ap = S.wf === 'kneeAP', how = k => { const pv = v.pv[k]; return pv.o === 'surgeon' ? 'your target' : pv.o === 'unknown' ? 'entered before 16 Oct' : pv.rv ? 'assumed, reviewed' : 'assumed, not surgeon-confirmed'; };
   return prompt(`Components placed (cuts square to the ${ap ? 'mechanical axes' : 'tibial axis'}; ${ap ? `distal femoral resection ${f1(v.femDistal)} mm (${how('femDistal')}), ` : ''}tibial ${f1(v.tibial)} mm below the ${TIB_SHORT[v.tibRef]} (${how('tibial')})${ap ? '' : `, posterior slope ${f1(v.slope)}°${pvXn() ? ' on the extramedullary guide' : ''} (${how('slope')})`}${S.kc ? '; one femoral and one tibial size for both films' : '; sized from the lateral film'}). Check and fine-tune.`);
-}
-// The plan-values question (Sami 16 Oct (2): "keep the question with default numbers with option of changing them"): each
-// value pre-filled with the one the page would use and its source, editable; "Use these values" places the components and
-// marks every value reviewed (unchanged: origin kept, reviewed; changed: the surgeon's target); Cancel places nothing.
-// Phone-friendly (44 px targets; the page's own small dialog, Escape cancels). → Promise<boolean>
-function askPlanValues() {
-  if (document.querySelector('.pvq')) return Promise.resolve(false);
-  const cur = Object.fromEntries(PV_KEYS.map(k => [k, pvGet(k)])), ref0 = pvTibRef(), A = S.wf === 'kneeAP' ? kneeAxes() : null, xn = pvXn();
-  return PJ.dialog((box, done) => {
-    box.parentNode.classList.add('pvq'); box.parentNode.setAttribute('aria-label', 'Plan values');
-    box.appendChild(el(`<p><b>Plan values${xn ? ' (Addis Ortho XN knee)' : ''}</b>: each is filled with the value the page would use and its source. Change any you plan differently; nothing here is measured from the patient.</p>`));
-    const f = el('<div class="fields pvqf"></div>'), inp = {}, std = ref => kneeStd(kneeFemFam(), ref);
-    let refSel = null;
-    for (const key of PV_KEYS) {
-      const pv = cur[key], [lo, hi, step] = PV_BOUND[key], row = el('<div class="pvqrow"></div>');
-      const l = el(`<label>${esc(pvName(key))} <span class="pvqin"><input type="number" inputmode="decimal" min="${lo}" max="${hi}" step="${step}" aria-label="${esc(pvName(key))}"> ${pvUnit(key).trim()}</span></label>`), i = l.querySelector('input');
-      i.value = String(pv.v); inp[key] = i; row.appendChild(l);
-      const src = el(`<p class="note pvqsrc">${esc(pvLab(pv))}</p>`); row.appendChild(src);
-      if (key === 'tibial') {
-        refSel = el(`<select aria-label="Tibial resection reference"><option value="less">${XN_KNEE.tibialStd.less} mm below the reference plateau (the higher one, chosen by the page)</option><option value="medial">${XN_KNEE.tibialStd.medial} mm below the lowest point of the medial plateau${xn ? ' (XN manual: non-severe medial chondrosis)' : ''}</option></select>`);
-        if (ref0 === 'worn') refSel.add(new Option('below the lower plateau (saved before 16 Oct)', 'worn'));
-        refSel.value = ref0;
-        refSel.onchange = () => { const s2 = std(refSel.value); i.value = String(s2.tibial); src.textContent = refSel.value === ref0 ? pvLab(pv) : `Surgeon-chosen reference · ${s2.tibialFrom}`; };
-        row.insertBefore(refSel, src);
-        row.appendChild(el('<p class="note">Radiographic landmarks do not reproduce the stylus on cartilage.</p>'));
-      }
-      if (key === 'slope') row.appendChild(el(`<p class="note">${xn ? 'Set by tilting the extramedullary guide. ' : ''}${XN_KNEE.slopeMin}–${XN_KNEE.slopeMax}° is an entry bound, not a manufacturer-approved or safe range.${S.wf === 'kneeAP' ? ' Used on the lateral.' : ''}</p>`));
-      if (key === 'vca') row.appendChild(el(`<p class="note">${A && A.fmaHow === 'measured' ? 'Not used on this film: the hip is on it (the mechanical axis is measured).' : A && A.fmaHow === 'transferred' ? 'Not used while the long leg gives the mechanical axis (unless you enter your own).' : S.wf === 'kneeLat' ? 'Used on the AP when no hip or long leg gives the mechanical axis.' : 'Used when no hip or long leg gives the mechanical axis.'}</p>`));
-      if (key === 'rot') row.appendChild(el(`<p class="note">${xn ? `The rotation guide offers 0°, 3° or 5° to the posterior condyles (XN manual p. ${XN_KNEE.rotPage}); recorded` : 'To the posterior condyles; recorded'} with the plan, set at surgery.</p>`));
-      f.appendChild(row);
-    }
-    box.appendChild(f);
-    const msg = el('<p class="note pvqmsg" role="alert"></p>'); box.appendChild(msg);
-    const r = el('<div class="row pvqbtn"></div>');
-    r.appendChild(btn('Use these values', () => {
-      const out = {};
-      for (const key of PV_KEYS) {
-        const [lo, hi] = PV_BOUND[key], t = inp[key].value.trim(), n = t === '' ? NaN : Number(t);
-        const kept = cur[key].o === 'unknown' && Number.isFinite(n) && Math.abs(n - cur[key].v) < 0.005;   // a value from before 16 Oct left as it was: kept even outside today's bound (Astra, r17 P2 4)
-        if (!kept && !(Number.isFinite(n) && n >= lo && n <= hi)) { msg.textContent = `${pvName(key)}: enter a value from ${lo} to ${hi}${pvUnit(key)}.`; inp[key].focus(); return; }
-        out[key] = kept ? cur[key].v : Math.round(n * 100) / 100;
-      }
-      done({ vals: out, ref: refSel ? refSel.value : ref0 });
-    }, 'primary'));
-    r.appendChild(btn('Cancel', () => done(null)));
-    box.appendChild(r);
-    // opened from a tap on the film (Auto template after the last landmark), the film takes the focus back after the tap:
-    // the first value gets it again, and Escape cancels wherever the focus is while the question is open
-    const dlg = box.parentNode, first = inp[PV_KEYS[0]];
-    setTimeout(() => { if (dlg.isConnected && !dlg.contains(document.activeElement)) try { first.focus({ preventScroll: true }); } catch (e) { /* gone */ } }, 0);
-    const esc_ = e => { if (!dlg.isConnected) { removeEventListener('keydown', esc_, true); return; } if (e.key === 'Escape' && !dlg.contains(e.target)) { e.stopPropagation(); e.preventDefault(); removeEventListener('keydown', esc_, true); done(null); } };
-    addEventListener('keydown', esc_, true);
-  }).then(res => {
-    if (!res) return false;
-    const same = (a, b) => Math.abs(a - b) < 0.005;
-    for (const key of PV_KEYS) {
-      const n = res.vals[key], pv = cur[key];
-      if (key === 'tibial' && res.ref !== ref0) { if (S.kc) S.kc.shared.res.tibRef = res.ref; else S.kres = { ...kresNow(), tibRef: res.ref }; pvSet('tibial', n); continue; }
-      if (same(n, pv.v)) pvReview(key); else pvSet(key, n);
-    }
-    pvSetAsked(pvAskKey());
-    save(); return true;
-  });
 }
 // The hip plan by the rules, without touching the page (recommendStem runs it on a copy, opt.dry: the stem's side only):
 // {stop} when it cannot run ('' when it has said why itself), else {say}. One rule set for both sides, Mirror and the
@@ -2268,8 +2318,9 @@ const kneeTibFam = () => (S.tpl && S.tpl.tibia && S.tpl.tibia.fam) || (S.kc && S
 // (autoplan.js kneeStd), each with its own source, and the surgeon may change any of them. Origin ('assumed' | 'surgeon' |
 // 'unknown': a value stored before 16 Oct) and review are kept apart (contract section 12c). Where they live: a knee case's
 // shared plan (K.shared.res; the rotation K.shared.rot), else the knee film's own (S.kres; the valgus S.vca with vcaSet).
-// "Sami 16 Oct (2)": Auto template first asks them once per plan (askPlanValues), pre-filled; asked again only after a
-// value is reset or a film replaced, or for a plan that never answered (plans from before 16 Oct).
+// Sami 23 Oct (replacing his 16 Oct (2) question): no question; the values are edited and checked on the knee plan card.
+// "asked" now records that Auto template was pressed for these films: until then (and again after a value is reset or a
+// film replaced, or for a plan from before 16 Oct) Auto template does not run by itself after the last landmark.
 const PV_KEYS = ['femDistal', 'tibial', 'slope', 'vca', 'rot'];
 const PV_NAME = { femDistal: 'Distal femoral resection', tibial: 'Tibial resection', slope: 'Planned posterior slope (extramedullary guide)', vca: 'Femoral valgus cut angle', rot: 'Planned femoral component external rotation' };
 // the XN knee's own words (the manual, the extramedullary guide, the rotation guide) only for the XN femur (Astra, r17 P2 3)
@@ -2697,9 +2748,10 @@ function results() {   // [[label, value, cls]] with group headers as [label]
   if (S.wf === 'hip') hipResults(R, k);
   else if (S.wf === 'kneeAP') kneeAPResults(R, k);
   else if (S.wf === 'kneeLat') kneeLatResults(R, k);
+  else if (S.wf === 'shoulder') shoulderResults(R, k);   // r33
   if ((S.wf === 'kneeAP' || S.wf === 'kneeLat') && k) tumRows(R, k);   // tumour resection (r22)
   else if (S.wf === 'kneeLong') kneeLongResults(R, k);
-  else kneeSkyResults(R);
+  else if (S.wf === 'kneeSky') kneeSkyResults(R);   // r33 (Fable P2 4): the skyline's rows only on the skyline film
   if (k) for (const [i, r] of S.rulers.entries()) if (r.length === 2) { if (i === 0) R.push(['Rulers']); R.push([`Ruler ${i + 1}`, `${f1(G.dist(r[0], r[1]) * k)} mm`]); }
   if (S.kc) kcSummaryRows(R);   // the whole knee case, every value with its film and its source
   return R;
@@ -2751,7 +2803,7 @@ function hipResults(R, k) {
       else if (!ch && cs.maxHead && +stem.head !== cs.maxHead) R.push(['Head and cup', `cup ${cs.size} takes a ${linerTxt(S.fam[cup.fam], cs.liner)} liner for a ${headMm(cs.maxHead)} head`, 'warn']);
       headCaution(R, cup, stem);
     }
-    if (g.headSource) R.push(['Head centre from', g.headSource.replace(/^Chunli sheet/, 'manufacturer\'s sheet'), /sheet/.test(g.headSource) ? '' : 'warn']);
+    if (g.headSource) R.push(['Head centre from', g.headSource.replace(/^Chunli sheet/, 'manufacturer\'s sheet'), /sheet/.test(g.headSource) && !/^assumed/.test(g.headSource) ? '' : 'warn']);   // r32: an assumed one flagged
     const tip = X(g.axis[0]), top = X(g.axis[1]);
     if (canal) {
       R.push(['New femoral offset', `${f1(G.lineDist(Hs, canal.a, canal.b) * k)} mm`]);
@@ -2762,11 +2814,13 @@ function hipResults(R, k) {
       const varus = G.dot(G.sub(sUp, cUp), medial) > 0;
       const offLine = G.lineDist(G.mid(tip, top), canal.a, canal.b) * k;
       R.push(['Stem vs canal axis', !(a2 >= 0.25) ? (offLine > 1 ? `parallel, ${f1(offLine)} mm off the canal line` : 'aligned') : `${f1(a2)}° ${varus ? 'varus' : 'valgus'}`, a2 > 3 || offLine > 2 ? 'warn' : '']);
-      const tr = canalTraceFor(o), fit = tr ? stemFit(stem, tr) : null, Ls = tr ? stemLen(stem, tr) : 0, ev = fitIsEvidence(fit, tr, Ls);
-      if (fit) R.push(['Canal fill (distal third of the traced canal)', `${Math.round(fit.fillDistal * 100)} %; ${fit.maxIn > 0.5 ? `${f1(fit.maxIn)} mm past the inner cortex at the tightest level` : fit.maxIn >= -0.5 ? 'touching the inner cortex at the tightest level' : `${f1(-fit.maxIn)} mm clear of the inner cortex at the tightest level`}${ev ? '' : `; checked over only ${Math.round(fit.coveredMm)} of ${Math.round(Ls)} mm of stem (${Math.round(fit.maxGapMm)} mm unchecked in one stretch)`}`, fit.maxIn > 1 || !ev ? 'warn' : '']);
+      const tr = !isPfr(f) && canalTraceFor(o), fit = tr ? stemFit(stem, tr) : null, Ls = tr ? stemLen(stem, tr) : 0, ev = fitIsEvidence(fit, tr, Ls);   // r32: a PFR is not sized by canal fill
+      if (isPfr(f)) R.push(['Canal fill', 'not used: a tumour body is not sized by canal fill; check the stem against the canal with the ruler']);
+      else if (fit) R.push(['Canal fill (distal third of the traced canal)', `${Math.round(fit.fillDistal * 100)} %; ${fit.maxIn > 0.5 ? `${f1(fit.maxIn)} mm past the inner cortex at the tightest level` : fit.maxIn >= -0.5 ? 'touching the inner cortex at the tightest level' : `${f1(-fit.maxIn)} mm clear of the inner cortex at the tightest level`}${ev ? '' : `; checked over only ${Math.round(fit.coveredMm)} of ${Math.round(Ls)} mm of stem (${Math.round(fit.maxGapMm)} mm unchecked in one stretch)`}`, fit.maxIn > 1 || !ev ? 'warn' : '']);
       else R.push(['Canal fill', 'not checked: the canal\'s inner cortex was not traced along this stem', 'warn']);
     }
-    if (g.neckCut && lo) {
+    if (isPfr(f)) pfrRows(R, stem, o);   // r32
+    else if (g.neckCut && lo) {
       const up = canal ? canalUp(canal) : vertical(), med = X(g.neckCut.medial), d = G.dot(G.sub(med, lo.p), up) * k;
       R.push(['Neck cut above lesser trochanter', `${f1(d)} mm (medial end of the cut)`]);
     } else if (!g.neckCut) R.push(['Neck cut', 'not printed on the sheet for this size', 'warn']);
@@ -2790,13 +2844,16 @@ function hipResults(R, k) {
     if (sO && sO.on && sO.byHand) R.push([`${SIDE[o]} stem on the film`, `${S.fam[sO.fam].label} ${sizeOf(sO).size}, placed by hand on the ${SIDE[o]} femur (not templated there)`]);
     R.push([S.fam[stemN.fam].label, `size ${sizeOf(stemN).size}`]);
     R.push(['Head', `${stemN.head} mm ${S.lib.heads[stemN.headKind].label}, neck ${neckLabel(stemN, stemN.neck)}`]);
+    if (isPfr(S.fam[stemN.fam])) { R.push(['Tumour resection', `planned on the ${SIDE[n]} side, mirrored: measure it from the ${SIDE[o]} greater trochanter tip at surgery`, 'warn']); pfrRows(R, stemN, n); }   // r32 (Fable P2 4)
+    else {
     R.push(['Neck cut above lesser trochanter', cutN !== null ? `${f1(cutN)} mm (medial end of the cut; measure from the ${SIDE[o]} lesser trochanter at surgery)` : `mark the ${SIDE[n]} lesser trochanter to measure it`, cutN !== null ? '' : 'warn']);
     if (!gN.neckCut) R.push(['Neck cut', 'not printed on the sheet for this size', 'warn']);
+    }
     if (canalN && hnat) R.push(['Femoral offset', `${f1(G.lineDist(Hs, canalN.a, canalN.b) * k)} mm planned, ${f1(G.lineDist(hnat.c, canalN.a, canalN.b) * k)} mm native (${SIDE[n]})`]);
     if (cN && Hn && !Hn.single) { const d = G.sub(cN, Hs); R.push([`Leg length change on the ${SIDE[n]} plan`, sgn(-G.dot(d, Hn.v) * k, 'longer', 'shorter'), Math.abs(G.dot(d, Hn.v) * k) > 5 ? 'warn' : '']); }
     const cupP = cupN && cupN.on ? cupN : cup && cup.on ? cup : null; if (cupP) headCaution(R, cupP, stemN);
     if (cN && Hn && !Hn.single) stemCupRows(R, n, stemN, cupN, Hn, k);
-    const trN = canalTraceFor(n), fitN = trN ? stemFit(stemN, trN) : null;
+    const trN = !isPfr(S.fam[stemN.fam]) && canalTraceFor(n), fitN = trN ? stemFit(stemN, trN) : null;   // r32: a PFR is not sized by canal fill
     if (fitN) R.push([`Canal fill, ${SIDE[n]} (distal third)`, `${Math.round(fitN.fillDistal * 100)} %; ${fitN.maxIn > 0.5 ? `${f1(fitN.maxIn)} mm past the inner cortex` : fitN.maxIn >= -0.5 ? 'touching the inner cortex' : `${f1(-fitN.maxIn)} mm clear of the inner cortex`} at the tightest level`, fitN.maxIn > 1 ? 'warn' : '']);
     if (cupN && cupN.on) {
       const s2 = sizeOf(cupN); R.push([`${SIDE[n]} cup (reference)`, `${s2.size} (outside ${s2.catalogueOuter || s2.outerDiameter} mm), placed by the ${cupRuleName(S.notes['cupRule' + n])}`]);
@@ -2888,6 +2945,31 @@ function stemCupRows(R, sd, stem, cup, H, k) {
   const sp = S.notes['stemPlan' + sd];
   if (sp && sp.why && sp.fam === stem.fam && sp.size === stem.size && sp.neck === stem.neck) R.push([lab(pre, 'Stem choice'), sp.why, sp.none || sp.overHand ? 'warn' : '']);
 }
+// r32: a proximal femoral replacement's rows: the resection from the GT tip, that tip against the implant's head centre level,
+// the stack and its osteotomy, the stem, and every assumption it rests on
+function pfrRows(R, t, side) {
+  const f = S.fam[t.fam], z = sizeOf(t), P = pfrPlan(t, side), tp = P.tp, c = tumCollar(t), st = stemOf(t);
+  R.push(['Tumour resection (proximal femur)']);
+  if (!tp.ok) R.push(['Resection', `not planned: ${tp.why}`, 'warn']);
+  else {
+    R.push(['Tumour extent', `${f1(tp.extent)} mm below the tip of the greater trochanter, from the ${tp.src} (entered by the surgeon)`]);
+    R.push(['Margin', `${f1(tp.margin)} mm (your choice)`]);
+    R.push(['Resection length', `${f1(tp.resection)} mm below the tip of the greater trochanter`]);
+  }
+  if (!P.gt) R.push(['Greater trochanter', `not marked: mark the tip of the ${SIDE[side]} greater trochanter; the resection is measured from it`, 'warn']);
+  else if (Number.isFinite(P.sGT)) R.push(['GT tip vs head centre', `the GT tip is ${f1(Math.abs(P.sGT))} mm ${P.sGT >= 0 ? 'below' : 'above'} this implant's ${pfrLevelTxt(t)}, along its axis (this film, as placed)`]);
+  if (c === null) R.push(['Reconstruction', `${z.label || z.size}: ${fmm(z.reconstructionMm)} mm below its neck-0 head centre level without the stem collar; choose an option or a stem (${tumParts(z, null)})`, 'warn']);
+  else {
+    const tot = z.reconstructionMm + c, d = Number.isFinite(P.sPlan) ? tot - P.sPlan : null;
+    R.push(['Reconstruction', `${z.label || z.size} + stem collar ${c}: ${tumParts(z, c)} = ${fmm(tot)} mm below its neck-0 head centre level`]);
+    if (Number.isFinite(P.sGT)) R.push(['Osteotomy of this stack', `${fmm(tot - P.sGT)} mm below the GT tip${d !== null ? ` (${d >= 0 ? '+' : ''}${fmm(d)} mm against the planned resection)` : ''}`, d !== null && Math.abs(d) > 5 ? 'warn' : '']);
+  }
+  R.push(['Stem', st ? `${st.s.label || st.s.size}: ${st.s.diameterMm} mm, ${f1(st.s.drawnLengthMm - (c || 0))} mm beyond its collar as drawn; check the canal width at the tip and mid-stem with the ruler` : 'not chosen yet: choose the universal stem; check its diameter against the canal with the ruler', st ? '' : 'warn']);
+  R.push(['Taper junctions', pfrGapNote(z), 'warn']);
+  for (const a of f.assumptions || []) R.push(['Assumed (not confirmed by Chunli)', a, 'warn']);
+  R.push(['Placement', 'placed, not sized: the head centre on the planned centre (the cup, or the native head for a bipolar head: no cup needed), the axis along the canal; drag and turn to fine-tune', 'warn']);
+  R.push(['Scale', 'lengths use this film\'s ball; the resection level lies further from it, where magnification may differ (not validated)', 'warn']);
+}
 // the tumour resection rows (r22): what the plan is built on (MRI/CT extent and margin), the body chosen against it, the
 // remaining bone and the stem; every length projected on this film and scaled by its ball (not at the resection level)
 function tumRows(R, k) { for (const slot of ['femur', 'tibia']) tumRowsOf(R, k, slot); }
@@ -2914,6 +2996,25 @@ function tumRowsOf(R, k, slot) {
   } else R.push([bone, S.wf === 'kneeAP' ? (fem ? 'not measured: mark the hip centre (a long-leg film, or the knee case\'s long film)' : 'not measured: mark the ankle centre (open a film that shows the ankle as the knee AP)') : 'measured on the knee AP', 'warn']);
   if (!st) R.push(['Stem', 'not chosen yet: choose the universal stem; check its diameter against the canal with the ruler', 'warn']);
   R.push(['Scale', 'lengths use this film\'s ball, placed at the knee; the resection level lies further from it, where magnification may differ (not validated)', 'warn']);
+}
+// The placed components' cuts on this knee AP (one calculation for the results and the knee plan card): {fe, ti}, each null
+// when that component is not placed or is a tumour body; fe {s, mech (the distal cut to the femoral mechanical axis, lateral
+// angle), valgus (the cut to the shaft axis: what is set on the guide), res {m, l} mm}; ti {s, mech (medial angle), res}
+function kneeApCuts(A, k) {
+  const fe = S.tpl.femur, ti = S.tpl.tibia, out = { fe: null, ti: null };
+  if (fe && fe.on && !isTumourBody(S.fam[fe.fam])) {
+    const s = sizeOf(fe), g = geomOf(fe), cut = xf(fe)([0, g.distalCutY]), down = dirOf(fe, [0, 1]);
+    let lat = dirOf(fe, [1, 0]); if (G.dot(lat, A.latDir) < 0) lat = G.mul(lat, -1);
+    out.fe = { s, mech: A.fma ? G.angleDeg(A.fma, lat) : null, valgus: A.anat ? Math.abs(90 - G.angleDeg(A.anat, lat)) : null,
+      res: A.cm && A.cl && k ? { m: G.dot(G.sub(A.cm.p, cut), down) * k, l: G.dot(G.sub(A.cl.p, cut), down) * k } : null };
+  }
+  if (ti && ti.on && !isTumourBody(S.fam[ti.fam])) {
+    const s = sizeOf(ti), g = geomOf(ti), cut = xf(ti)([0, g.cutY]), up = dirOf(ti, [0, -1]);
+    let med = dirOf(ti, [1, 0]); if (G.dot(med, A.latDir) > 0) med = G.mul(med, -1);
+    out.ti = { s, mech: A.tma ? G.angleDeg(G.mul(A.tma, -1), med) : null,
+      res: A.pm && A.pl && k ? { m: G.dot(G.sub(A.pm.p, cut), up) * k, l: G.dot(G.sub(A.pl.p, cut), up) * k } : null };
+  }
+  return out;
 }
 function kneeAPResults(R, k) {
   if (revCase()) jlRows(R, k);   // the revision joint line's target and its evidence (amendment 4)
@@ -2942,29 +3043,27 @@ function kneeAPResults(R, k) {
     if (cw) R.push(['Femoral condylar width (measured)', `${f1(G.dist(cw.a, cw.b) * k)} mm`]);
     if (pw) R.push(['Tibial plateau width (measured)', `${f1(G.dist(pw.a, pw.b) * k)} mm`]);
   }
-  const fe = S.tpl.femur, ti = S.tpl.tibia; let femThick = null, femRes = null;
-  if (fe && fe.on && !isTumourBody(S.fam[fe.fam])) {   // r27: a femoral tumour body has its own rows (tumRows), no distal cut
-    const s = sizeOf(fe), g = geomOf(fe), X = xf(fe), cut = X([0, g.distalCutY]), down = dirOf(fe, [0, 1]);
-    let lat = dirOf(fe, [1, 0]); if (G.dot(lat, A.latDir) < 0) lat = G.mul(lat, -1);
+  const fe = S.tpl.femur, ti = S.tpl.tibia, C = kneeApCuts(A, k); let femThick = null, femRes = null;
+  if (C.fe) {   // r27: a femoral tumour body has its own rows (tumRows), no distal cut
+    const s = C.fe.s;
     R.push(['Femoral component']); R.push([S.fam[fe.fam].label, `size ${s.size}, ${s.sides[S.side].mlWidth} mm wide`]);
-    if (A.fma) { const a = G.angleDeg(A.fma, lat); R.push(['Distal cut to mechanical axis (lateral angle)', `${f1(a)}°`, Math.abs(a - 90) > 2 ? 'warn' : '']); }
+    if (C.fe.mech !== null) { const a = C.fe.mech; R.push(['Distal cut to mechanical axis (lateral angle)', `${f1(a)}°`, Math.abs(a - 90) > 2 ? 'warn' : '']); }
     if (S.kc) { const cw = lmGeom('condW'); if (cw) { const o = overhangEach(s.sides[S.side].mlWidth, G.dist(cw.a, cw.b) * k); R.push(['Femoral M/L coverage (centred)', Math.abs(o) < 0.5 ? 'matches the condyles' : o > 0 ? `${f1(o)} mm overhang each side` : `${f1(-o)} mm short of the edge each side`, o > 2 ? 'warn' : '']); } else R.push(['Femoral M/L coverage', 'not checked: mark the femoral condylar width', 'warn']); kcDepRow(R, fe, 'femoral component'); }
-    if (A.anat) R.push(['Distal cut to shaft axis (valgus for the guide)', `${f1(Math.abs(90 - G.angleDeg(A.anat, lat)))}°`]);
+    if (C.fe.valgus !== null) R.push(['Distal cut to shaft axis (valgus for the guide)', `${f1(C.fe.valgus)}°`]);
     femThick = s.distalThickness;
-    if (A.cm && A.cl) {
-      femRes = { m: G.dot(G.sub(A.cm.p, cut), down) * k, l: G.dot(G.sub(A.cl.p, cut), down) * k };
+    if (C.fe.res) {
+      femRes = C.fe.res;
       R.push(['Distal resection medial / lateral', `${f1(femRes.m)} / ${f1(femRes.l)} mm`]);
       R.push(['Implant distal thickness', `${f1(femThick)} mm`]);
     }
   }
-  if (ti && ti.on && !isTumourBody(S.fam[ti.fam])) {   // r23 (Fable P2 1): a tumour body has its own rows (tumRows), no tray thickness or resection
-    const s = sizeOf(ti), g = geomOf(ti), X = xf(ti), cut = X([0, g.cutY]), up = dirOf(ti, [0, -1]);
-    let med = dirOf(ti, [1, 0]); if (G.dot(med, A.latDir) > 0) med = G.mul(med, -1);
+  if (C.ti) {   // r23 (Fable P2 1): a tumour body has its own rows (tumRows), no tray thickness or resection
+    const s = C.ti.s;
     R.push(['Tibial tray']); R.push([S.fam[ti.fam].label, S.kc ? `size ${s.size}, ${s.mlWidth} mm wide; drawn at ${thickTxt(ti)} for the picture only (the insert is chosen at surgery)` : `size ${s.size}, ${s.mlWidth} mm wide, ${thickTxt(ti)}`]);
     if (S.kc) { const pw = lmGeom('platW'); if (pw) { const o = overhangEach(s.mlWidth, G.dist(pw.a, pw.b) * k); R.push(['Tibial M/L coverage (centred)', Math.abs(o) < 0.5 ? 'matches the plateau' : o > 0 ? `${f1(o)} mm overhang each side` : `${f1(-o)} mm short of the cortex each side`, o > 1 ? 'warn' : '']); } else R.push(['Tibial M/L coverage', 'not checked: mark the tibial plateau width', 'warn']); kcDepRow(R, ti, 'tibial tray'); }
-    if (A.tma) { const a = G.angleDeg(G.mul(A.tma, -1), med); R.push(['Tibial cut to mechanical axis (medial angle)', `${f1(a)}°`, Math.abs(a - 90) > 2 ? 'warn' : '']); }
-    if (A.pm && A.pl) {
-      const tm = G.dot(G.sub(A.pm.p, cut), up) * k, tl = G.dot(G.sub(A.pl.p, cut), up) * k;
+    if (C.ti.mech !== null) { const a = C.ti.mech; R.push(['Tibial cut to mechanical axis (medial angle)', `${f1(a)}°`, Math.abs(a - 90) > 2 ? 'warn' : '']); }
+    if (C.ti.res) {
+      const tm = C.ti.res.m, tl = C.ti.res.l;
       R.push(['Tibial resection medial / lateral', `${f1(tm)} / ${f1(tl)} mm`]);
       if (femRes) {
         R.push(['Extension gap: bone off vs implant']);
@@ -3026,6 +3125,183 @@ function kneeLatResults(R, k) {
   if (S.kc && fe && fe.on) kcDepRow(R, fe, 'femoral component');
 }
 
+// ---------- the knee plan card (Sami, 23 Oct 2026; DESIGN-2026-10-23-knee-plan-card.md with Astra's and Fable's amendments) ----------
+// Sami: "at the end we want to know valgus cut angle, femoral external rotation angle, tibial slope angle, measured resections
+// from each condyle on femur and tibial plateau medial and lateral side, femoral and tibial size and maybe recommendation on
+// whether to resurface patella or patelloplasty". One card with those lines on every knee film, each with its origin tag, its
+// film and that film's calibration, and what is stale or missing on the line itself; the full results stay under Details.
+// The posterior condylar resection is not planned (Sami, 23 Oct: "leave it out for now"). The card's numbers come from the
+// same calculations as the results (kneeApCuts, latKnee, slopeOf, kcGeo); another film's placed-component values are those
+// worked out when it was last on screen in this page (KCARD), said so, and out of date when the plan values changed since.
+const KCARD = {};   // role → {sha, vals, data, nW, nB}
+const kneeCardOn = () => !!S.img && (S.kc ? true : S.wf === 'kneeAP' || S.wf === 'kneeLat');
+// what another film's remembered numbers depend on beyond its own plan (Fable, r29 code review P2): the plan values, the
+// case's one size per component (a size set on one film moves the other's component when that film is next opened), and the
+// long leg (its image and the transfer angles the AP's axes take)
+const cardValsKey = () => {
+  const K = S.kc, A = K && K.films.long && !K.films.long.missing ? kcLongAngles() : null, r = x => (Number.isFinite(x) ? Math.round(x * 10) : null);
+  return JSON.stringify([PV_KEYS.map(k => pvGet(k).v), pvTibRef(), K ? ['femur', 'tibia'].map(sl => { const z = K.shared.size[sl]; return z ? `${z.fam}:${z.size}` : null; }) : null,
+    K && K.films.long ? K.films.long.image.sha256.slice(0, 16) : null, A ? [r(A.amaF), r(A.amaT)] : null]);
+};
+function cardApNow() {
+  const A = kneeAxes(), k = mm(), C = kneeApCuts(A, k), fe = S.tpl.femur, ti = S.tpl.tibia, cw = lmGeom('condW'), pw = lmGeom('platW');
+  const dep = t => !!(S.kc && t && t.on && t.dep && t.dep !== kcDepKey());
+  const tp = C.ti && C.ti.res ? ((ti.tref && ti.tref.plat && ti.tref.mode === pvTibRef() ? ti.tref : tibRefPlat()) || {}).plat || null : null;
+  return { vgPlaced: C.fe ? C.fe.valgus : null, vgAxis: A.anat && A.fma ? G.angleDeg(A.anat, A.fma) : null, vgHow: A.fmaHow || null,
+    femRes: C.fe ? C.fe.res : null, tibRes: C.ti ? C.ti.res : null, tibPlat: tp, femSize: C.fe ? C.fe.s.label || C.fe.s.size : null, tibSize: C.ti ? C.ti.s.label || C.ti.s.size : null,
+    femCov: C.fe && cw && k ? overhangEach(C.fe.s.sides[S.side].mlWidth, G.dist(cw.a, cw.b) * k) : null, tibCov: C.ti && pw && k ? overhangEach(C.ti.s.mlWidth, G.dist(pw.a, pw.b) * k) : null,
+    femStale: dep(fe), tibStale: dep(ti), tumour: [fe, ti].some(t => t && t.on && isTumourBody(S.fam[t.fam])) };
+}
+function cardLatNow() {
+  const L = latKnee(), k = mm(), fe = S.tpl.femur, ti = S.tpl.tibia, dep = t => !!(S.kc && t && t.on && t.dep && t.dep !== kcDepKey());
+  const pd = L.pa && L.pp && k ? G.dist(L.pa.p, L.pp.p) * k : null, tz = ti && ti.on ? sizeOf(ti) : null, fz = fe && fe.on ? sizeOf(fe) : null;
+  return { slopePlaced: ti && ti.on && L.up ? slopeOf(ti, L) : null, femSize: fz ? fz.label || fz.size : null, tibSize: tz ? tz.label || tz.size : null,
+    tibCovAP: tz && pd !== null && Number.isFinite(tz.apDepth) ? tz.apDepth - pd : null, femStale: dep(fe), tibStale: dep(ti) };
+}
+// the lateral's landmark measurements (no component needed): the film on screen, or a knee case's lateral by its own scale
+function cardLatGeo() {
+  if (!S.kc) {
+    if (S.wf !== 'kneeLat') return null;
+    const L = latKnee(), k = mm(), pt = null;
+    return { slope: L.slope, femDepth: L.ac && L.pc && k ? G.lineDist(L.pc.p, L.ac.a, L.ac.b) * k : null, platDepth: L.pa && L.pp && k ? G.dist(L.pa.p, L.pp.p) * k : null, pat: pt };
+  }
+  const f = S.kc.films.lat; if (!f || f.missing) return null;
+  const L = kcGeo('lat'); if (!L) return null;
+  const pa = L.g('platAnt'), pp = L.g('platPost'), ta = L.g('tibAxis'), ac = L.g('antCortex'), pc = L.g('postCond'), pt = L.g('patThick');
+  let slope = null;
+  if (pa && pp && ta) { let up = G.unit(G.sub(ta.a, ta.b)); if (G.dot(G.sub(G.mid(pa.p, pp.p), G.mid(ta.a, ta.b)), up) < 0) up = G.mul(up, -1); slope = G.angleDeg(up, G.unit(G.sub(pp.p, pa.p))) - 90; }
+  return { slope, femDepth: ac && pc && L.k ? G.lineDist(pc.p, ac.a, ac.b) * L.k : null, platDepth: pa && pp && L.k ? G.dist(pa.p, pp.p) * L.k : null, pat: pt && L.k ? G.dist(pt.a, pt.b) * L.k : null };
+}
+// this film's card values remembered (a knee case), and another film's as last worked out: {data, old, from} or null
+function cardFilm(role, R) {
+  const K = S.kc, wf = role === 'ap' ? 'kneeAP' : 'kneeLat';
+  if (!K) return S.wf === wf ? { data: role === 'ap' ? cardApNow() : cardLatNow(), old: '', from: '' } : null;
+  const f = K.films[role]; if (!f) return null;
+  if (f.missing) return { data: null, old: '', from: `the ${KC_NAME[role]} film's X-ray is not on this page: open it again` };
+  if (K.active === role && S.wf === wf) {
+    const data = role === 'ap' ? cardApNow() : cardLatNow();
+    KCARD[role] = { sha: f.image.sha256, vals: cardValsKey(), data, nW: R.filter(r => r.length > 1 && r[2] === 'warn').length, nB: R.filter(r => r.length > 1 && r[2] === 'bad').length };
+    return { data, old: '', from: '' };
+  }
+  const c = KCARD[role];
+  if (!c || c.sha !== f.image.sha256) return { data: null, old: '', from: `open the ${KC_NAME[role]} film to work it out` };
+  return { data: c.data, old: c.vals !== cardValsKey() ? `your plan values, the case's sizes or the long leg changed since the ${KC_NAME[role]} was last open: open it and press Auto template again` : '', from: ` (as last worked out on the ${KC_NAME[role]})` };
+}
+const cardCal = role => (S.kc ? kcCalText(role) : calStatus()[0]);
+const covText = (o, lim, edge) => (o === null ? '' : Math.abs(o) < 0.5 ? 'M/L matches' : o > 0 ? `${f1(o)} mm overhang each side` : `${f1(-o)} mm short of the ${edge} each side`);
+// a plan value's tag: [words, class] (amber: an assumed value nobody has checked)
+function pvTag(pv) {
+  if (pv.o === 'surgeon') return ['your target', 't'];
+  if (pv.o === 'unknown') return [`entered before 16 Oct${pvOut(pv) ? ', outside the usual entry range' : ''}${pv.rv ? ', checked' : ''}`, pv.rv ? 'd' : 'w'];
+  return [pv.rv ? 'default, checked' : 'default', pv.rv ? 'd' : 'w'];
+}
+const pvUsed = key => (S.kc ? true : key === 'femDistal' || key === 'vca' ? S.wf === 'kneeAP' : key === 'slope' ? S.wf === 'kneeLat' : true);
+// → {rows: [{id, label, val, tag: [words, class], note, cls, pv}], checks: [[film, n, nBad, role]], head}
+function kneeCardRows(R) {
+  const K = S.kc, AP = cardFilm('ap', R), LT = cardFilm('lat', R), D = AP && AP.data, DL = LT && LT.data, LG = cardLatGeo(), rows = [];
+  const miss = (F, role, what) => (F && F.from && !F.data ? F.from : K ? `needs the ${KC_NAME[role]} film${K.films[role] ? '' : ' (add it to the case)'}` : `needs a knee ${role === 'ap' ? 'AP' : 'lateral'} film (start a knee case to add it)`) + (what ? `: ${what}` : '');
+  const old = F => (F && F.old ? F.old : '');
+  const push = (id, label, val, tag, note, cls = '', pv = null) => rows.push({ id, label, val, tag, note, cls, pv });
+  const xn = pvXn();
+  // 1. the valgus cut angle: the placed femur's cut to the shaft (what is set on the guide), else the axis the placement will use
+  { const pv = pvGet('vca'), how = D && D.vgHow, ax = { measured: 'the femoral mechanical axis from the hip centre on the AP', transferred: 'the femoral mechanical axis taken from the long leg', entered: 'the shaft axis turned by your valgus value', assumed: 'the shaft axis turned by the default valgus' }[how] || '';
+    if (D && D.vgPlaced !== null) push('vca', 'Valgus cut angle', `${f1(D.vgPlaced)}° to the femoral shaft`, ['placed', 'm'], `the placed femur's distal cut on the AP${AP.from} (${cardCal('ap')}); square to ${ax}${D.femStale ? '; placed before a change: press Auto template again' : ''}${old(AP) ? '; ' + old(AP) : ''}`, D.femStale || old(AP) ? 'warn' : '', 'vca');
+    else if (D && D.vgAxis !== null && (how === 'measured' || how === 'transferred')) push('vca', 'Valgus cut angle', `${f1(D.vgAxis)}° to the femoral shaft`, [how === 'measured' ? 'measured' : 'long leg', 'm'], `${ax} (not placed yet)${AP.from}`, '', 'vca');
+    else { const [t, c] = pvTag(pv); push('vca', 'Valgus cut angle', `${f1(pv.v)}° to the femoral shaft`, [t, c], `the plan value, used on the AP when no hip or long leg sets the axis${D ? '' : ` (${miss(AP, 'ap', '')})`}`, c === 'w' ? 'warn' : '', 'vca'); } }
+  // 2. the femoral external rotation: a surgical target (not shown on these films)
+  { const pv = pvGet('rot'), [t, c] = pvTag(pv); push('rot', 'Femoral external rotation', `${f1(pv.v)}° to the posterior condyles`, [t, c], `a target, set at surgery${xn ? ` on the rotation guide (XN guide 0°, 3° or 5°, manual p. ${XN_KNEE.rotPage})` : ''}; not shown on these films`, c === 'w' ? 'warn' : '', 'rot'); }
+  // 3. the tibial slope: the placed tray's cut on the lateral, else the plan value; the native slope beside it
+  { const pv = pvGet('slope'), [t, c] = pvTag(pv), nat = LG && LG.slope !== null ? `native ${f1(LG.slope)}° on the lateral` : 'native slope not measured';
+    const guide = xn ? ' on the extramedullary guide' : '';
+    if (DL && DL.slopePlaced !== null) { const off = Math.abs(DL.slopePlaced - pv.v) >= 0.5; push('slope', 'Tibial slope', `${f1(DL.slopePlaced)}° posterior`, ['placed', 'm'], `the placed tray's cut on the lateral${LT.from} (${cardCal('lat')}); ${nat}; your plan value ${f1(pv.v)}°${guide} (${t})${off ? ': the placed cut differs, press Auto template again or check it' : ''}${DL.tibStale ? '; placed before a change' : ''}${old(LT) ? '; ' + old(LT) : ''}`, off || DL.tibStale || old(LT) ? 'warn' : '', 'slope'); }
+    else push('slope', 'Tibial slope', `${f1(pv.v)}° posterior`, [t, c], `${guide ? guide.trim() + '; ' : ''}${nat}${DL ? '' : `; the tray on the lateral: ${miss(LT, 'lat', '')}`}`, c === 'w' ? 'warn' : '', 'slope'); }
+  // 4-6. the resections: from the landmarks to the placed components' cuts (radiographic, not a balanced gap)
+  { const pv = pvGet('femDistal'), plan = `plan ${f1(pv.v)} mm from the more distal condyle (${pvTag(pv)[0]})`;
+    if (D && D.femRes) push('femDistal', 'Distal femur resection, medial / lateral', `${f1(D.femRes.m)} / ${f1(D.femRes.l)} mm`, ['radiographic', 'm'], `from the condyles to the placed femur's cut on the AP${AP.from} (${cardCal('ap')}); ${plan}${D.femStale ? '; placed before a change: press Auto template again' : ''}${old(AP) ? '; ' + old(AP) : ''}`, D.femStale || old(AP) ? 'warn' : '', 'femDistal');
+    else push('femDistal', 'Distal femur resection, medial / lateral', 'not worked out', ['missing', 'x'], `${D ? (D.tumour ? 'a distal femoral replacement: see Details' : 'place the femur on the calibrated AP') : miss(AP, 'ap', 'place the femur on it')}; ${plan}`, '', 'femDistal'); }
+  push('post', 'Posterior femur resection, medial / lateral', 'determine intraoperatively', ['not planned', 'x'], `not worked out from the films: ${xn ? 'the XN rotation guide\'s pivot' : 'the sizing and rotation instruments\' geometry'} and the component outlines are not confirmed (Sami, 23 Oct)`);
+  { const pv = pvGet('tibial'), ref = pvTibRef(), plan = `plan ${f1(pv.v)} mm below the ${TIB_SHORT[ref]} (${pvTag(pv)[0]})`;
+    if (D && D.tibRes) push('tibial', 'Tibial resection, medial / lateral', `${f1(D.tibRes.m)} / ${f1(D.tibRes.l)} mm`, ['radiographic', 'm'], `from the plateaus to the placed tray's cut on the AP${AP.from} (${cardCal('ap')})${D.tibPlat ? `, referenced on the ${D.tibPlat} plateau` : ''}; ${plan}${D.tibStale ? '; placed before a change: press Auto template again' : ''}${old(AP) ? '; ' + old(AP) : ''}`, D.tibStale || old(AP) ? 'warn' : '', 'tibial');
+    else push('tibial', 'Tibial resection, medial / lateral', 'not worked out', ['missing', 'x'], `${D ? (D.tumour ? 'a tumour component: see Details' : 'place the tray on the calibrated AP') : miss(AP, 'ap', 'place the tray on it')}; ${plan}`, '', 'tibial'); }
+  // 7-8. the sizes: the case's one size per component (else this film's), with each film's coverage
+  for (const slot of ['femur', 'tibia']) {
+    const fem = slot === 'femur', z = K ? K.shared.size[slot] : null, here = S.tpl[slot] && S.tpl[slot].on ? sizeOf(S.tpl[slot]) : null;
+    const size = z ? (S.fam[z.fam] && (S.fam[z.fam].sizes.find(s => s.size === z.size) || {}).label) || z.size : here ? here.label || here.size : null;
+    const bits = [], warn = [];
+    if (LG && (fem ? LG.femDepth : LG.platDepth) !== null) bits.push(`${fem ? 'femoral A/P' : 'plateau depth'} ${f1(fem ? LG.femDepth : LG.platDepth)} mm on the lateral`);
+    const cov = D ? (fem ? D.femCov : D.tibCov) : null;
+    if (cov !== null) { bits.push(`AP: ${covText(cov, 0, fem ? 'edge' : 'cortex')}`); if (cov > (fem ? 2 : 1)) warn.push(1); }
+    if (!fem && DL && DL.tibCovAP !== null) { const o = DL.tibCovAP; bits.push(`lateral: ${Math.abs(o) < 0.5 ? 'A/P matches' : o > 0 ? `${f1(o)} mm longer than the plateau` : `${f1(-o)} mm shorter than the plateau`}`); if (o > 2) warn.push(1); }
+    if (z && z.byHand) bits.push('size set by hand');
+    if ((D && (fem ? D.femStale : D.tibStale)) || (DL && (fem ? DL.femStale : DL.tibStale))) { bits.push('placed before a change: press Auto template again'); warn.push(1); }
+    push(slot, fem ? 'Femoral size' : 'Tibial size', size || 'not placed', size ? ['placed', 'm'] : ['missing', 'x'], bits.join('; ') || (fem ? 'sized from the lateral A/P, M/L checked on the AP' : 'sized from the AP M/L and the lateral A/P'), warn.length ? 'warn' : '');
+  }
+  // 9. the patella: a suggestion from the surgeon's own skyline assessment (never written into the decision)
+  if (K) {
+    const sg = patellaSuggest(K.shared.pf, LG ? LG.pat : null, xn), dec = { undecided: 'not decided', resurface: 'resurface', retain: 'do not resurface' }[K.shared.patella] || 'not decided';
+    push('patella', 'Patella', sg.s === 'resurface' ? 'Resurface' : sg.s === 'patelloplasty' ? 'Patelloplasty' : 'No suggestion', ['suggestion, your call', 's'], `${cap(sg.why.join('; '))}. From your skyline assessment; bone thickness on the X-ray (the caliper at surgery reads 2-4 mm more); native thickness alone does not decide it. Your decision: ${dec} (Knee case card)`, sg.s ? '' : 'warn');
+  } else push('patella', 'Patella', 'No suggestion', ['missing', 'x'], 'needs a knee case: the skyline assessment and the patella thickness on the lateral');
+  const checks = [[S.kc ? KC_NAME[S.kc.active] : 'this film', R.filter(r => r.length > 1 && r[2] === 'warn').length + R.filter(r => r.length > 1 && r[2] === 'bad').length, R.filter(r => r.length > 1 && r[2] === 'bad').length, null]];
+  if (K) for (const r of ['ap', 'lat']) { const c = KCARD[r], f = K.films[r]; if (r !== K.active && c && f && c.sha === f.image.sha256 && c.nW + c.nB) checks.push([KC_NAME[r], c.nW + c.nB, c.nB, r]); }
+  const head = `Knee plan · ${cap(SIDE[S.kc ? S.kc.side : S.side])} knee${revCase() ? ' · revision: the lines of a primary knee, check the joint line in Details' : ''}${D && D.tumour ? ' · tumour component: its rows are in Details' : ''}`;
+  return { rows, checks, head };
+}
+// the card's body (written by drawNow when it changes): the lines, each plan value editable in place with a Checked tap
+function kneeCardHTML(R) {
+  const C = kneeCardRows(R), tagH = t => `<span class="kptag ${t[1]}">${esc(t[0])}</span>`;
+  let h = C.head.includes(' · ', C.head.indexOf('knee')) ? `<div class="kphead">${esc(C.head.slice(C.head.indexOf(' · ', C.head.indexOf('knee')) + 3))}</div>` : '';
+  for (const r of C.rows) {
+    h += `<div class="kprow${r.cls ? ' ' + r.cls : ''}" data-row="${r.id}"><span class="kpl">${esc(r.label)}</span>${tagH(r.tag)}<span class="kpv">${esc(r.val)}</span><span class="kpn">${esc(r.note)}</span>`;
+    if (r.pv && pvUsed(r.pv)) {
+      const pv = pvGet(r.pv), [lo, hi, step] = PV_BOUND[r.pv], [t, c] = pvTag(pv);
+      h += `<span class="kped"><label>${r.pv === 'vca' || r.pv === 'rot' || r.pv === 'slope' ? 'Target' : 'Plan'} <input type="number" data-pv="${r.pv}" min="${lo}" max="${hi}" step="${step}" value="${pv.v}" aria-label="${esc(pvName(r.pv))}">${esc(pvUnit(r.pv).trim())}</label>`;
+      if (r.pv === 'tibial') h += `<select data-tref aria-label="Tibial resection reference (card)"><option value="less"${pvTibRef() === 'less' ? ' selected' : ''}>below the higher plateau</option><option value="medial"${pvTibRef() === 'medial' ? ' selected' : ''}>below the lowest medial point</option>${pvTibRef() === 'worn' ? '<option value="worn" selected>below the lower plateau (before 16 Oct)</option>' : ''}</select>`;
+      h += pv.o !== 'surgeon' && !pv.rv ? `<button type="button" data-ck="${r.pv}" title="You have looked at ${esc(pvName(r.pv).toLowerCase())} ${f1(pv.v)}${esc(pvUnit(r.pv))} and keep it (its origin stays: ${esc(t)})">Checked</button>` : `<span class="kpok">${c === 't' ? '' : '✓ checked'}</span>`;
+      h += '</span>';
+    }
+    h += '</div>';
+  }
+  const n = C.checks.reduce((a, c) => a + c[1], 0);
+  h += `<div class="kpchk${C.checks.some(c => c[2]) ? ' bad' : n ? ' warn' : ''}">${n ? `⚠ ${C.checks.filter(c => c[1]).map(c => `${esc(c[0])}: ${c[1]} to check${c[3] ? ' (when last open)' : ''}`).join(' · ')}` : 'Nothing to check on this film'}`;
+  if (C.checks[0][1]) h += ' <button type="button" data-show>Show</button>';
+  for (const c of C.checks.slice(1)) h += ` <button type="button" data-film="${c[3]}">Open ${esc(c[0])}</button>`;
+  h += ' · the full results: Details under Measurements</div>';
+  return h;
+}
+// the card (built with the panel; its body kept current by drawNow): the place button while components are missing
+function kneeCard(R, cur) {
+  const d = el('<details class="sec kplan" id="sec-kplan"><summary><span class="segn">✚</span><span class="segt">Knee plan</span><span class="segr"></span></summary><div id="kplanb"></div></details>');
+  const C = kneeCardRows(R), val = id => { const r = C.rows.find(x => x.id === id); return r && r.tag[1] !== 'x' ? r.val : '–'; };
+  d.querySelector('.segr').textContent = `${cap(SIDE[S.kc ? S.kc.side : S.side])} knee · femur ${val('femur')}, tibia ${val('tibia')}`;
+  d.open = S.segHand.kplan ?? (cur === 'tpl' || cur === 'save');
+  d.querySelector('summary').addEventListener('click', () => { S.segHand.kplan = !d.open; });
+  const b = d.querySelector('#kplanb');
+  b.addEventListener('change', e => {
+    const i = e.target.closest('input[data-pv]'), s = e.target.closest('select[data-tref]');
+    if (s) { pvSetTibRef(s.value); save(); panel(); draw(); return prompt(`Tibial reference changed: the tibial resection is now the assumed ${f1(pvGet('tibial').v)} mm for it (enter your own if different); press Auto template to place again.`); }
+    if (!i) return;
+    const key = i.dataset.pv, [lo, hi] = PV_BOUND[key], t = i.value.trim(), n = parseFloat(t);
+    if (t === '') { pvSet(key, null); save(); panel(); draw(); return; }
+    if (!(n >= lo && n <= hi)) { prompt(`${pvName(key)}: enter a value from ${lo} to ${hi}${pvUnit(key)}, or empty it for the assumed value.`); i.value = String(pvGet(key).v); return; }
+    if (Math.abs(n - pvGet(key).v) >= 0.005) pvSet(key, Math.round(n * 100) / 100); else pvReview(key);   // the same number typed again: a review, the origin kept (Fable, r29 P3)
+    save(); panel(); draw();
+    if (opSlots().some(sl => S.tpl[sl])) prompt(`${pvName(key)}: your target ${f1(pvGet(key).v)}${pvUnit(key)}. Press Auto template to place the components with it.`);
+  });
+  b.addEventListener('click', e => {
+    const ck = e.target.closest('button[data-ck]'), fl = e.target.closest('button[data-film]');
+    if (ck) { pvReview(ck.dataset.ck); save(); panel(); draw(); return; }
+    if (fl) return kcShow(fl.dataset.film);
+    if (e.target.closest('button[data-show]')) showChecks();
+  });
+  if ((S.wf === 'kneeAP' || S.wf === 'kneeLat') && opSlots().length && !opSlots().every(sl => S.tpl[sl])) {
+    const r = el('<div class="row"></div>'), why = !mm() ? 'Calibrate first' : '';
+    r.appendChild(btn('Place with these values', autoTemplate, 'primary', !!why, why || 'Place the components by the rules with the values on this card (an unchecked default stays marked "default")'));
+    d.appendChild(r);
+  }
+  { const h = kneeCardHTML(R); b.innerHTML = h; b._html = h; }   // the string drawNow compares with (Fable, r29 P3)
+  return d;
+}
+
 // ---------- drawing ----------
 function draw() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; drawNow(); }); }
 function drawNow() {
@@ -3054,6 +3330,7 @@ function drawNow() {
   setText('hud', `W ${Math.round(S.wl.w)} L ${Math.round(S.wl.c)} · zoom ${(S.view.k * 100).toFixed(0)} %` + (k ? ` · 10 mm = ${(10 / k * S.view.k).toFixed(0)} screen px` : ''));
   let R = []; try { R = results(); } catch (e) { console.error(e); R = [['Results', `could not be worked out (${e.message || e})`, 'bad']]; }
   setHTML('res', resTable(R));
+  if ($('kplanb')) { let h = ''; try { h = kneeCardHTML(R); } catch (e) { console.error(e); h = `<div class="kpchk bad">The knee plan card could not be worked out (${esc(e.message || e)}): see Details.</div>`; } setHTML('kplanb', h); }
   const al = R.filter(r => r.length > 1 && r[2] === 'bad');   // the serious ones also on the film, where the eyes are, and at the top of the panel
   setHTML('alerts', al.map(r => `<div>${esc(r[0])}: ${esc(r[1])}</div>`).join(''));
   setHTML('warns', al.map(r => `<div>${esc(r[0])}: ${esc(r[1])}</div>`).join(''));
@@ -3074,8 +3351,9 @@ function filmMode() {
   if (linesAuto()) return S.linesOn ? false : 'phone';
   return S.cleanView ? true : false;
 }
-// is this landmark's handle drawn (and so draggable) in this mode? A landmark to place again (red) always is.
-const lmShown = (d, bad, mode) => bad || !mode || (mode === true && d.type === 'point');
+// is this landmark's handle drawn (and so draggable) in this mode? A landmark to place again (red) always is. The width lines'
+// two ends show as the point landmarks do (Sami, 23 Oct: "show the width line points in the image like the others")
+const lmShown = (d, bad, mode) => bad || !mode || (mode === true && (d.type === 'point' || WIDTH_LM.includes(d.key)));
 // On a phone the serious alerts sit in the panel column, above its row (Astra's review of round 11, finding 3): the
 // layout gives them their own room, so a tall panel, the implant bar or the prompt never covers them. On a desktop they
 // stay on the film, top right.
@@ -3111,7 +3389,7 @@ function warnSummary(R) {
 }
 // "Show all": the Measurements and save segment opened (with every result), the phone's panel made taller, and it in view
 function showChecks() {
-  S.segHand.save = true;
+  S.segHand.save = true; S.segHand.resd = true;
   if (sheet && PHONE.matches && sheet.get() === 'peek') sheet.set('half');
   panel();
   const d = $('sec-save'); if (d) { d.open = true; const t = d.querySelector('table.res .warn, table.res tr'); (t || d).scrollIntoView({ block: 'nearest' }); }
@@ -3226,6 +3504,16 @@ function overlay(g, T, lw, ui, clean = false) {   // clean: no construction line
       if (tp.ok) { const o = tumAt(t, tp.resection), dv = tumAxis(t).dir, nv = [-dv[1], dv[0]], a = X([o[0] - 45 * nv[0], o[1] - 45 * nv[1]]), b = X([o[0] + 45 * nv[0], o[1] + 45 * nv[1]]); line(a, b, COL.cut, 2); if (showLabels) label(b, `osteotomy ${f1(tp.resection)} mm (${tp.src} extent ${f1(tp.extent)} + margin ${f1(tp.margin)}, projected)`, COL.cut); }
       if (f.schematic && showLabels) label(X([0, -6]), 'schematic body (no Chunli sheet)', col);
     }
+    if ((isPfr(f) || isPhr(f)) && gm.tumOrigin) {   // r32/r33: the planned osteotomy (MRI/CT extent + margin below the GT tip), across this body's axis
+      const ph = isPhr(f), P = ph ? pfrPlan(t, S.side, 'gtub') : pfrPlan(t, slotSide(slot)), g0 = gm.tumOrigin;
+      if (Number.isFinite(P.sPlan)) { const a = X([g0[0] - 30, g0[1] + P.sPlan]), b = X([g0[0] + 30, g0[1] + P.sPlan]); line(a, b, COL.cut, 2); if (showLabels) label(b, `osteotomy ${f1(P.tp.resection)} mm below the ${ph ? 'tuberosity' : 'GT'} tip (${P.tp.src} extent ${f1(P.tp.extent)} + margin ${f1(P.tp.margin)}, projected)`, COL.cut); }
+    }
+    if (f.kind === 'humeral-body' && gm.headFace && t.head) {   // r33: the head, a hemisphere seated on its face
+      const hf = gm.headFace, r = +t.head / 2, n = hf.n, u = [-n[1], n[0]], hp = [];
+      for (let i = 0; i <= 24; i++) { const a = Math.PI * i / 24; hp.push(X([hf.c[0] + r * (Math.cos(a) * u[0] + Math.sin(a) * n[0]), hf.c[1] + r * (Math.cos(a) * u[1] + Math.sin(a) * n[1])])); }
+      const ho = () => { hp.forEach((p, i) => { const s = T(p); i ? g.lineTo(s.x, s.y) : g.moveTo(s.x, s.y); }); g.closePath(); };
+      g.beginPath(); ho(); g.fillStyle = fill; g.fill(); stroke(ho, col, act ? 2 : 1.5);
+    }
     const sr = f.stems ? stemRings(t, gm) : null;   // the stem extension at the component's junction (r20)
     if (sr) {
       const so = () => { for (const r of sr) { r.forEach((p, i) => { const s = T(X(p)); i ? g.lineTo(s.x, s.y) : g.moveTo(s.x, s.y); }); g.closePath(); } };
@@ -3285,13 +3573,16 @@ function overlay(g, T, lw, ui, clean = false) {   // clean: no construction line
   // landmarks
   for (const d of lmDefs()) {
     const L = S.lm[d.key]; if (!L) continue;
-    const bad = !!lmProblem(d.key);
-    if (ph && !bad) continue;   // (lmShown: a hidden landmark is neither drawn nor picked up)
+    const bad = !!lmProblem(d.key), gm = lmGeom(d.key);
+    // the femoral condylar and tibial plateau widths are measurements (Sami, 23 Oct): drawn with their length in mm at the middle,
+    // on the screen (a phone with Lines off too) and in the saved picture, as the rulers are
+    const wid = WIDTH_LM.includes(d.key) && d.type === 'line' && gm && k;
+    if (ph && !bad && !wid) continue;   // (lmShown: a hidden landmark is neither drawn nor picked up)
     if (lmShown(d, bad, clean === 'phone' ? 'phone' : !!clean)) for (const p of L) dot(p, bad ? '#ff4040' : COL.lm, clean ? 3 : 3.8);
-    const gm = lmGeom(d.key);
     if (d.type === 'circle' && gm) { ring(gm.c, gm.r, bad ? '#ff4040' : COL.lm, clean ? 1 : 1.3, clean ? [4, 4] : undefined); if (!clean) cross(gm.c, COL.lm, 5); }
-    if (d.type === 'line' && gm && (!clean || bad)) line(gm.a, gm.b, bad ? '#ff4040' : COL.lm, 1.4);
-    if (ui && showLabels && (d.type === 'point' || gm)) label(d.type === 'circle' && gm ? gm.c : L[0], d.short || d.label, bad ? '#ff4040' : COL.lm);
+    if (d.type === 'line' && gm && (!clean || bad || wid)) line(gm.a, gm.b, bad ? '#ff4040' : COL.lm, 1.4);
+    if (wid) label(G.mid(gm.a, gm.b), `${d.short} ${f1(G.dist(gm.a, gm.b) * k)} mm`, bad ? '#ff4040' : COL.lm);
+    else if (ui && showLabels && (d.type === 'point' || gm)) label(d.type === 'circle' && gm ? gm.c : L[0], d.short || d.label, bad ? '#ff4040' : COL.lm);
   }
   for (const r of S.rulers) { for (const p of r) dot(p, COL.ruler, 3); if (r.length === 2) { line(r[0], r[1], COL.ruler, 1.2); if (k) label(G.mid(r[0], r[1]), `${f1(G.dist(r[0], r[1]) * k)} mm`, COL.ruler); } }
   if (ui && S.arm && S.arm.pts) for (const p of S.arm.pts) dot(p, '#fff', 3.5);
@@ -3592,7 +3883,8 @@ function nextStep() {
     const was = S.cal && S.cal.method !== 'dicom' && !S.lm[st.lm.key] && Object.keys(S.lm).length === 0;
     armLm(st.lm.key);
     if (was) prompt(`Calibrated (${S.cal.method === 'ball' ? S.ballD + ' mm ball' : S.cal.lengthMm + ' mm line'}, ${S.cal.mmPerPx.toFixed(4)} mm per pixel). Next: ${st.lm.label}: ${st.lm.hint || 'click it'}. Esc to stop.`);
-  } else if (st.id === 'tpl' && S.set.autoTemplate && Object.keys(S.tpl).length === 0 && !hiddenHere()) autoTemplate();   // never over implants kept aside
+  } else if (st.id === 'tpl' && S.set.autoTemplate && Object.keys(S.tpl).length === 0 && !hiddenHere() && !(S.wf !== 'hip' && S.wf !== 'shoulder' && pvNeedsAsk())) autoTemplate();   // never over implants kept aside
+  else if (st.id === 'tpl' && S.wf !== 'hip' && S.wf !== 'shoulder' && Object.keys(S.tpl).length === 0) { prompt('Landmarks done: check the values on the Knee plan card, then press Auto template (or "Place with these values").'); panel(); draw(); }   // (Astra and Fable, 23 Oct: a deliberate press places a knee)
   else { prompt(st.id === 'tpl' ? st.text : ''); panel(); draw(); }
 }
 
@@ -3821,7 +4113,7 @@ function calStatus() {
 function ctxBox() {
   const m = S.img.meta || {}, [ct, cc] = calStatus();
   const id = identNow(), who = S.set.share ? `Sharing mode: no patient details${id.hospital ? ` · ${id.hospital}` : ''}` : [id.name, id.hospital, Number.isInteger(id.age) ? `${id.age} y` : '', recordNo() ? 'MRN ' + recordNo() : ''].filter(Boolean).join(' · ') || 'No patient details in this image';
-  const side = (S.kc ? `${cap(SIDE[S.kc.side])} knee case · ${KC_NAME[S.kc.active]} film` : S.wf === 'hip' ? (S.sideSet ? `${cap(SIDE[S.side])} hip${refOther() ? `, planned from the ${SIDE[other(S.side)]}` : ''}` : 'Surgery side not chosen') : `${cap(SIDE[S.side])} knee`) + (revCase() ? ` · ${CASE_WORD[ctype()].toLowerCase()}` : '');
+  const side = (S.kc ? `${cap(SIDE[S.kc.side])} knee case · ${KC_NAME[S.kc.active]} film` : S.wf === 'hip' ? (S.sideSet ? `${cap(SIDE[S.side])} hip${refOther() ? `, planned from the ${SIDE[other(S.side)]}` : ''}` : 'Surgery side not chosen') : S.wf === 'shoulder' ? `${cap(SIDE[S.side])} shoulder` : `${cap(SIDE[S.side])} knee`) + (revCase() ? ` · ${CASE_WORD[ctype()].toLowerCase()}` : '');
   return el(`<div class="ctx" id="ctx"><span class="who">${esc(who)}</span><span class="side">${esc(side)}</span><span class="cal ${cc}">${esc(ct)}${mm() && S.cal.method !== 'dicom' ? `, ${S.cal.mmPerPx.toFixed(4)} mm/px` : ''}</span></div>`);
 }
 // what each closed segment says
@@ -3955,6 +4247,7 @@ function panelBody(P_) {
   ws.addEventListener('click', e => { if (e.target.closest('.wsbtn')) showChecks(); });
   setHTML('warnsum', warnSummary(R));
   if (S.restoreNote) { const wbx = el(`<div class="warnbox keep">${esc(S.restoreNote)}</div>`); if (S.oldCupRule && S.wf === 'hip' && Object.keys(S.tpl).length) { const r_ = el('<div class="row"></div>'); r_.appendChild(btn(REPLAN_CUP, replanCupRule, 'primary', false, REPLAN_TIP)); wbx.appendChild(r_); } add(wbx); }   // keep: shown at the phone panel's smallest too
+  if (kneeCardOn()) add(kneeCard(R, cur));   // the knee plan card (Sami, 23 Oct): the nine lines, above the steps' segments
   const sum = segSummaries(R);
 
   // 1. calibration and orientation
@@ -4072,7 +4365,10 @@ function panelBody(P_) {
   s3.appendChild(ra0);
   if (S.mirror && S.wf === 'hip') s3.appendChild(el(`<p class="note">Mirrored: ${esc(S.mirror.note)}.</p>`));
   if (cur === 'save') { const cc = choiceCard('seg', recNow); if (cc) s3.appendChild(cc); }
-  if (S.wf === 'kneeAP' || S.wf === 'kneeLat') s3.insertBefore(kneeEntries(), s3.firstChild);   // the knee's plan values (a knee case's, or this film's own; each with its origin)
+  if (S.wf === 'kneeAP' || S.wf === 'kneeLat') {   // the knee's plan values with their origins, reset and reference (also on the knee plan card): folded
+    const pe = el('<details class="pvd"><summary>Plan values: origins, reset, tibial reference</summary></details>'); pe.open = !!S.segHand.pvd;
+    pe.querySelector('summary').addEventListener('click', () => { S.segHand.pvd = !pe.open; }); pe.appendChild(kneeEntries()); s3.insertBefore(pe, s3.firstChild);
+  }
   if (revCase() && S.wf === 'hip') s3.insertBefore(revCard(), s3.firstChild);   // revision and conversion: fixation zone, old tip, holes, osteotomy, cup target
   if (revCase() && S.wf === 'kneeAP') s3.insertBefore(jlCard(), s3.firstChild);   // the revision joint line's target and its evidence
   s3.appendChild(settingsBox());
@@ -4088,7 +4384,11 @@ function panelBody(P_) {
   const s5 = seg('save', cur, ...sum.save);
   const rc = recommendation(st); if (rc) s5.appendChild(rc);
   if (STANDALONE) s5.appendChild(identCard());   // the patient: hospital, full name, age, record number (Sami, 15 Oct)
-  s5.appendChild(el('<h3>Measurements</h3>')); s5.appendChild(el('<div id="res"></div>'));
+  s5.appendChild(el('<h3>Measurements</h3>'));
+  if (kneeCardOn()) {   // a knee film: the full results under Details (the knee plan card above has the plan's lines)
+    const dd = el('<details class="resd" id="resd"><summary>Details: alignment, calibration, coverage, sources</summary><div id="res"></div></details>');
+    dd.open = !!S.segHand.resd; dd.querySelector('summary').addEventListener('click', () => { S.segHand.resd = !dd.open; }); s5.appendChild(dd);
+  } else s5.appendChild(el('<div id="res"></div>'));
   const wr = el(`<div class="wl"><label>Brightness <input id="wlB" type="range" min="0" max="100" step="1"></label><label>Contrast <input id="wlC" type="range" min="0" max="100" step="1"></label></div>`);
   s5.appendChild(wr);
   const fromSl = () => { const w = wlFromSliders(+wr.querySelector('#wlB').value, +wr.querySelector('#wlC').value); setWL(w.c, w.w); };
@@ -4354,6 +4654,7 @@ let REC = { key: null, val: null };
 function recommendStem() {
   if (S.wf !== 'hip' || !mm() || !hasKind('stem') || revCase()) return null;   // a conversion or revision: no family suggestion (amendment 3)
   const sd = refOther() ? other(S.side) : S.side, cup = S.tpl['cup' + sd], stem = S.tpl['stem' + sd];
+  if (stem && isPfr(S.fam[stem.fam])) return null;   // r32: no family suggestion over a tumour body
   const key = JSON.stringify([S.lm, mm(), S.side, S.scope, S.ref, PLAN_KEYS.map(k => S.set[k]), S.set.halfSizes, S.choice, cup ? [cup.fam, cup.size, cup.x, cup.y, cup.angle, cup.on] : null, stem ? [stem.fam, stem.headKind, stem.head] : null]);
   if (REC.key === key) return REC.val;
   let val = null;
@@ -4400,7 +4701,7 @@ function replanCupRule() { S.oldCupRule = false; S.restoreNote = S.restoreNote.r
 function useRecommended() { S.choice = {}; autoTemplate({ fresh: true, replan: true }); }
 function choiceCard(where, rec) {
   if (S.wf !== 'hip' || !mm()) return null;
-  const sd = refOther() ? other(S.side) : S.side, cups = famsFor('cup'), stems = famsFor('stem');
+  const sd = refOther() ? other(S.side) : S.side, cups = famsFor('cup'), stems = famsFor('stem').filter(f => !isPfr(f));   // r32: a PFR is chosen on the stem itself, not here
   if (!cups.length && !stems.length && !PENDING.length) return null;
   const cupT = S.tpl['cup' + sd], stemT = S.tpl['stem' + sd], placed = !!(cupT || stemT);
   const box = el(`<div class="choice" id="choice-${where}"></div>`);
@@ -4543,6 +4844,60 @@ function templateBox(slot) {
   }
   if (f.kind === 'tka-tibia') { const th = el('<select></select>'); if (f.thicknessMeaning) th.title = f.thicknessMeaning; for (const v of f.thicknesses) th.add(new Option(f.seatAboveCutMm ? `${v} mm insert` : f.thicknessDrawnMm ? `${v} (sheet number)` : `${v} mm total (tray + insert)`, v)); th.value = t.thick; th.onchange = e => { t.thick = +e.target.value; save(); panel(); draw(); }; rs.appendChild(th); }
   box.appendChild(rs); if (headRow) box.appendChild(headRow);
+  if (f.kind === 'humeral-body' && f.humHeads) {   // r33: the head size (Chunli's standard heads; hemispherical)
+    const hr = el('<div class="row"></div>'), hs = el('<select title="Humeral head"></select>');
+    for (const q of f.humHeads) hs.add(new Option(`${q.d} mm head (height ${q.h})`, String(q.d)));
+    hs.value = t.head || ''; hs.onchange = e => { t.head = e.target.value; t.userHead = true; save(); panel(); draw(); };
+    hr.appendChild(hs); box.appendChild(hr);
+  }
+  if (isPhr(f)) {   // r33: the proximal humeral replacement's resection from the tuberosity tip; options within 5 mm, none chosen
+    const u = t.tum || (t.tum = { src: '', extent: null, margin: null }), tr = el('<div class="row"></div>');
+    const sx = el('<select title="Where the tumour extent comes from"><option value="">Extent from: choose</option><option value="MRI">MRI</option><option value="CT">CT</option></select>');
+    sx.value = TUM_SRC[u.src] ? u.src : '';
+    const num = (key, ph) => { const i = el(`<input type="number" step="1" min="0" placeholder="${ph}" title="${ph}" aria-label="${ph}" style="width:13em">`); if (Number.isFinite(u[key])) i.value = u[key]; i.onchange = e => { const v = e.target.value === '' ? null : +e.target.value; u[key] = Number.isFinite(v) ? v : null; save(); panel(); draw(); }; return i; };
+    sx.onchange = e => { u.src = e.target.value; save(); panel(); draw(); };
+    tr.append(sx, num('extent', 'extent below the tuberosity tip, mm'), num('margin', 'margin, mm')); box.appendChild(tr);
+    const P = pfrPlan(t, S.side, 'gtub');
+    if (!P.tp.ok) box.appendChild(el(`<p class="note warn">Resection not planned: ${esc(P.tp.why)}.</p>`));
+    else if (!P.gt) box.appendChild(el('<p class="note warn">Mark the tip of the greater tuberosity (landmark list, 2 · Landmarks): the resection is measured from it.</p>'));
+    else if (Number.isFinite(P.sPlan)) {
+      const opts = pfrOptions(f, P.sPlan);
+      box.appendChild(el(`<p class="note">Resection ${f1(P.tp.resection)} mm below the tip of the greater tuberosity (${esc(P.tp.src)} extent ${f1(P.tp.extent)} + your margin ${f1(P.tp.margin)}). On this film the tip lies ${f1(Math.abs(P.sGT))} mm ${P.sGT >= 0 ? 'below' : 'above'} this implant's head centre level, so the osteotomy is ${fmm(P.sPlan)} mm below that level. Stack = upper end + gap + extension + gap + stem collar. Within 5 mm${opts.length ? ', closest first; none is chosen for you' : ': none'}:</p>`));
+      const ob = el('<div class="row" style="flex-wrap:wrap"></div>');
+      for (const o of opts) { const d = o.tot - P.sPlan, on = o.z.size === t.size && tumCollar(t) === o.c; ob.appendChild(btn(`${tumParts(o.z, o.c)} = ${fmm(o.tot)} mm (${d >= 0 ? '+' : ''}${fmm(d)})`, () => {
+        setSize(slot, o.z.size); t.userSize = true; t.tum.c = o.c; const st = stemOf(t); if (t.stem && (!st || st.s.collarMm !== o.c)) delete t.stem; save(); panel(); draw(); }, on ? 'primary' : '')); }
+      box.appendChild(ob);
+    }
+    const z0 = sizeOf(t); if (z0) box.appendChild(el(`<p class="note">${esc(pfrGapNote(z0).replace("the knee's Ø24 tapers, assumed for this body", "the knee's Ø24 tapers, assumed for this Ø22 system"))}</p>`));
+    const as = el(`<details class="note warn"><summary>Assumed until Chunli confirms (${(f.assumptions || []).length})</summary></details>`), ul = document.createElement('ul');
+    for (const a of f.assumptions || []) { const li = document.createElement('li'); li.textContent = a; ul.appendChild(li); }
+    as.appendChild(ul); box.appendChild(as);
+  }
+  if (isPfr(f)) {   // r32: the proximal femoral replacement's resection from the GT tip; options within 5 mm, none chosen
+    const u = t.tum || (t.tum = { src: '', extent: null, margin: null }), tr = el('<div class="row"></div>');
+    const sx = el('<select title="Where the tumour extent comes from"><option value="">Extent from: choose</option><option value="MRI">MRI</option><option value="CT">CT</option></select>');
+    sx.value = TUM_SRC[u.src] ? u.src : '';
+    const num = (key, ph) => { const i = el(`<input type="number" step="1" min="0" placeholder="${ph}" title="${ph}" aria-label="${ph}" style="width:11em">`); if (Number.isFinite(u[key])) i.value = u[key]; i.onchange = e => { const v = e.target.value === '' ? null : +e.target.value; u[key] = Number.isFinite(v) ? v : null; save(); panel(); draw(); }; return i; };
+    sx.onchange = e => { u.src = e.target.value; save(); panel(); draw(); };
+    tr.append(sx, num('extent', 'extent below the GT tip, mm'), num('margin', 'margin, mm')); box.appendChild(tr);
+    const P = pfrPlan(t, side);
+    if (!P.tp.ok) box.appendChild(el(`<p class="note warn">Resection not planned: ${esc(P.tp.why)}.</p>`));
+    else if (!P.gt) box.appendChild(el(`<p class="note warn">Mark the tip of the ${SIDE[side]} greater trochanter (landmark list, 2 · Landmarks): the resection is measured from it.</p>`));
+    else if (Number.isFinite(P.sPlan)) {
+      const opts = pfrOptions(f, P.sPlan);
+      box.appendChild(el(`<p class="note">Resection ${f1(P.tp.resection)} mm below the tip of the greater trochanter (${esc(P.tp.src)} extent ${f1(P.tp.extent)} + your margin ${f1(P.tp.margin)}). On this film the tip lies ${f1(Math.abs(P.sGT))} mm ${P.sGT >= 0 ? 'below' : 'above'} this implant's ${esc(pfrLevelTxt(t))}, so the osteotomy is ${fmm(P.sPlan)} mm below that neck-0 level. Stack = body + gap + extension + gap + stem collar. Within 5 mm${opts.length ? ', closest first; none is chosen for you' : ': none'}:</p>`));
+      const ob = el('<div class="row" style="flex-wrap:wrap"></div>');
+      for (const o of opts) { const d = o.tot - P.sPlan, on = o.z.size === t.size && tumCollar(t) === o.c; ob.appendChild(btn(`${tumParts(o.z, o.c)} = ${fmm(o.tot)} mm (${d >= 0 ? '+' : ''}${fmm(d)})${o.z.trialSet === false ? ' *' : ''}`, () => {
+        setSize(slot, o.z.size); t.userSize = true; t.tum.c = o.c; const st = stemOf(t); if (t.stem && (!st || st.s.collarMm !== o.c)) delete t.stem; save(); panel(); draw(); }, on ? 'primary' : '')); }
+      box.appendChild(ob);
+      if (opts.some(o => o.z.trialSet === false)) box.appendChild(el('<p class="note">* extension length in Chunli\'s code list but not in the trial set: check it is available.</p>'));
+    }
+    const z0 = sizeOf(t); if (z0) box.appendChild(el(`<p class="note">${esc(pfrGapNote(z0))}</p>`));
+    const as = el(`<details class="note warn"><summary>Assumed until Chunli confirms (${(f.assumptions || []).length})</summary></details>`), ul = document.createElement('ul');
+    for (const a of f.assumptions || []) { const li = document.createElement('li'); li.textContent = a; ul.appendChild(li); }
+    as.appendChild(ul); box.appendChild(as);
+    box.appendChild(el('<p class="note">A bipolar head needs no cup: the head centre goes on the native head centre. Choose the bipolar shell on the resected head.</p>'));
+  }
   if (isTumourBody(f)) {   // tumour resection (r22): MRI/CT extent and the surgeon's margin; options within 5 mm, none chosen
     const u = t.tum || (t.tum = { src: '', extent: null, margin: null }), tr = el('<div class="row"></div>');
     const sx = el('<select title="Where the tumour extent comes from"><option value="">Extent from: choose</option><option value="MRI">MRI</option><option value="CT">CT</option></select>');
@@ -4569,7 +4924,7 @@ function templateBox(slot) {
   if (f.stems) {   // stem extension (r20): only the sizes the maker's sheet draws for this component size
     const z = sizeOf(t), sf = S.fam[f.stems], sr = el('<div class="row"></div>'), sx = el('<select title="Stem extension"></select>');
     sx.add(new Option('No stem extension', ''));
-    const cWant = isTumourBody(f) && t.tum && Number.isFinite(t.tum.c) ? t.tum.c : null;   // a tumour body: the stems with the collar picked
+    const cWant = (isTumourBody(f) || isPfr(f) || isPhr(f)) && t.tum && Number.isFinite(t.tum.c) ? t.tum.c : null;   // a tumour body: the stems with the collar picked
     for (const q of sf ? sf.sizes.filter(q => (z.stemSizes || []).includes(q.size) && (cWant === null || q.collarMm === cWant)) : []) sx.add(new Option(`Stem ${q.label || q.size}`, q.size));
     if (t.stem && ![...sx.options].some(o => o.value === t.stem.size)) { const o = new Option(`Stem ${t.stem.size} (not available)`, t.stem.size); o.disabled = true; sx.add(o); }
     sx.value = t.stem ? t.stem.size : '';
@@ -4594,6 +4949,7 @@ function templateBox(slot) {
     const c = lmGeom('canal' + side), why = !c ? `mark the ${SIDE[side]} femoral canal first` : lmProblem('canal' + side) ? 'the canal line runs across the femur: place it again' : '';
     ra.appendChild(btn('Align to canal', () => { if (guardedStem() && (exOpen().length || !canalReviewed(side))) return prompt(`Not aligned: ${exOpen().length ? 'confirm or dismiss the possible hardware first' : `the ${SIDE[side]} canal line is ${canalFlag(side)}`}.`); const H0 = headAt(t); if (alignStem(t, side)) setHeadLevel(t, side, G.dot(H0, vertical())); save(); panel(); draw(); }, '', !!why, why || 'Turn the stem onto the canal line and centre it, head height kept'));
     if (refOther() && side === S.side) ra.appendChild(btn(`Copy the ${SIDE[other(side)]} stem`, () => mirrorOther(), '', !S.tpl['stem' + other(side)], `Same stem, head and neck as the ${SIDE[other(side)]} plan, neck cut at the same height above the lesser trochanter (this film is not used for sizing)`));
+    else if (isPfr(f)) ra.appendChild(btn('Place on the head centre', () => { pfrPlace(slot); save(); panel(); draw(); }, '', false, 'The head centre on the cup centre (or the native head), the axis along the canal when it is marked; the length is chosen from the resection options'));   // r32
     else ra.appendChild(btn('Auto size and place', () => { guardStemOp(side, () => { t.userSize = false; matchHeadToCup(side); planStem(side, { keepFam: !!t.userFam }, stemTarget(side)); }); save(); panel(); draw(); if (guardedStem() && S.notes['fit' + side] && S.notes['fit' + side].none) prompt(`The stem is not changed: ${S.notes['fit' + side].why}.`); }, '', !c || !!why, S.set.stemRule === 'offset' ? 'Size by canal fill and restore the femoral offset with the neck' : 'Size by canal fill, the head centre on the cup centre'));
   } else ra.appendChild(btn('Auto place', () => { autoPlace(slot); save(); panel(); draw(); }));
   if (!(viewOf() === 'LAT' && f.kind.startsWith('tka'))) ra.appendChild(btn('Mirror outline', () => { t.flip = !t.flip; t.userFlip = true; save(); draw(); }, '', false, 'Only for an unusual film: the outline normally faces the right way by itself'));
@@ -4601,7 +4957,8 @@ function templateBox(slot) {
   ra.appendChild(btn('Remove', () => { delete S.tpl[slot]; if (S.active === slot) S.active = null; save(); panel(); draw(); }));
   box.appendChild(ra);
   const sz = sizeOf(t);
-  if (f.kind === 'stem' && S.notes['fit' + side] && S.notes['fit' + side].none) box.appendChild(el(`<div class="warnbox">Size not chosen automatically: ${esc(S.notes['fit' + side].why)}. Choose it by eye against the canal.</div>`));
+  if (isPfr(f)) box.appendChild(el('<p class="note">Not sized by canal fill: a tumour body. Check the stem against the canal with the ruler.</p>'));   // r32
+  else if (f.kind === 'stem' && S.notes['fit' + side] && S.notes['fit' + side].none) box.appendChild(el(`<div class="warnbox">Size not chosen automatically: ${esc(S.notes['fit' + side].why)}. Choose it by eye against the canal.</div>`));
   else if (f.kind === 'stem' && S.notes['fit' + side] && S.notes['fit' + side].copied) box.appendChild(el(`<p class="note">Copied from the ${SIDE[other(side)]} plan; this film is not used for sizing.</p>`));
   else if (f.kind === 'stem' && canalOf(side)) {   // the fit as the stem sits now, never the numbers from when it was sized (Astra, 11 Oct)
     const fn = S.notes['fit' + side], tr = canalTraceFor(side), cf = tr ? stemFit(t, tr) : null, ev = cf && fitIsEvidence(cf, tr, stemLen(t, tr));
@@ -5233,19 +5590,19 @@ function kneeEntries() {
     d.appendChild(el(`<p class="note stdv${pv.o === 'surgeon' || pv.rv ? '' : ' warn'}" data-pv="${key}">${esc(pvLab(pv))}</p>`));
     const r = el('<div class="row"></div>');
     if (pv.o !== 'surgeon' && !pv.rv) r.appendChild(btn('Mark reviewed', () => { pvReview(key); save(); panel(); draw(); }, '', false, `You have looked at ${pvName(key).toLowerCase()} ${f1(pv.v)}${pvUnit(key)} and keep it unchanged (its origin stays as it is)`));
-    if (pv.raw !== null) r.appendChild(btn('Reset', () => { pvSet(key, null); save(); panel(); draw(); prompt(`${pvName(key)}: back to the assumed ${f1(pvGet(key).v)}${pvUnit(key)}; Auto template asks the plan values again.`); }, '', false, 'Back to the assumed value (said as such)'));
+    if (pv.raw !== null) r.appendChild(btn('Reset', () => { pvSet(key, null); save(); panel(); draw(); prompt(`${pvName(key)}: back to the assumed ${f1(pvGet(key).v)}${pvUnit(key)}; press Auto template to place again.`); }, '', false, 'Back to the assumed value (said as such)'));
     if (r.children.length) d.appendChild(r);
   };
   if (kc || ap) row('femDistal', 'from the more distal condyle');
   { const tr = el(`<label class="note">Tibial resection measured from <select aria-label="Tibial resection reference"><option value="less">the reference plateau (the higher one, chosen by the page): ${XN_KNEE.tibialStd.less} mm</option><option value="medial">the lowest point of the medial plateau${pvXn() ? ' (XN manual, non-severe medial chondrosis)' : ''}: ${XN_KNEE.tibialStd.medial} mm</option></select></label>`), sel = tr.querySelector('select');
     if (v.tibRef === 'worn') sel.add(new Option('the lower plateau (saved before 16 Oct)', 'worn'));
-    sel.value = v.tibRef; sel.onchange = () => { pvSetTibRef(sel.value); save(); panel(); draw(); prompt(`Tibial reference changed: the tibial resection is now the assumed ${f1(pvGet('tibial').v)} mm for it (enter your own if different); Auto template asks the plan values again.`); }; d.appendChild(tr); }
+    sel.value = v.tibRef; sel.onchange = () => { pvSetTibRef(sel.value); save(); panel(); draw(); prompt(`Tibial reference changed: the tibial resection is now the assumed ${f1(pvGet('tibial').v)} mm for it (enter your own if different); press Auto template to place again.`); }; d.appendChild(tr); }
   row('tibial', `below the ${TIB_SHORT[v.tibRef]}`);
   d.appendChild(el(`<p class="note">Tibial reference: ${esc(tibRefText())}.</p>`));
   if (kc || lat) { row('slope', pvXn() ? 'on the extramedullary guide' : ''); d.appendChild(el(`<p class="note">${pvXn() ? 'The slope is set by tilting the extramedullary guide (XN manual p. 10-11; no angled blocks). ' : ''}${XN_KNEE.slopeMin}–${XN_KNEE.slopeMax}° is an entry bound, not a manufacturer-approved or safe range.</p>`)); }
   if (kc || ap) row('vca', 'to the femoral shaft axis');
   row('rot', 'to the posterior condylar axis');
-  if (PV_KEYS.some(k => v.pv[k].raw !== null) || pvAsked()) { const r = el('<div class="row"></div>'); r.appendChild(btn('Back to the assumed values', () => { pvResetAll(); save(); panel(); draw(); prompt('Every plan value is back to its assumed value (said as such); Auto template asks them again.'); }, '', false, 'Forget the values entered here and their reviews; the assumed values are used (and said) again')); d.appendChild(r); }
+  if (PV_KEYS.some(k => v.pv[k].raw !== null) || pvAsked()) { const r = el('<div class="row"></div>'); r.appendChild(btn('Back to the assumed values', () => { pvResetAll(); save(); panel(); draw(); prompt('Every plan value is back to its assumed value (said as such); press Auto template to place again.'); }, '', false, 'Forget the values entered here and their reviews; the assumed values are used (and said) again')); d.appendChild(r); }
   d.appendChild(el(`<p class="note">The radiographic resection is shown, not a balanced gap; the insert is chosen at surgery${xn ? ` (PS inserts ${XN_KNEE.insertHeights.join(', ')} mm, manual p. ${XN_KNEE.insertPage})` : ''}.${xn ? ' The manual states no built-in slope of the tray or the insert, so the tray is drawn level on the cut.' : ''}</p>`));
   return d;
 }
@@ -5345,12 +5702,13 @@ function implantsNow() {
     const f = S.fam[t.fam];
     out.push({ slot: sl, label: clip(f ? f.label : t.fam, 120), size: clip(t.size, 32) });
     if (f && f.kind === 'stem' && t.head) { let nk = ''; try { nk = neckLabel(t, t.neck); } catch (e) { nk = String(t.neck || ''); } out.push({ slot: 'head' + sl.slice(-1), label: clip(`${(S.lib.heads[t.headKind] || {}).label || 'Femoral'} head, neck ${nk}`, 120), size: clip(t.head, 32) }); }
+    if (f && f.kind === 'humeral-body' && t.head) out.push({ slot: 'humHead', label: 'Humeral head (Chunli standard, hemispherical; fit not confirmed)', size: clip(`${t.head} mm`, 32) });   // r33
     if (f && f.kind === 'tka-tibia' && t.thick) out.push({ slot: 'insert', label: clip(f.seatAboveCutMm ? 'Insert thickness' : f.thicknessDrawnMm ? `Insert number (sheet); drawn ${f1(tibJl(t))} mm tibial cut to joint line, composite not confirmed` : 'Tray and insert, total thickness', 120), size: f.thicknessDrawnMm ? String(t.thick) : `${t.thick} mm` });
     if (f && f.stems && t.stem && !extWhy(t)) out.push({ slot: sl + 'Stem', label: clip(`${(S.fam[f.stems] || {}).label || 'Stem extension'}`, 120), size: clip(t.stem.size, 32) });
   }
   return out.slice(0, 24);
 }
-const metaNow = () => ({ patient: patientNow(), side: S.kc ? S.kc.side : S.side, procedure: S.wf === 'hip' && !S.kc ? 'hip' : 'knee', implants: S.kc ? kcImplants() : implantsNow() });
+const metaNow = () => ({ patient: patientNow(), side: S.kc ? S.kc.side : S.side, procedure: S.kc ? 'knee' : S.wf === 'hip' ? 'hip' : S.wf === 'shoulder' ? 'shoulder' : 'knee', implants: S.kc ? kcImplants() : implantsNow() });
 // a knee case's implants for the list: its one femoral and one tibial component (no insert: chosen at surgery)
 function kcImplants() {
   const out = [];
@@ -5373,7 +5731,7 @@ function projectNow0() {
   const m = S.img.meta || {}, o = S.orig, share = !!S.set.share, study = String(m.StudyInstanceUID || '');
   const state = fullState(); state.pendingSend = null;   // a send to PACS that got no answer belongs to this browser
   return { format: PJ.FORMAT, v: 1, savedAt: new Date().toISOString(), savedBy: null, app: 'Addis Ortho X-ray templating, round 6 (13 Oct 2026)' + (STANDALONE ? ', t.addisortho.com' : ''),
-    libraryId: libIdNow(), patient: { ...patientNow(), side: S.side, procedure: S.wf === 'hip' ? 'hip' : 'knee', ...(!share && /^[0-9.]{1,64}$/.test(study) ? { studyUID: study } : {}) },
+    libraryId: libIdNow(), patient: { ...patientNow(), side: S.side, procedure: S.wf === 'hip' ? 'hip' : S.wf === 'shoulder' ? 'shoulder' : 'knee', ...(!share && /^[0-9.]{1,64}$/.test(study) ? { studyUID: study } : {}) },
     image: { fileName: share ? 'image.' + PJ.MIME_EXT[o.mime] : clip(String(o.name || '').split(/[\\/]/).pop(), 120) || 'image.' + PJ.MIME_EXT[o.mime], mime: o.mime, sha256: o.sha256, size: o.bytes.length, width: S.img.cols, height: S.img.rows },
     state };
 }
@@ -5444,6 +5802,11 @@ function exportItems() {
   const nA = exActive().length, nU = exOpen().length;
   if (nA) items.push(['row', `Confirmed exclusions: ${nA} existing implant region${nA > 1 ? 's' : ''} (${['hardware', 'cement'].map(c => [c, exActive().filter(r => r.cls === c).length]).filter(x => x[1]).map(([c, n]) => `${n} ${c === 'cement' ? 'cement' : 'implant'}`).join(', ')}), dimmed with a dashed outline: excluded from the automatic measurements.`]);
   if (nU) items.push(['row', `Unresolved: ${nU} possible hardware region${nU > 1 ? 's' : ''} not confirmed (outlined in amber): not excluded, and the automatic steps that read the film around ${nU > 1 ? 'them' : 'it'} did not run.`, 'warn']);
+  if (kneeCardOn()) {   // the knee plan card first, then the full results from the same calculation (Astra and Fable, 23 Oct)
+    const C = kneeCardRows(R); items.push(['head', C.head]);
+    for (const r of C.rows) items.push(['row', `${r.label}: ${r.val} [${r.tag[0]}]; ${r.note}`, r.cls]);
+    items.push(['head', 'Details: alignment, calibration, coverage, sources']);
+  }
   for (const r of R) if (!(r.length > 1 && (r[0] === 'Existing implants' || r[0] === 'Possible hardware not confirmed'))) items.push(r.length === 1 ? ['head', r[0]] : ['row', `${r[0]}: ${r[1]}`, r[2]]);
   for (const u of unconfirmed(Object.values(S.tpl).filter(t => t.on))) items.push(['row', `${u}.`, 'warn']);   // every outline drawn on it
   const nS = S.showOriginal ? 0 : S.clean.strokes.length;
@@ -5533,7 +5896,7 @@ function preview(c, ok) {
 async function planDicom() {
   const c = exportCanvas(2400), m = S.img.meta || {};
   const bl = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.92)), jpeg = new Uint8Array(await bl.arrayBuffer());
-  return secondaryCapture({ jpeg, width: c.width, height: c.height, meta: m, seriesDescription: `Templating plan ${SIDE[S.side]} ${S.wf === 'hip' ? 'hip' : 'knee'} (draft)`,
+  return secondaryCapture({ jpeg, width: c.width, height: c.height, meta: m, seriesDescription: `Templating plan ${SIDE[S.side]} ${S.wf === 'hip' ? 'hip' : S.wf === 'shoulder' ? 'shoulder' : 'knee'} (draft)`,
     comments: `Addis Ortho X-ray templating (trial). ${WF[S.wf].label}, surgery side ${SIDE[S.side]}. Draft for the surgeon; not true size.${S.clean.strokes.length && !S.showOriginal ? ` ${S.clean.strokes.length} area(s) of the film filled for display (not anatomy), outlined on the picture.` : ''}` });
 }
 async function exportDICOM() { if (S.set.share) return; if (S.filling) return prompt('Wait a moment: a stroke is still being filled.'); const nr = notReady(); if (nr) return prompt(nr); const rf = refused(); if (rf.length) return prompt(`Fix the landmarks marked red first: ${rf.join('; ')}.`); const k0 = privacyKey(), { bytes } = await planDicom(); if (S.set.share || privacyChanged(k0, 'DICOM')) { if (S.set.share) prompt('DICOM not saved: sharing mode is on (a DICOM carries the patient\'s details).'); return; } download(new Blob([bytes], { type: 'application/dicom' }), baseName() + '.dcm'); }
@@ -5586,7 +5949,7 @@ async function sendToPACS() {
     if ((r.ok && js.ok) || (r.status === 409 && js.sop === pend.sop)) {
       S.sent = { sop: pend.sop, series: js.series || pend.series, at: new Date(), warning: js.result && /warning/.test(js.result) }; S.pending = null; S.sendError = null;
       save(true);   // kept with the plan at once: a reload still knows it was sent (Sol, 11 Oct)
-      prompt(`${V ? 'Saved in the viewer' : 'Sent to PACS'}${S.sent.warning ? ` (${V ? 'the viewer' : 'the archive'} stored it with a warning)` : ''}: the plan is in this X-ray's study as "Templating plan ${SIDE[S.side]} ${S.wf === 'hip' ? 'hip' : 'knee'} (draft)".${V ? ' From the viewer it can be sent to PACS.' : ''}`);
+      prompt(`${V ? 'Saved in the viewer' : 'Sent to PACS'}${S.sent.warning ? ` (${V ? 'the viewer' : 'the archive'} stored it with a warning)` : ''}: the plan is in this X-ray's study as "Templating plan ${SIDE[S.side]} ${S.wf === 'hip' ? 'hip' : S.wf === 'shoulder' ? 'shoulder' : 'knee'} (draft)".${V ? ' From the viewer it can be sent to PACS.' : ''}`);
     } else {
       S.sendError = js.error || (V ? answered(r.status) : `HTTP ${r.status}`); if (r.status < 500) S.pending = null; save(true);   // refused for a reason: a new picture next time
       prompt(`${NOT}: ${S.sendError}.`);
@@ -5607,7 +5970,7 @@ window.aocTemplating = { S, toS, toI, results, plan, lmGeom, goBack, backTarget,
   // the patient's identity now
   kcLm: (role, key) => { const g = S.kc ? kcGeo(role) : null; return g ? g.g(key) : null; }, rev: () => revision(), pictureLines: () => exportItems().map(i => i[1]),
   // 16 Oct (28p): the plan values with their origin and review, whether the question would be asked, the question open
-  planValues: () => ({ ...Object.fromEntries(PV_KEYS.map(k => { const p = pvGet(k); return [k, { v: p.v, o: p.o, rv: p.rv, raw: p.raw, label: pvLab(p) }]; })), tibRef: pvTibRef(), asked: pvAsked(), needsAsk: pvNeedsAsk() }), askOpen: () => !!document.querySelector('.pvq'), askPV: () => { askPlanValues(); return true; }, ident: () => ({ ...identNow(), patient: patientNow() }), kneeVals: () => kneeVals(),
+  planValues: () => ({ ...Object.fromEntries(PV_KEYS.map(k => { const p = pvGet(k); return [k, { v: p.v, o: p.o, rv: p.rv, raw: p.raw, label: pvLab(p) }]; })), tibRef: pvTibRef(), asked: pvAsked(), needsAsk: pvNeedsAsk() }), card: () => (kneeCardOn() ? kneeCardRows(results()) : null), ident: () => ({ ...identNow(), patient: patientNow() }), kneeVals: () => kneeVals(),
   // r20 (28r): a knee component's stem extension as drawn (image px), the port in image px, and why it is not drawn
   kneeStem: slot => { const t = S.tpl[slot]; if (!t) return null; const gm = geomOf(t), r = stemRings(t, gm), X = xf(t); return { why: extWhy(t), px: r ? r.map(q => q.map(X)) : null, port: gm && gm.stemPort ? X(gm.stemPort.p) : null, dir: gm && gm.stemPort ? G.sub(X([gm.stemPort.p[0] + gm.stemPort.dir[0], gm.stemPort.p[1] + gm.stemPort.dir[1]]), X(gm.stemPort.p)) : null, jl: t.thick !== undefined ? tibJl(t) : null }; },
   touch: () => { save(); panel(); draw(); }, redo: () => redo(), undo: () => undo(), notReady: () => notReady(),

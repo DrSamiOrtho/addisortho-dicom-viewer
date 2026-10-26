@@ -187,7 +187,7 @@ export function turnToward(u, deg, lat) {
 const along = (ln, towards, fallback) => { let u = G.unit(G.sub(ln.a, ln.b)); const ref = towards ? G.sub(towards, G.mid(ln.a, ln.b)) : fallback; if (ref && G.dot(u, ref) < 0) u = G.mul(u, -1); return u; };
 // Long-leg alignment from its landmarks (each optional): hip {c} (femoral head centre), knee {p} (the knee centre: the
 // midpoint between the tibial spines at the top of the intercondylar notch, used for both mechanical axes), ankle {p}
-// (the middle of the talar dome), cm/cl (lowest points of the medial and lateral femoral condyles: the distal femoral
+// (the centre of the talus; Sami, 23 Oct), cm/cl (lowest points of the medial and lateral femoral condyles: the distal femoral
 // joint line), pm/pl (the medial and lateral tibial plateaus: the proximal tibial joint line), fs/ts (the femoral and
 // tibial anatomic axes, two mid-shaft points each); lat: the limb's lateral direction on the film; up: towards the head.
 // Each result is null when its landmarks are missing:
@@ -376,3 +376,28 @@ export function skylineAngles(g, lat) {
 // tracking laterally, 3 degree if tracking well"
 XN_KNEE.rotOptions = [0, 3, 5]; XN_KNEE.rotStd = 5;   // the manual's usual 3°; Addis Ortho's standard 5° (Sami, 16 Oct)
 XN_KNEE.rotManual = 3; XN_KNEE.rotPage = 17; XN_KNEE.rotTrackPage = 8;
+
+// ---------- the patella: a suggestion for the knee plan card (Sami, 23 Oct 2026; DESIGN-2026-10-23-knee-plan-card.md) ----------
+// Fable's tightened rule, chosen by Sami: resurfacing is suggested for severe patellofemoral arthritis, or moderate with
+// lateral facet wear or a tilted or subluxed patella, when the patella's bone is at least 20 mm thick on the lateral (12 mm
+// left after an 8 mm button); patelloplasty otherwise. pf: the surgeon's own skyline assessment {grade, facet, tracking};
+// boneMm: the patella's thickness on the calibrated lateral (bone only), or null; xn: the XN knee (its manual cited). → {s: 'resurface' | 'patelloplasty' |
+// null, why: [reasons]}. A suggestion only: it never decides, and it is never written into the surgeon's decision.
+export const PATELLA_MIN_BONE = 20;
+export function patellaSuggest(pf, boneMm, xn = true) {
+  const p = pf || {}, why = [];
+  if (!p.grade) return { s: null, why: ['the patellofemoral arthritis grade is not recorded (skyline assessment)'] };
+  const mal = p.tracking === 'tilted' || p.tracking === 'subluxed';
+  why.push(`${p.grade === 'none' ? 'no' : p.grade} patellofemoral arthritis`);
+  if (p.facet === 'yes') why.push('lateral facet wear');
+  if (mal) why.push(p.tracking === 'tilted' ? 'patella tilted' : 'patella subluxed laterally');
+  const findings = p.grade === 'severe' || (p.grade === 'moderate' && (p.facet === 'yes' || mal));
+  const bone = Number.isFinite(boneMm) && boneMm > 0 ? boneMm : null;
+  if (!findings) {
+    if (mal) why.push(`check the tracking and the femoral rotation${xn ? ` (XN manual p. ${XN_KNEE.rotTrackPage}: 5° when the patella tracks laterally)` : ''}`);
+    return { s: 'patelloplasty', why };
+  }
+  if (bone === null) return { s: null, why: [...why, 'the findings favour resurfacing, but the patella\'s bone thickness is not measured (mark it on the calibrated lateral)'] };
+  if (bone < PATELLA_MIN_BONE) return { s: 'patelloplasty', why: [...why, `bone ${bone.toFixed(1)} mm thick, under ${PATELLA_MIN_BONE} mm: resurfacing would leave little bone`] };
+  return { s: 'resurface', why: [...why, `bone ${bone.toFixed(1)} mm thick (at least ${PATELLA_MIN_BONE} mm)`] };
+}

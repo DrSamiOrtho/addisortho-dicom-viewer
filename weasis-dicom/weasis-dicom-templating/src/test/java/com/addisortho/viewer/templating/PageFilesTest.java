@@ -129,9 +129,13 @@ class PageFilesTest {
     for (String id : new String[] {"chunli-160-150", "chunli-bb1-b", "chunli-cck-femur", "chunli-dfr-femur"}) {
       assertTrue(lib.contains("\"id\":\"" + id + "\""), id);
     }
+    // r33 (26 Oct 2026): the proximal femoral and proximal humeral replacements
+    for (String id : new String[] {"chunli-pfr", "chunli-phr"}) {
+      assertTrue(lib.contains("\"id\":\"" + id + "\""), id);
+    }
     for (String range : new String[] {"jnj-", "zb-", "ldk-"}) {
       assertTrue(!lib.contains("\"range\":\"" + range), range);
     }
-    assertEquals("r28", p.release());
+    assertEquals("r33", p.release());
   }
 }
