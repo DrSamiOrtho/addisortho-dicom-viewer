@@ -506,6 +506,13 @@
                   <outputDirectory>${tmp.bundle.dir}</outputDirectory>
                 </artifactItem>
                 <artifactItem>
+                  <!-- Addis Ortho long-leg stitching (Stitch button in the 2D viewer) -->
+                  <groupId>org.weasis.dicom</groupId>
+                  <artifactId>weasis-dicom-stitching</artifactId>
+                  <version>${app.version}</version>
+                  <outputDirectory>${tmp.bundle.dir}</outputDirectory>
+                </artifactItem>
+                <artifactItem>
                   <groupId>org.weasis.dicom</groupId>
                   <artifactId>weasis-dicom-qr</artifactId>
                   <version>${app.version}</version>

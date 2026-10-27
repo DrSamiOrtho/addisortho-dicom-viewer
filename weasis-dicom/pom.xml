@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Modified by Addis Ortho Trading PLC, 2026. -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -27,5 +28,6 @@
     <module>weasis-dicom-rt</module>
     <module>weasis-dicom-isowriter</module>
     <module>weasis-dicom-3d</module>
+    <module>weasis-dicom-stitching</module>
   </modules>
 </project>

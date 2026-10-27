@@ -38,12 +38,15 @@ Changes made by Addis Ortho Trading PLC (see the git history from tag v4.7.3):
 - weasis-i18n-dist vendored as weasis-distributions/vendor/maven-repo (weasis-parent/pom.xml,
   weasis-distributions/pom.xml); Spotless accepts the notice line below the licence header
   (weasis-parent/pom.xml).
+- Long-leg stitching (27 Oct 2026, draft): the new bundle weasis-dicom/weasis-dicom-stitching (the
+  Stitch button of the 2D viewer), listed in weasis-dicom/pom.xml, both base.json files and
+  weasis-distributions/pom.xml.
 
 Modified-file notices (Apache License 2.0, section 4(b)): every text file above that Addis Ortho
 Trading PLC changed carries the line "Modified by Addis Ortho Trading PLC, 2026." in its own
 comment syntax. These changed files cannot carry the line and are listed here instead:
 - JSON configuration (no comments): weasis-distributions/etc/config/base.json, dicomizer.json and
-  non-dicom-explorer.json.
+  non-dicom-explorer.json; weasis-launcher/conf/base.json.
 - Images and icons (binary): weasis-distributions/resources/images/about.png, about-round.png,
   dicomizer.png and logo-button.png; weasis-distributions/script/resources/linux/Weasis.png and
   Dicomizer.png; weasis-distributions/script/resources/macosx/Dicomizer.icns and

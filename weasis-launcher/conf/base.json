@@ -165,7 +165,7 @@
     },
     {
       "code": "felix.auto.start.110",
-      "value": "file:${maven.localRepository}/org/weasis/dicom/weasis-dicom-send/${app.version}/weasis-dicom-send-${app.version}.jar file:${maven.localRepository}/org/weasis/dicom/weasis-dicom-isowriter/${app.version}/weasis-dicom-isowriter-${app.version}.jar file:${maven.localRepository}/org/weasis/dicom/weasis-dicom-qr/${app.version}/weasis-dicom-qr-${app.version}.jar",
+      "value": "file:${maven.localRepository}/org/weasis/dicom/weasis-dicom-send/${app.version}/weasis-dicom-send-${app.version}.jar file:${maven.localRepository}/org/weasis/dicom/weasis-dicom-isowriter/${app.version}/weasis-dicom-isowriter-${app.version}.jar file:${maven.localRepository}/org/weasis/dicom/weasis-dicom-qr/${app.version}/weasis-dicom-qr-${app.version}.jar file:${maven.localRepository}/org/weasis/dicom/weasis-dicom-stitching/${app.version}/weasis-dicom-stitching-${app.version}.jar",
       "description": "DICOM send, Q/R and ISO writer",
       "type": "A",
       "category": "FELIX_INSTALL"
