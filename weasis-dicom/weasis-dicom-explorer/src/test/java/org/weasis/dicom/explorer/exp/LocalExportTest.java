@@ -45,4 +45,19 @@ class LocalExportTest {
     assertEquals(-1, dir.getName().indexOf('/'));
     assertEquals(-1, dir.getName().indexOf(':'));
   }
+
+  @Test
+  void putsTheFirstNameFirst() {
+    assertEquals("Abebe Kebede", LocalExport.fullName("Kebede^Abebe"));
+    assertEquals("Abebe Kebede Tesfaye", LocalExport.fullName("Tesfaye^Abebe^Kebede"));
+    assertEquals("Dr Abebe Kebede Jr", LocalExport.fullName("Kebede^Abebe^^Dr^Jr"));
+    assertEquals("Abebe Kebede", LocalExport.fullName("Kebede^Abebe=\u30a2\u30d9\u30d9"));
+  }
+
+  @Test
+  void keepsANameTypedAsOneText() {
+    assertEquals("ABEBE KEBEDE TESFAYE", LocalExport.fullName("ABEBE  KEBEDE TESFAYE "));
+    assertEquals("", LocalExport.fullName(null));
+    assertEquals("", LocalExport.fullName("^"));
+  }
 }

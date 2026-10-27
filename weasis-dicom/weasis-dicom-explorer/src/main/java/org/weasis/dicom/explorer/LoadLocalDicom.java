@@ -7,9 +7,11 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.*;
 import javax.swing.JOptionPane;
 import org.weasis.core.api.explorer.ObservableEvent;
@@ -54,15 +56,23 @@ public class LoadLocalDicom extends LoadDicom {
   @Override
   protected Boolean doInBackground() throws Exception {
     startLoadingEvent();
-    if (files.length > 0) {
+    File[] toLoad = filesToLoad();
+    if (toLoad.length > 0) {
       openingStrategy.prepareImport();
-      totalFiles = countFiles(files, true);
-      addSelectionAndNotify(files, true);
+      totalFiles = countFiles(toLoad, true);
+      addSelectionAndNotify(toLoad, true);
     }
     return true;
   }
 
-  /** Counts the files {@link #addSelectionAndNotify} will visit, so loading can show a percentage. */
+  /** The files to read, once the loading panel shows: a subclass may first copy them there. */
+  protected File[] filesToLoad() throws IOException {
+    return files;
+  }
+
+  /**
+   * Counts the files {@link #addSelectionAndNotify} will visit, so loading can show a percentage.
+   */
   private int countFiles(File[] file, boolean firstLevel) {
     int count = 0;
     if (file != null) {

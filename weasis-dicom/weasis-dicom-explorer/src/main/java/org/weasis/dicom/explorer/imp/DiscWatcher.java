@@ -29,7 +29,8 @@ import org.weasis.dicom.explorer.wado.LoadSeries;
 /**
  * Opens a CD or DVD as soon as it is inserted, as Horos does: every few seconds it looks for a
  * read-only volume with a DICOMDIR that was not there before and loads it, copying the images into
- * the local cache so the disc can be taken out. Discs already in the drive when the viewer starts
+ * the local cache so the disc can be taken out. A disc without a DICOMDIR is copied whole, leaving
+ * out the bundled viewer, and the copy is opened. Discs already in the drive when the viewer starts
  * are left alone ("Detect CD-ROM" in the import dialog still opens them). Switched off by the "Open
  * a CD/DVD as soon as it is inserted" box of the DICOMDIR import page.
  */
@@ -83,19 +84,15 @@ public final class DiscWatcher {
     try {
       Set<String> now = new HashSet<>();
       for (File root : DiscDrive.mountedRoots()) {
-        File dicomDir = DiscDrive.findReadOnlyDicomDir(root);
-        if (dicomDir == null) {
+        File dicomDir = DiscDrive.findDiscDicomDir(root);
+        if (dicomDir == null && !DiscDrive.isOnDisc(root.toPath())) {
           continue;
         }
-        String key = dicomDir.getPath() + '|' + dicomDir.length() + '|' + dicomDir.lastModified();
+        File marker = dicomDir == null ? root : dicomDir;
+        String key = marker.getPath() + '|' + marker.length() + '|' + marker.lastModified();
         now.add(key);
         if (open && !seen.contains(key) && isEnabled()) {
-          LOGGER.info("CD/DVD inserted, opening {}", dicomDir);
-          List<LoadSeries> loadSeries = DicomDirImport.loadDicomDir(dicomDir, dicomModel, true);
-          if (loadSeries != null && !loadSeries.isEmpty()) {
-            DicomModel.LOADING_EXECUTOR.execute(
-                new LoadDicomDir(loadSeries, dicomModel, OpeningViewer.ALL_PATIENTS));
-          }
+          openDisc(root, dicomDir, dicomModel);
         }
       }
       seen.clear();
@@ -103,5 +100,19 @@ public final class DiscWatcher {
     } catch (Exception e) {
       LOGGER.error("Cannot look for a CD/DVD", e);
     }
+  }
+
+  private static void openDisc(File root, File dicomDir, DicomModel dicomModel) {
+    if (dicomDir != null) {
+      LOGGER.info("CD/DVD inserted, opening {}", dicomDir);
+      List<LoadSeries> loadSeries = DicomDirImport.loadDicomDir(dicomDir, dicomModel, true);
+      if (loadSeries != null && !loadSeries.isEmpty()) {
+        DicomModel.LOADING_EXECUTOR.execute(
+            new LoadDicomDir(loadSeries, dicomModel, OpeningViewer.ALL_PATIENTS));
+        return;
+      }
+    }
+    LOGGER.info("CD/DVD inserted without a readable DICOMDIR, copying {}", root);
+    DicomModel.LOADING_EXECUTOR.execute(new LoadDisc(root.toPath(), dicomModel));
   }
 }

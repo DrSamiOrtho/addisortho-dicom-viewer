@@ -88,6 +88,28 @@ public final class DiscDrive {
     return null;
   }
 
+  /**
+   * The DICOMDIR of a CD or DVD: at its root, or in a folder at its root, as some discs have it.
+   * Null when there is none.
+   */
+  public static File findDiscDicomDir(File root) {
+    File dicomDir = findReadOnlyDicomDir(root);
+    if (dicomDir != null || root == null || !isOnDisc(root.toPath())) {
+      return dicomDir;
+    }
+    File[] folders = root.listFiles(f -> f.isDirectory() && !f.isHidden());
+    if (folders != null) {
+      Arrays.sort(folders);
+      for (File folder : folders) {
+        dicomDir = findReadOnlyDicomDir(folder);
+        if (dicomDir != null) {
+          return dicomDir;
+        }
+      }
+    }
+    return null;
+  }
+
   /** True when the path is on a CD, DVD or Blu-ray. */
   public static boolean isOnDisc(Path path) {
     try {

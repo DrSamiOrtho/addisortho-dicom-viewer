@@ -122,6 +122,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   public static final String DICOM_ONLY_RAW = "exp.dicom.only.raw"; // NON-NLS
   public static final String DICOM_NEW_UID = "exp.dicom.new.uid"; // NON-NLS
   public static final String CD_COMPATIBLE = "exp.cd";
+
   /** Addis Ortho: a single patient's export goes into a folder named after the patient. */
   public static final String PATIENT_FOLDER = "exp.patient.folder"; // NON-NLS
 
@@ -215,16 +216,63 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
     checkBoxPatientFolder.addActionListener(
         _ ->
             getPreferences()
-                .setProperty(
-                    PATIENT_FOLDER, String.valueOf(checkBoxPatientFolder.isSelected())));
+                .setProperty(PATIENT_FOLDER, String.valueOf(checkBoxPatientFolder.isSelected())));
     return List.of(GuiUtils.boxHorizontalStrut(ITEM_SEPARATOR), checkBoxPatientFolder);
   }
 
   /**
-   * The patient of the selection as "NAME FIRSTNAME ID", or null when the selection holds several
-   * patients or none.
+   * The patient of the selection as "Firstname Middlename Lastname ID", or null when the selection
+   * holds several patients or none.
    */
   public static String getSelectedPatient(CheckTreeModel model) {
+    MediaSeriesGroup pt = selectedPatientGroup(model);
+    if (pt == null) {
+      return null;
+    }
+    String id = TagD.getTagValue(pt, Tag.PatientID, String.class);
+    String text = (fullName(pt) + " " + (id == null ? "" : id)).trim();
+    return text.isEmpty() ? null : text;
+  }
+
+  /**
+   * The full name of the patient of the selection, first name first, or null when the selection
+   * holds several patients or none, or the patient has no name.
+   */
+  public static String getSelectedPatientName(CheckTreeModel model) {
+    MediaSeriesGroup pt = selectedPatientGroup(model);
+    String name = pt == null ? "" : fullName(pt);
+    return name.isEmpty() ? null : name;
+  }
+
+  private static String fullName(MediaSeriesGroup pt) {
+    return fullName(TagD.getTagValue(pt, Tag.PatientName, String.class));
+  }
+
+  /**
+   * A DICOM person name ("Family^Given^Middle^Prefix^Suffix") as "Given Middle Family". A name
+   * without "^" is kept in its own order: it was typed as one text, usually first name first.
+   */
+  static String fullName(String dicomName) {
+    if (dicomName == null) {
+      return "";
+    }
+    // Only the alphabetic group: ideographic and phonetic groups follow "=".
+    String alphabetic = dicomName.split("=", -1)[0];
+    String[] parts = alphabetic.split("\\^", -1);
+    String text =
+        parts.length < 2
+            ? alphabetic
+            : String.join(
+                " ",
+                parts.length > 3 ? parts[3] : "",
+                parts[1],
+                parts.length > 2 ? parts[2] : "",
+                parts[0],
+                parts.length > 4 ? parts[4] : "");
+    return text.replaceAll("\\s+", " ").trim();
+  }
+
+  private static MediaSeriesGroup selectedPatientGroup(CheckTreeModel model) {
     Set<MediaSeriesGroup> patients = new LinkedHashSet<>();
     TreePath[] paths = model.getCheckingPaths();
     if (paths != null) {
@@ -236,17 +284,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
         }
       }
     }
-    if (patients.size() != 1) {
-      return null;
-    }
-    MediaSeriesGroup pt = patients.iterator().next();
-    String name = TagD.getTagValue(pt, Tag.PatientName, String.class);
-    String id = TagD.getTagValue(pt, Tag.PatientID, String.class);
-    String text =
-        ((name == null ? "" : name.replace('^', ' ')) + " " + (id == null ? "" : id))
-            .replaceAll("\\s+", " ")
-            .trim();
-    return text.isEmpty() ? null : text;
+    return patients.size() == 1 ? patients.iterator().next() : null;
   }
 
   /** A folder named after the patient inside {@code parent}, numbered if one already exists. */
@@ -548,12 +586,14 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   @Override
   public void exportDICOM(final CheckTreeModel model, JProgressBar info) throws IOException {
     Format format = (Format) comboBoxImgFormat.getSelectedItem();
-    String patient = checkBoxPatientFolder.isSelected() ? getSelectedPatient(model) : null;
+    String patient = checkBoxPatientFolder.isSelected() ? getSelectedPatientName(model) : null;
     browseImgFile(format, patient);
     if (outputFolder != null) {
       File chosen = outputFolder.getCanonicalFile();
       final File exportDir =
           patient == null || format == Format.DICOM_ZIP ? chosen : patientFolder(chosen, patient);
+      // Pictures carry the folder's name, so a picture copied out of it still says whose it is.
+      final String filePrefix = patient == null ? null : exportDir.getName();
 
       final ExplorerTask<Boolean, String> task =
           new ExplorerTask<>(Messages.getString("LocalExport.exporting"), false) {
@@ -583,7 +623,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
                   FileUtil.recursiveDelete(writeDir.toPath());
                 }
               } else {
-                writeOther(this, exportDir, model, format, pref);
+                writeOther(this, exportDir, model, format, pref, filePrefix);
               }
               // Written straight onto a CD/DVD: eject it, ready to hand over.
               if (!isCancelled() && DiscDrive.isOnDisc(exportDir.toPath())) {
@@ -621,6 +661,21 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
 
   protected void writeOther(
       ExplorerTask task, File exportDir, CheckTreeModel model, Format format, Properties pref) {
+    writeOther(task, exportDir, model, format, pref, null);
+  }
+
+  /**
+   * @param filePrefix the patient folder's name, put before each picture's name and replacing the
+   *     patient level of the folders; null for the plain names
+   */
+  protected void writeOther(
+      ExplorerTask task,
+      File exportDir,
+      CheckTreeModel model,
+      Format format,
+      Properties pref,
+      String filePrefix) {
+    String namePrefix = filePrefix == null ? "" : filePrefix + " ";
     boolean jxl = Format.JPEG_XL == format;
     String qualityKey = jxl ? IMG_JXL_QUALITY : IMG_QUALITY;
     boolean keepNames =
@@ -664,8 +719,8 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
             File fileSrc = ((FileExtractor) dcm).getExtractFile();
             if (fileSrc != null) {
               // Get instance number instead SOPInstanceUID to handle multiframe
-              String instance = instanceFileName(dcm);
-              String path = buildPath(dcm, keepNames, node);
+              String instance = namePrefix + instanceFileName(dcm);
+              String path = buildPath(dcm, keepNames, filePrefix != null, node);
               File destinationDir = new File(exportDir, path);
               destinationDir.mkdirs();
 
@@ -675,8 +730,8 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
             }
           } else if (object instanceof DicomImageElement img) {
             // Get instance number instead SOPInstanceUID to handle multiframe
-            String instance = instanceFileName(img);
-            String path = buildPath(img, keepNames, node);
+            String instance = namePrefix + instanceFileName(img);
+            String path = buildPath(img, keepNames, filePrefix != null, node);
             File destinationDir = new File(exportDir, path);
             destinationDir.mkdirs();
 
@@ -975,12 +1030,22 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   }
 
   public static String buildPath(MediaElement img, boolean keepNames, DefaultMutableTreeNode node) {
+    return buildPath(img, keepNames, false, node);
+  }
+
+  /**
+   * @param inPatientFolder the export folder is already the patient's: leave out the patient level
+   */
+  public static String buildPath(
+      MediaElement img, boolean keepNames, boolean inPatientFolder, DefaultMutableTreeNode node) {
     StringBuilder buffer = new StringBuilder();
     if (keepNames) {
       TreeNode[] objects = node.getPath();
       if (objects.length > 3) {
-        buffer.append(buildFolderName(objects[1].toString(), 30));
-        buffer.append(File.separator);
+        if (!inPatientFolder) {
+          buffer.append(buildFolderName(objects[1].toString(), 30));
+          buffer.append(File.separator);
+        }
         buffer.append(buildFolderName(objects[2].toString(), 30));
         buffer.append(File.separator);
         buffer.append(buildFolderName(objects[3].toString(), 25));

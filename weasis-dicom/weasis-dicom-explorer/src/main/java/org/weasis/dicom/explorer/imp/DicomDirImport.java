@@ -162,8 +162,10 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
     }
     if (file != null) {
       LocalPersistence.getProperties().setProperty(LAST_DICOM_DIR, file.getPath());
-      List<LoadSeries> loadSeries =
-          loadDicomDir(file, dicomModel, checkboxWriteInCache.isSelected());
+      // Read straight off a CD/DVD, every image shown again goes back to the slow drive, and the
+      // disc cannot come out: a disc is always copied into the viewer.
+      boolean writeInCache = checkboxWriteInCache.isSelected() || DiscDrive.isOnDisc(file.toPath());
+      List<LoadSeries> loadSeries = loadDicomDir(file, dicomModel, writeInCache);
 
       if (loadSeries != null && !loadSeries.isEmpty()) {
         DicomModel.LOADING_EXECUTOR.execute(
@@ -209,7 +211,7 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
     Collections.reverse(dvs);
     for (File drive : dvs) {
       // Detect read-only media
-      File f = DiscDrive.findReadOnlyDicomDir(drive);
+      File f = DiscDrive.findDiscDicomDir(drive);
       if (f != null) {
         return f;
       }
