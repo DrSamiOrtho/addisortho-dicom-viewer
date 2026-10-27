@@ -30,5 +30,6 @@
     <module>weasis-dicom-3d</module>
     <module>weasis-dicom-templating</module>
     <module>weasis-dicom-bones</module>
+    <module>weasis-dicom-stitching</module>
   </modules>
 </project>

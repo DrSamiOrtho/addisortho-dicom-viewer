@@ -255,3 +255,34 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
   templating project's `web/app.js` before the next `sync-templating-web.sh`, or the sync drops it.
 - Help, Download page (`addisortho.help.download`) and Help, Support (Telegram) (`addisortho.help.support`) in
   `weasis-distributions/etc/config/base.json`; each is hidden when empty.
+
+## Long-leg stitching (27 Oct 2026, phase 1, draft)
+
+Design: `DESIGN-2026-10-27-long-leg-stitching.md` (reviewed by Fable and GPT-6 Astra). All outputs say draft,
+automatic, semi-automatic or manual, and not reviewed.
+
+- `weasis-dicom/weasis-dicom-stitching`: the **Stitch** button (2D viewer toolbar) opens a window for the selected
+  image's study. The user ticks two to four CR/DX/DR/RG pieces of one acquisition (none ticked at first), orders them
+  head to foot, and confirms one acquisition, projection, position, target leg and the part of the image to match on
+(whole width, or the left or right half as shown, for a film of both legs); none has a default. **Line up** matches each
+  seam (`SeamMatcher`, pure Java, no OpenCV keypoints needed): a coarse correlation of gradient magnitude on a 2 mm grid,
+  textured patches matched at 0.5 mm and a RANSAC rigid fit (scale locked, only checked), then the gates: peak uniqueness
+  (ruler ticks, repeats), edge direction over the bright part of the overlap (shaft-only overlaps), inliers spread across
+  the overlap, residual, rotation and its uncertainty, and independent held-back patches (at least two, the worst must
+  agree within 2 mm). Nothing
+  is ever "good": a seam is "check" or "failed". **Inspect seam** shows a checkerboard or difference of the overlap, arrow
+  keys nudge 0.1 mm (Shift 1 mm), [ and ] turn 0.1 degree, and matching points can be picked; three or more pairs get a
+  left-out check (spread at least 30 mm). A failed seam stays failed when only nudged. Changing the pieces, their order
+  or the band discards the seams, and a job started before the change is dropped. **Save to the study** writes a 16-bit Secondary Capture
+  (series 903, Modality of the pieces, "Long leg stitched (draft, ..., not reviewed)", DCM 113090 Image stitching,
+  SourceImageSequence with SpatialLocationsPreserved NO, seam data as JSON in private block "ADDIS ORTHO STITCH 1",
+  (0071,1001)) with the label burned into its own strip above the image and seam ticks at the edges, streamed strip by strip, and loads and opens it.
+- Scale: each piece is measured exactly as the viewer measures it (`Spacing.weasis` repeats
+  `DicomImageElement.initPixelConfiguration`); where the templating page would scale it differently the window says so.
+  Pieces on different spacing bases give an output without PixelSpacing ("No scale" in the label); pieces with and
+  without spacing cannot be joined. A piece without spacing is worked at 0.15 mm per pixel (never written out) with its
+  PixelAspectRatio kept. A piece with a VOI LUT gets a note: the stitch uses a straight window.
+- Phase 1 gaps (in the design, not built): no anatomical classifiers, so order is the user's; ruler and skin are not
+  excluded from the match automatically (a brightness filter stands in for "on bone"); no seam-aware uncertainty in the
+  templating page; no Lite memory and time benchmark on a real 4 GB PC yet; the VOI LUT curve is not reproduced. Not tested inside the running viewer yet:
+  the window was driven from code with synthetic phantom pieces.
