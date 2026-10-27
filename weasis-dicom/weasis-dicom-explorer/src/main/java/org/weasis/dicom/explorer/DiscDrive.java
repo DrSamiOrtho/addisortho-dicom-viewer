@@ -77,15 +77,7 @@ public final class DiscDrive {
 
   /** The DICOMDIR at the root of a read-only volume (a CD or DVD), or null. */
   public static File findReadOnlyDicomDir(File root) {
-    if (root != null && root.canRead() && !root.isHidden()) {
-      for (String s : DICOMDIR_NAMES) {
-        File f = new File(root, s);
-        if (f.canRead() && !f.canWrite()) {
-          return f;
-        }
-      }
-    }
-    return null;
+    return root == null ? null : dicomDirIn(root, false);
   }
 
   /**
@@ -93,18 +85,50 @@ public final class DiscDrive {
    * Null when there is none.
    */
   public static File findDiscDicomDir(File root) {
-    File dicomDir = findReadOnlyDicomDir(root);
-    if (dicomDir != null || root == null || !isOnDisc(root.toPath())) {
+    if (root == null) {
+      return null;
+    }
+    boolean disc = isOnDisc(root.toPath());
+    File dicomDir = dicomDirIn(root, disc);
+    if (dicomDir != null || !disc) {
       return dicomDir;
     }
     File[] folders = root.listFiles(f -> f.isDirectory() && !f.isHidden());
     if (folders != null) {
       Arrays.sort(folders);
       for (File folder : folders) {
-        dicomDir = findReadOnlyDicomDir(folder);
+        dicomDir = dicomDirIn(folder, true);
         if (dicomDir != null) {
           return dicomDir;
         }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The DICOMDIR in a folder. Off a disc it must be read-only. On a disc it need not: Java on
+   * Windows only sees the read-only flag of the file, which many burned discs leave off. A drive
+   * root is not checked for being hidden, as Windows may report "D:\" so.
+   */
+  private static File dicomDirIn(File folder, boolean onDisc) {
+    if (!folder.canRead()) {
+      return null;
+    }
+    for (String s : DICOMDIR_NAMES) {
+      File f = new File(folder, s);
+      if (f.isFile() && f.canRead() && (onDisc || !f.canWrite())) {
+        return f;
+      }
+    }
+    return null;
+  }
+
+  /** The root of the first CD or DVD in a drive, or null. */
+  public static File findDisc() {
+    for (File root : mountedRoots()) {
+      if (isOnDisc(root.toPath())) {
+        return root;
       }
     }
     return null;
