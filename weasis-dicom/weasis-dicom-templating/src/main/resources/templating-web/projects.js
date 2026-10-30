@@ -91,8 +91,17 @@ export const tooManyPixels = (w, h) => `This image is ${w} × ${h} pixels (${(w 
 // the knee case's long leg and skyline films (contract section 12) have no implants; their landmarks are the case's own
 // (condW, platW: the femoral condylar and tibial plateau widths; patThick: patella thickness; patW, trochAnt: the skyline's
 // patella and anterior condyle lines)
-const WFS = { hip: ['cupR', 'stemR', 'cupL', 'stemL'], kneeAP: ['femur', 'tibia'], kneeLat: ['femur', 'tibia'], kneeLong: [], kneeSky: [], shoulder: ['humerus'] };   // r33: the shoulder
-const LM_KEY = /^(?:(?:td|lt|head|canal|ac|gt)[RL]|hip|femShaft|knee|condMed|condLat|platMed|platLat|ankle|tibShaft|antCortex|postCond|platAnt|platPost|tibAxis|condW|platW|patThick|patW|trochAnt|sulcus|patApex|postCondSky|humHead|gtub|humShaft)$/;   // r33: the shoulder's
+const WFS = { hip: ['cupR', 'stemR', 'cupL', 'stemL'], kneeAP: ['femur', 'tibia'], kneeLat: ['femur', 'tibia'], kneeLong: [], kneeSky: [], shoulder: ['humerus'], diaph: [] };   // r33: the shoulder; r39: the diaphyseal plan (no implant placed)
+// r39: the procedure a plan type is saved under (the patient list and projects_lib.php), and its word in the list
+export const procOf = wf => (wf === 'hip' ? 'hip' : wf === 'shoulder' ? 'shoulder' : wf === 'diaph' ? 'diaphysis' : 'knee');
+const jointOf = p => (p === 'knee' ? 'knee' : p === 'shoulder' ? 'shoulder' : p === 'diaphysis' ? 'diaphysis' : 'hip');
+// r39: the diaphyseal plan's typed values (app.js diaIn reads them field by field): choices, and numbers in mm or null
+export const DIA_ENUM = { bone: ['', 'femur', 'tibia'], view: ['', 'AP', 'LAT'], src: ['', 'MRI', 'CT'], refEnd: ['', 'prox', 'dist'] };
+export const DIA_NUM = { ext1: [0, 600], ext2: [0, 600], margin: [0, 100], dN: [1, 60], lN: [1, 400], dF: [1, 60], lF: [1, 400], dBody: [1, 80], other: [10, 900] };
+export const diaOk = v => isObj(v) && Object.keys(v).every(k => Object.prototype.hasOwnProperty.call(DIA_ENUM, k) || Object.prototype.hasOwnProperty.call(DIA_NUM, k))
+  && Object.entries(DIA_ENUM).every(([k, l]) => v[k] === undefined || l.includes(v[k]))
+  && Object.entries(DIA_NUM).every(([k, [lo, hi]]) => v[k] === undefined || v[k] === null || (typeof v[k] === 'number' && Number.isFinite(v[k]) && v[k] >= lo && v[k] <= hi));
+const LM_KEY = /^(?:(?:td|lt|head|canal|ac|gt)[RL]|hip|femShaft|knee|condMed|condLat|platMed|platLat|ankle|tibShaft|antCortex|postCond|platAnt|platPost|tibAxis|condW|platW|patThick|patW|trochAnt|sulcus|patApex|postCondSky|humHead|gtub|humShaft|diaAxis|diaRef|diaFar|diaPhys[NF]|diaCan[NF][1-3]|otherKnee)$/;   // r33: the shoulder's; r39: the diaphyseal plan's; r44: the other femur's condyles (total femur)
 const ORIENT_FROM = ['header', 'marker', 'assumed', 'user'];
 const SETTINGS = { cupRule: ['anatomic', 'teardrop', 'head', 'mirror'], legTarget: ['equal', 'keep'], mirrorRef: ['native', 'plan'], offsetTarget: ['auto', 'own', 'none'], stemRule: ['cup', 'offset'] };
 const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -151,8 +160,11 @@ export function stateProblems(st, W, H, patient = null) {
   oneOf(st.wf, Object.keys(WFS), 'plan type', false);
   oneOf(st.side, ['R', 'L'], 'surgery side', false);
   if (patient && st.side !== patient.side) bad('the plan and the patient disagree on the side');
-  if (patient && WFS[st.wf] && (st.wf === 'hip' ? 'hip' : st.wf === 'shoulder' ? 'shoulder' : 'knee') !== patient.procedure) bad('the plan and the patient disagree on hip, knee or shoulder');   // r33
+  if (patient && WFS[st.wf] && procOf(st.wf) !== patient.procedure) bad('the plan and the patient disagree on hip, knee, shoulder or diaphysis');   // r33; r39
+  if (st.dia !== undefined && st.dia !== null && !diaOk(st.dia)) bad('the diaphyseal plan values are not valid');   // r39
   bool(st.sideSet, 'side chosen'); bool(st.mirrored, 'mirrored'); bool(st.prepDone, 'preparation done'); bool(st.wlAuto, 'auto contrast');
+  if (st.hemi !== undefined && st.hemi !== null && (!isObj(st.hemi) || !Object.entries(st.hemi).every(([k, v]) => (k === 'R' || k === 'L') && v === true))) bad('the bipolar choice is not valid');   // r38: {R?: true, L?: true}
+  else if (isObj(st.hemi) && isObj(st.tplAll) && isObj(st.tplAll.hip) && !(st.ref === 'other' && st.scope !== 'one')) for (const sd of ['R', 'L']) if (st.hemi[sd] === true && st.tplAll.hip['cup' + sd] !== undefined) bad(`the ${sd === 'R' ? 'right' : 'left'} hip is planned as a bipolar but has a cup`);   // r38 (Fable P2-1)
   oneOf(st.scope, ['both', 'one'], 'hips on the film'); oneOf(st.ref, ['own', 'other'], 'reference hip'); oneOf(st.cranial, ['up', 'down', 'left', 'right'], 'head direction');
   if (st.orient !== undefined && (!isObj(st.orient) || !ORIENT_FROM.includes(st.orient.from) || (st.orient.prevFrom !== undefined && !ORIENT_FROM.includes(st.orient.prevFrom)))) bad('orientation is not valid');
   if (st.cal !== null && st.cal !== undefined) {
@@ -200,6 +212,9 @@ export function stateProblems(st, W, H, patient = null) {
       for (const [k, n] of [['head', 8], ['headKind', 20], ['neck', 16]]) if (t[k] !== undefined && !isStr(t[k], n)) bad(`${what} ${k} is not valid`);
       if (t.stem !== undefined && !stemOk(t.stem)) bad(`${what}: the stem extension is not valid`);   // r20: {size} on a knee component
       if (t.tum !== undefined && t.tum !== null && !tumOk(t.tum)) bad(`${what}: the tumour resection values are not valid`);   // r22: {src, extent, margin}
+      if (t.bip !== undefined && (!(wf === 'hip' && /^stem[RL]$/.test(sl)) || !bipOk(t.bip))) bad(`${what}: the bipolar shell is not valid`);   // r38: {fam, size, userSize?} on a hip stem
+      if (t.liner !== undefined && (!(wf === 'hip' && /^cup[RL]$/.test(sl)) || !isStr(t.liner, 16) || !/^[a-z0-9-]+$/.test(t.liner))) bad(`${what}: the liner is not valid`);   // r38b: a liner type id on a hip cup
+      bool(t.userLiner, `${what} liner set by hand`);
     }
   }
   if (st.geo !== undefined && (!isObj(st.geo) || Object.keys(st.geo).length > 40 || !Object.values(st.geo).every(g => isStr(g, 80)))) bad('implant outline versions are not valid');
@@ -287,26 +302,57 @@ const KIND_OF = { cupR: 'cup', cupL: 'cup', stemR: 'stem', stemL: 'stem', femur:
 export const tumOk = v => isObj(v) && ['', 'MRI', 'CT'].includes(v.src) && [[v.extent, 400], [v.margin, 100], [v.c, 100]].every(([x, hi]) => x === null || x === undefined || (typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= hi))
   && Object.keys(v).every(k => ['src', 'extent', 'margin', 'c'].includes(k));   // c: the stem collar picked with an option
 // a knee component's stem extension (r20, SCHEMA-2026-10-17-r20.md): {size}, the size a knee-stem family lists
+// r38: a hip stem's bipolar shell: {fam, size} and whether its size was set by hand
+export const bipOk = v => isObj(v) && typeof v.fam === 'string' && v.fam.length <= 80 && /^[A-Za-z0-9._-]+$/.test(v.fam) && typeof v.size === 'string' && v.size.length <= 16
+  && (v.userSize === undefined || typeof v.userSize === 'boolean') && Object.keys(v).every(k => ['fam', 'size', 'userSize'].includes(k));
 export const stemOk = v => isObj(v) && typeof v.size === 'string' && v.size.length <= 16 && /^[A-Za-z0-9._-]+$/.test(v.size) && (v.geo === undefined || (typeof v.geo === 'string' && /^[0-9a-f]{6,64}$/.test(v.geo)));
 const own = (o, k) => isObj(o) && Object.prototype.hasOwnProperty.call(o, k);
+// r38b (Fable, 29 Oct 2026, P2-1): an earlier libraryId whose library this one only ADDS sizes to (checked by diffing the two
+// library files before an id goes in here): its plans are plans of this library. 656ef0f7cb39 (live to r37/r38) -> 7fa03c4b90ab
+// (r38b: tibial tray 3# added; every other size, family and head unchanged).
+export const LIB_SAME = Object.freeze({ '656ef0f7cb39': '7fa03c4b90ab' });
+export const libSame = (a, b) => typeof a === 'string' && typeof b === 'string' && (a === b || (Object.prototype.hasOwnProperty.call(LIB_SAME, a) && LIB_SAME[a] === b));
+// r40 (29 Oct 2026, Kevin's DWG): every Addis Ortho family carries famGeo, its outline version (build_ranges.py), and a plan
+// saves it in geo like a vendor geomId. For a plan of another library id the page keeps an implant whose family's outline is
+// the one the plan was made with and places again only the changed families. LIB_GEO: the famGeo each Addis Ortho family had
+// in a library from before famGeo (computed by stage_r40.py from the live range files of 7fa03c4b90ab); a plan of 656ef0f7cb39
+// goes through LIB_SAME to 7fa03c4b90ab's. 7fa03c4b90ab -> ac4667dfef91: chunli-130-long, chunli-160-200 and chunli-160-250 changed.
+export const LIB_GEO = Object.freeze({ '7fa03c4b90ab': Object.freeze({ 'chunli-130': 'e18f0ae471d2', 'chunli-130-long': 'd81546527298', 'chunli-160-150': 'f23030c0a1f0', 'chunli-160-200': 'eef0ab0790df', 'chunli-160-250': 'a8b72997dd25', 'chunli-be': '4414293cf6b2', 'chunli-be2-127h': '262363120312', 'chunli-be2-127s': 'e28559615b65', 'chunli-be2-133h': 'd1b24c45cd93', 'chunli-be2-133s': 'abf7eafc45d5', 'chunli-cup': '593ed445da31', 'chunli-tka-femur': '5e9051e9f5fb', 'chunli-tka-tibia': 'd5110524208f' }) });
+export const libBase = id => (typeof id === 'string' && Object.prototype.hasOwnProperty.call(LIB_SAME, id) ? LIB_SAME[id] : id);
+// the outline versions a plan of another library was made with: LIB_GEO of its library (if any) and its own geo over it
+export const planGeo = (id, geo) => ({ ...(typeof id === 'string' && Object.prototype.hasOwnProperty.call(LIB_GEO, libBase(id)) ? LIB_GEO[libBase(id)] : {}), ...(isObj(geo) ? geo : {}) });
+export const famGeoOf = f => (isObj(f) && typeof (f.geomId || f.famGeo) === 'string' ? f.geomId || f.famGeo : null);
 export function libraryProblems(st, lib) {
   if (!isObj(st) || !isObj(st.tplAll) || !isObj(lib) || !Array.isArray(lib.families)) return [];
   const out = [], bad = m => { if (out.length < 12) out.push(m); }, fams = {}, heads = isObj(lib.heads) ? lib.heads : {};
   for (const f of lib.families) if (isObj(f) && typeof f.id === 'string') fams[f.id] = f;
-  const same = st.libraryId === lib.libraryId, geo = isObj(st.geo) ? st.geo : {};
+  const same = libSame(st.libraryId, lib.libraryId), geo = same ? (isObj(st.geo) ? st.geo : {}) : planGeo(st.libraryId, st.geo);   // r38b: or an id this library only adds sizes to; r40: else the outlines it was made with
   for (const [wf, o] of Object.entries(st.tplAll)) {
     if (!isObj(o)) continue;
     for (const [sl, t] of Object.entries(o)) {
       if (!isObj(t) || typeof t.fam !== 'string' || !own(fams, t.fam)) continue;
       const f = fams[t.fam], what = `implant ${wf} ${sl.slice(0, 12)}`, name = String(f.label || f.id).slice(0, 60);
       if (KIND_OF[sl] && f.kind !== KIND_OF[sl]) { bad(`${what}: ${name} is not a ${KIND_OF[sl].replace('tka-', 'knee ')}`); continue; }
-      if (!same || (f.geomId && geo[t.fam] && geo[t.fam] !== f.geomId)) continue;
+      if (same ? (famGeoOf(f) && geo[t.fam] && geo[t.fam] !== famGeoOf(f)) : (!famGeoOf(f) || geo[t.fam] !== famGeoOf(f))) continue;   // r40: a family whose outline is unchanged is checked (applyPlan keeps it)
       if (!Array.isArray(f.sizes) || !f.sizes.some(z => isObj(z) && z.size === t.size)) { bad(`${what}: ${name} has no size "${String(t.size).slice(0, 16)}"`); continue; }
       if (f.kind === 'stem') {
         const kinds = (Array.isArray(f.headKinds) ? f.headKinds : ['ceramic', 'cocr']).filter(k => isObj(heads[k]) && isObj(heads[k].sizes));
         if (!kinds.includes(t.headKind)) bad(`${what}: head system "${String(t.headKind).slice(0, 20)}" is not one ${name} takes`);
         else if (!own(heads[t.headKind].sizes, t.head)) bad(`${what}: no ${String(t.head).slice(0, 8)} mm head in that head system`);
         else if (!own(heads[t.headKind].sizes[t.head], t.neck)) bad(`${what}: no neck "${String(t.neck).slice(0, 16)}" for that head`);
+        if (isObj(t.bip) && own(fams, t.bip.fam)) {   // r38: a shell family, one of its sizes (unless its outline changed), on the head it takes
+          const bf = fams[t.bip.fam], ih = isObj(bf.innerHead) ? bf.innerHead : {}, bg = famGeoOf(bf);
+          const bz = Array.isArray(bf.sizes) ? bf.sizes.find(z => isObj(z) && z.size === t.bip.size) : null, bd = isObj(bz) && Number.isFinite(bz.innerHead) ? bz.innerHead : ih.diameter;   // r40: the inner head per shell size
+          const moved = same ? !!(bg && geo[bf.id] && geo[bf.id] !== bg) : !(bg && geo[bf.id] === bg);   // its outline changed since: applyPlan takes it (and its stem) off
+          if (bf.kind !== 'bipolar') bad(`${what}: ${String(bf.label || bf.id).slice(0, 60)} is not a bipolar shell`);
+          else if (!moved && !bz) bad(`${what}: the bipolar shell has no size "${String(t.bip.size).slice(0, 16)}"`);
+          else if (!moved && (t.headKind !== ih.kind || String(t.head) !== String(bd))) bad(`${what}: the bipolar shell takes the ${String(bd).slice(0, 8)} mm head, not this one`);
+        }
+      }
+      if (t.liner !== undefined && f.kind === 'cup') {   // r38b: a type the family names and this size offers (Pinnacle liners)
+        const lt = isObj(f.linerTypes) ? f.linerTypes : {}, z = f.sizes.find(q => isObj(q) && q.size === t.size), L = z && Array.isArray(z.liners) ? z.liners : [];
+        if (!own(lt, t.liner)) bad(`${what}: ${name} has no liner type "${String(t.liner).slice(0, 16)}"`);
+        else if (!L.some(l => isObj(l) && l.type === t.liner)) bad(`${what}: ${name} size ${String(t.size).slice(0, 8)} has no ${String(lt[t.liner].label || t.liner).slice(0, 20)} liner`);
       }
       if (f.kind === 'humeral-body' && t.head !== undefined && !(Array.isArray(f.humHeads) && f.humHeads.some(q => isObj(q) && String(q.d) === String(t.head)))) bad(`${what}: ${name} has no ${String(t.head).slice(0, 8)} mm head`);   // r33
       if (f.kind === 'tka-tibia' && Array.isArray(f.thicknesses) && t.thick !== undefined && !f.thicknesses.includes(t.thick)) bad(`${what}: ${name} has no ${String(t.thick).slice(0, 8)} mm total thickness`);
@@ -427,7 +473,7 @@ export function projectProblems(p) {
   if (!isStr(p.savedAt, 40)) out.push('the date it was saved is missing');
   if (!isStr(p.libraryId, 40) || !/^[A-Za-z0-9._-]{1,40}$/.test(p.libraryId)) out.push('the implant library it was made with is missing');
   const pt = p.patient;
-  if (!isObj(pt) || !['R', 'L'].includes(pt.side) || !['hip', 'knee', 'shoulder'].includes(pt.procedure)) out.push('patient side and procedure are missing');
+  if (!isObj(pt) || !['R', 'L'].includes(pt.side) || !['hip', 'knee', 'shoulder', 'diaphysis'].includes(pt.procedure)) out.push('patient side and procedure are missing');   // r39: diaphysis
   else if (identProblem(pt)) out.push('patient details are not valid');
   const im = p.image;
   if (!isObj(im) || !isStr(im.fileName, 255) || !MIME_EXT[im.mime] || !SHA_RE.test(String(im.sha256)) || !Number.isInteger(im.size) || !Number.isInteger(im.width) || !Number.isInteger(im.height)) return [...out, 'the image description is missing or not valid'];
@@ -1246,7 +1292,7 @@ async function me() {
 const mayManage = (m, viewer) => !viewer || viewer.ca === 'all' || (isObj(m.owner) && m.owner.uid === viewer.uid);
 
 // ---------- the templated-patients list (t.addisortho.com only) ----------
-const SLOTN = { cupR: 'Cup R', cupL: 'Cup L', stemR: 'Stem R', stemL: 'Stem L', headR: 'Head R', headL: 'Head L', femur: 'Femur', tibia: 'Tibia', insert: 'Insert' };
+const SLOTN = { cupR: 'Cup R', cupL: 'Cup L', stemR: 'Stem R', stemL: 'Stem L', headR: 'Head R', headL: 'Head L', bipR: 'Bipolar R', bipL: 'Bipolar L', linerR: 'Liner R', linerL: 'Liner L', diaDefect: 'Defect', diaStemN: 'Stem, ref. side', diaStemF: 'Stem, far side', diaBody: 'Body', femur: 'Femur', tibia: 'Tibia', insert: 'Insert' };
 const shortLabel = l => String(l || '').replace(/^Addis Ortho\s+/, '').replace(/^(cementless cup|total knee .*|.* head, neck .*|tray and insert.*)$/i, '');
 const fmtWhen = iso => { const d = new Date(iso); return Number.isFinite(d.getTime()) ? `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : ''; };
 export function implantsText(list) {
@@ -1271,7 +1317,7 @@ export function showList(box) {
   // of its cases share an X-ray (sha256) or the same side and joint (a mark only; nothing is done about it here)
   const filmsOf = m => (isObj(m.images) ? Object.values(m.images).filter(isObj).length : 1);
   const shasOf = m => { const s = new Set(); if (isObj(m.image) && typeof m.image.sha256 === 'string' && m.image.sha256) s.add(m.image.sha256); if (isObj(m.images)) for (const f of Object.values(m.images)) if (isObj(f) && typeof f.sha256 === 'string' && f.sha256) s.add(f.sha256); return s; };
-  const sjOf = m => `${m.side === 'L' ? 'L' : 'R'} ${m.procedure === 'knee' ? 'knee' : m.procedure === 'shoulder' ? 'shoulder' : 'hip'}`;
+  const sjOf = m => `${m.side === 'L' ? 'L' : 'R'} ${jointOf(m.procedure)}`;
   function maybeDup(cs) {
     const sj = new Set(), sh = new Set();
     for (const m of cs) {
@@ -1367,7 +1413,7 @@ export function showList(box) {
     const pt0 = isObj(m.patient) ? m.patient : {}, pt = H.S.set.share ? { hospital: pt0.hospital } : pt0;   // sharing mode: identity hidden
     const who = H.S.set.share ? 'Patient details hidden (sharing mode)' : pt.name || (pt.recordNo ? `Record ${pt.recordNo}` : 'Name left out');
     const kc = isObj(m.images);   // a knee case (contract section 12): its films under it (a button each)
-    const side = `${m.side === 'L' ? 'Left' : 'Right'} ${m.procedure === 'knee' ? 'knee' : m.procedure === 'shoulder' ? 'shoulder' : 'hip'}${kc ? ' case' : ''}`;
+    const side = `${m.side === 'L' ? 'Left' : 'Right'} ${jointOf(m.procedure)}${kc ? ' case' : ''}`;
     const open = node('button', 'copen'); open.type = 'button';
     const top = node('span', 'ctop'); top.append(node('b', 'cname' + (inGroup ? ' sr-only' : ''), who), node('span', 'cside', side), node('span', 'cdate', fmtWhen(m.updatedAt)));
     const imp = node('span', 'cimp', implantsText(m.implants) || 'no implants placed');
@@ -1804,7 +1850,7 @@ export function filmClosing() {
 // hash; never the patient's name or record number (round 13b re-review: the store is in the browser)
 function labelOf(F) {
   const m = F.snap ? F.snap.meta : (() => { try { return H.metaNow(); } catch (e) { return null; } })();
-  const side = m && m.side === 'L' ? 'Left' : 'Right', joint = m && m.procedure === 'knee' ? 'knee' : m && m.procedure === 'shoulder' ? 'shoulder' : 'hip';
+  const side = m && m.side === 'L' ? 'Left' : 'Right', joint = jointOf(m && m.procedure);
   if (F.kc) { let n = 0; try { n = Object.keys((F.snap ? F.snap.project : H.projectNow()).films || {}).length; } catch (e) { n = 0; } return `${side} knee case opened ${hhmm(new Date(F.openedAt || Date.now()))}, ${n} film${n === 1 ? '' : 's'}, case ${String(F.ck).slice(2, 8)}`; }
   return `${side} ${joint} X-ray opened ${hhmm(new Date(F.openedAt || Date.now()))}, image ${String((F.orig && F.orig.sha256) || '').slice(0, 6)}`;
 }

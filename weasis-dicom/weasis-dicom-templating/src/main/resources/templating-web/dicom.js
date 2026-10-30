@@ -11,7 +11,7 @@ const TS_EXPLICIT = '1.2.840.10008.1.2.1';
 const TS_DEFLATED = '1.2.840.10008.1.2.1.99';
 
 const WANT = {          // tag -> name; everything else is skipped
-  '00020010': 'TransferSyntaxUID', '00080005': 'SpecificCharacterSet', '00080016': 'SOPClassUID', '00080018': 'SOPInstanceUID', '00080020': 'StudyDate',
+  '00020010': 'TransferSyntaxUID', '00080005': 'SpecificCharacterSet', '00080008': 'ImageType', '00080016': 'SOPClassUID', '00080018': 'SOPInstanceUID', '00080020': 'StudyDate',
   '00080030': 'StudyTime', '00080090': 'ReferringPhysicianName', '00100030': 'PatientBirthDate', '00100040': 'PatientSex', '00200010': 'StudyID',
   '00100021': 'IssuerOfPatientID', '00080080': 'InstitutionName', '00101010': 'PatientAge',   // the patient's hospital and age (15 Oct 2026)
   '00080050': 'AccessionNumber', '00080060': 'Modality', '00081030': 'StudyDescription', '0008103E': 'SeriesDescription',

@@ -124,7 +124,7 @@ class PageFilesTest {
     String html = new String(p.get("index.html"), StandardCharsets.UTF_8);
     assertTrue(html.contains("<html lang=\"en\" data-mode=\"viewer\" data-release=\"" + p.release() + "\">"));
     String lib = new String(p.get("library.json"), StandardCharsets.UTF_8);
-    assertTrue(lib.contains("\"libraryId\":\"656ef0f7cb39\""));
+    assertTrue(lib.contains("\"libraryId\":\"ac4667dfef91\""));
     // the Addis Ortho ranges (23 Oct 2026, r28): the 160 stems with BB1, the CCK and tumour knees; no other maker
     for (String id : new String[] {"chunli-160-150", "chunli-bb1-b", "chunli-cck-femur", "chunli-dfr-femur"}) {
       assertTrue(lib.contains("\"id\":\"" + id + "\""), id);
@@ -133,9 +133,12 @@ class PageFilesTest {
     for (String id : new String[] {"chunli-pfr", "chunli-phr"}) {
       assertTrue(lib.contains("\"id\":\"" + id + "\""), id);
     }
+    // r44 (31 Oct 2026): the live range files, with the bipolar and the sizes from Chunli's DWGs; no phone Quick link
+    assertTrue(lib.contains("\"id\":\"chunli-bipolar\""));
+    assertTrue(!html.contains("quick.html"));
     for (String range : new String[] {"jnj-", "zb-", "ldk-"}) {
       assertTrue(!lib.contains("\"range\":\"" + range), range);
     }
-    assertEquals("r33", p.release());
+    assertEquals("r44", p.release());
   }
 }
