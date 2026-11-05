@@ -12,6 +12,7 @@ PACKAGE=YES
 # GitHub workflow building the macOS and Windows installers.
 NAME="Addis Ortho Viewer"
 IDENTIFIER="com.addisortho.viewer"
+EDITION="full"
 
 # Aux functions:
 die ( ) {
@@ -47,6 +48,8 @@ echo " --temp
 Path of the temporary directory during build"
 echo " --no-installer
 Build only the native binaries not the final installer"
+echo " --lite
+Build Addis Ortho Viewer Lite: 2D X-ray and CT viewing only (see prepare-lite.sh)"
 echo " --mac-signing-key-user-name
 Key user name of the certificate to sign the bundle"
 exit 0
@@ -75,6 +78,10 @@ shift # past value
 PACKAGE="NO"
 shift # past argument
 ;;
+--lite)
+EDITION="lite"
+shift # past argument
+;;
 --mac-signing-key-user-name)
 CERTIFICATE="$2"
 shift # past argument
@@ -88,6 +95,16 @@ esac
 done
 set -- "${POSITIONAL[@]}" # restore positional parameters
 
+MAC_PACKAGE_NAME="Addis Ortho"
+LINUX_PACKAGE_NAME="addisortho-viewer"
+if [ "$EDITION" = "lite" ] ; then
+  NAME="Addis Ortho Viewer Lite"
+  IDENTIFIER="com.addisortho.viewer.lite"
+  DESCRIPTION="Addis Ortho DICOM Viewer Lite"
+  # CFBundleName must stay under 16 characters
+  MAC_PACKAGE_NAME="AO Viewer Lite"
+  LINUX_PACKAGE_NAME="addisortho-viewer-lite"
+fi
 
 curPath=$(dirname "$(readlink -f "$0")")
 rootdir="$(dirname "$curPath")"
@@ -118,7 +135,7 @@ arc=$(echo "${ARC_OS}" | cut -d'-' -f2-3)
 
 # Set the JDK modules and the launch options (JDK_MODULES, customOptions, commonOptions)
 # shellcheck source=launch-options.sh
-source "${curPath}/launch-options.sh" "$machine" || die "Cannot read the launch options"
+source "${curPath}/launch-options.sh" "$machine" "$EDITION" || die "Cannot read the launch options"
 
 echo "Platform: $machine"
 echo "JDK Modules: $JDK_MODULES"
@@ -198,7 +215,7 @@ WEASIS_CLEAN_VERSION=$(echo "$WEASIS_VERSION" | sed -e 's/"//g' -e 's/-.*//' -e 
 # NSHumanReadableCopyright: they must be given to the app-image step, which builds the launchers.
 VENDOR="Addis Ortho Trading PLC"
 COPYRIGHT="© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-2026 Weasis Team"
-DESCRIPTION="Addis Ortho DICOM Viewer"
+DESCRIPTION="${DESCRIPTION:-Addis Ortho DICOM Viewer}"
 
 
 # Remove pack jar for launcher
@@ -207,6 +224,13 @@ rm -f "$INPUT_DIR"/*.jar.pack.gz
 # Remove the unrelated native packages
 find "$INPUT_DIR"/bundle/weasis-opencv-core-* -type f ! -name '*-'"${ARC_OS}"'-*'  -exec rm -f {} \;
 find "$INPUT_DIR"/bundle/jogamp-* -type f ! -name '*-'"${ARC_OS}"'-*' ! -name 'jogamp-[0-9]*' -exec rm -f {} \;
+
+if [ "$EDITION" = "lite" ] ; then
+  LITE_RES="${TEMP_PATH:-$OUTPUT_PATH_UNIX}-lite-resources"
+  bash "${curPath}/prepare-lite.sh" "$INPUT_PATH_UNIX/weasis" "${curPath}/resources/$machine" "$LITE_RES" \
+    || die "Cannot prepare the lite edition"
+  RES="$LITE_RES"
+fi
 
 # Optional deployment specific preparation of the input directory, absent from the public distribution
 siteHook="${curPath}/prepare-input-site.sh"
@@ -253,18 +277,21 @@ if [ -d "${TEMP_PATH}" ] ; then
 fi
 
 declare -a signArgs=()
+declare -a launcherArgs=()
 if [ "$machine" = "windows" ] ; then
   DICOMIZER_CONFIG="Dicomizer=$RES\dicomizer-launcher.properties"
 else
   DICOMIZER_CONFIG="Dicomizer=$RES/dicomizer-launcher.properties"
   if [ "$machine" = "macosx" ] ; then
     if [[ -n "$CERTIFICATE" ]] ; then
-      signArgs=("--mac-package-identifier" "$IDENTIFIER" "--mac-package-name" "Addis Ortho" "--mac-signing-key-user-name" "$CERTIFICATE" "--mac-sign")
+      signArgs=("--mac-package-identifier" "$IDENTIFIER" "--mac-package-name" "$MAC_PACKAGE_NAME" "--mac-signing-key-user-name" "$CERTIFICATE" "--mac-sign")
     else
-      signArgs=("--mac-package-identifier" "$IDENTIFIER" "--mac-package-name" "Addis Ortho")
+      signArgs=("--mac-package-identifier" "$IDENTIFIER" "--mac-package-name" "$MAC_PACKAGE_NAME")
     fi
   fi
 fi
+# The lite edition has no Dicomizer
+[ "$EDITION" = "full" ] && launcherArgs=("--add-launcher" "${DICOMIZER_CONFIG}")
 
 # On Linux the deb/rpm are built in a single jpackage step from --input (see below), so the
 # standalone app-image is only needed for the other platforms or for --no-installer builds.
@@ -272,7 +299,7 @@ if [ "$machine" != "linux" ] || [ "$PACKAGE" = "NO" ] ; then
   # shellcheck disable=SC2154 # customOptions and commonOptions come from launch-options.sh
   $JPKGCMD --type app-image --input "$INPUT_DIR" --dest "$OUTPUT_PATH" --name "$NAME" \
   --main-jar weasis-launcher.jar --main-class org.weasis.launcher.AppLauncher --add-modules "$JDK_MODULES" \
-  --add-launcher "${DICOMIZER_CONFIG}" --resource-dir "$RES"  --app-version "$WEASIS_CLEAN_VERSION" \
+  "${launcherArgs[@]}" --resource-dir "$RES"  --app-version "$WEASIS_CLEAN_VERSION" \
   --vendor "$VENDOR" --copyright "$COPYRIGHT" --description "$DESCRIPTION" \
   "${tmpArgs[@]}" --verbose "${signArgs[@]}" "${customOptions[@]}" "${commonOptions[@]}"
 fi
@@ -280,8 +307,15 @@ fi
 
 if [ "$PACKAGE" = "YES" ] ; then
   if [ "$machine" = "windows" ] ; then
-    [ "$arc" = "aarch64" ]  && UPGRADE_UID="1d34dbc0-804b-491f-b9b7-cddec4b42771" || UPGRADE_UID="4179fa98-ca01-4739-b89e-92aff0702b48"
-    $JPKGCMD --type "msi" --app-image "$IMAGE_PATH" --dest "$OUTPUT_PATH" --name "$NAME" --resource-dir "$RES/msi/${arc}" \
+    if [ "$EDITION" = "lite" ] ; then
+      # Own upgrade codes and jpackage's default MSI template (no weasis-addisortho:// scheme)
+      [ "$arc" = "aarch64" ]  && UPGRADE_UID="ef84b678-2032-4f0a-b9c4-b5807f045b9a" || UPGRADE_UID="0cad2ecd-35e6-4aa7-9647-16f80dcc7a31"
+      MSI_RES="$RES"
+    else
+      [ "$arc" = "aarch64" ]  && UPGRADE_UID="1d34dbc0-804b-491f-b9b7-cddec4b42771" || UPGRADE_UID="4179fa98-ca01-4739-b89e-92aff0702b48"
+      MSI_RES="$RES/msi/${arc}"
+    fi
+    $JPKGCMD --type "msi" --app-image "$IMAGE_PATH" --dest "$OUTPUT_PATH" --name "$NAME" --resource-dir "$MSI_RES" \
     --license-file "$INPUT_PATH\Licence.txt" --description "$DESCRIPTION" --win-upgrade-uuid "$UPGRADE_UID"  \
     --win-menu --win-menu-group "$NAME" --copyright "$COPYRIGHT" --app-version "$WEASIS_CLEAN_VERSION" \
     --vendor "$VENDOR" --file-associations "${curPath}\file-associations.properties" "${tmpArgs[@]}" --verbose
@@ -303,10 +337,10 @@ if [ "$PACKAGE" = "YES" ] ; then
       # shellcheck disable=SC2154 # customOptions and commonOptions come from launch-options.sh
       $JPKGCMD --type "$installerType" --input "$INPUT_DIR" --dest "$OUTPUT_PATH" --name "$NAME" \
       --main-jar weasis-launcher.jar --main-class org.weasis.launcher.AppLauncher --add-modules "$JDK_MODULES" \
-      --add-launcher "${DICOMIZER_CONFIG}" --resource-dir "$RES" \
+      "${launcherArgs[@]}" --resource-dir "$RES" \
       --license-file "$INPUT_PATH/Licence.txt" --description "$DESCRIPTION" --vendor "$VENDOR" \
       --copyright "$COPYRIGHT" --app-version "$WEASIS_CLEAN_VERSION" --file-associations "${curPath}/file-associations.properties" \
-      --linux-app-release "$REVISON_INC" --linux-package-name "addisortho-viewer" \
+      --linux-app-release "$REVISON_INC" --linux-package-name "$LINUX_PACKAGE_NAME" \
       "${typeArgs[@]}" \
       --linux-menu-group "Viewer;MedicalSoftware;Graphics;" --linux-app-category "science" --linux-package-deps "${DEPENDENCIES}" \
       --linux-shortcut "${customOptions[@]}" "${commonOptions[@]}" "${tmpArgs[@]}" --verbose
