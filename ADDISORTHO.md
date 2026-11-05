@@ -67,6 +67,41 @@ and `WEASIS_PWD` (an app-specific password for notarisation).
    `release_tag` set to the tag name instead: the `release` job creates the tag on the built commit.
 3. Remove `--prerelease` from the `release` job when both platforms are signed.
 
+## Lite edition
+
+Addis Ortho Viewer Lite is a second, smaller installer built from the same source for viewing X-ray
+and CT images in 2D: thumbnails, stack scrolling, window/level, zoom, rotation, measurements and
+annotations, DICOM CD (DICOMDIR) loading and image export. It leaves out the 3D viewer and JOGL, the
+MPR/MIP toolbar, RT, SR, ECG and audio, DICOM send and query/retrieve, CD burning, the non-DICOM
+image viewer, the Dicomizer and the translations (English only).
+
+- `weasis-distributions/etc/config/lite.json` is a profile, like `dicomizer.json`, read through
+  `-Dfelix.extended.config.properties=file:conf/lite.json`: it stops those bundles, hides the
+  MPR/MIP, key object and launcher toolbars, and sets the name and the `addisortho-lite` profile.
+- `weasis-distributions/script/prepare-lite.sh` deletes the unused bundle files, translations and
+  profiles from the jpackage input, and makes Lite copies of the platform resources (icons renamed,
+  no Dicomizer, own macOS bundle identifier, no `weasis-addisortho://` scheme).
+- `launch-options.sh <platform> lite` gives the smaller JDK module list (no `jdk.localedata`,
+  `jdk.jdwp.agent`, `jdk.crypto.cryptoki`; `java.compiler` must stay because JAXB imports
+  `javax.lang.model`) and its own single-instance port, 17180, so a second launch never hands files
+  to a running full viewer. The runtime is not compressed with jlink: that halves its size on disk
+  but makes the installer about 14 MB larger.
+- Build: `package-weasis.sh --lite`, or **Build installers** with `edition` set to `lite` or `both`
+  (the default; a tag always builds both and the release holds two .msi and four .pkg).
+
+Measured on Linux with JDK 25 against `ao-4.7.3-1`: 117 MB installed instead of 150 MB, 25 bundles
+instead of 39; the runtime is 91 MB of it. MPR code still lives inside `weasis-dicom-viewer2d`
+(shared with the full edition); Lite only hides its toolbar.
+
+| | Lite value |
+|---|---|
+| Installed app and installer | Addis Ortho Viewer Lite |
+| Name in the interface | Addis Ortho DICOM Viewer Lite |
+| macOS bundle identifier | `com.addisortho.viewer.lite` (CFBundleName `AO Viewer Lite`, under 16 characters) |
+| Windows upgrade codes | x64 `0cad2ecd-35e6-4aa7-9647-16f80dcc7a31`, arm64 `ef84b678-2032-4f0a-b9c4-b5807f045b9a` |
+| Preference profile | `addisortho-lite` |
+| URL scheme | none |
+
 ## Identity
 
 | | Value |
