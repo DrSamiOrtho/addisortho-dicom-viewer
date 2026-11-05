@@ -39,6 +39,9 @@ done
 rm -rf "$INPUT_DIR/bundle-i18n" "$INPUT_DIR/resources/isowriter"
 rm -f "$INPUT_DIR/conf/dicomizer.json" "$INPUT_DIR/conf/non-dicom-explorer.json" "$INPUT_DIR/conf/base-shell.json"
 
+# The bundles stay compressed (.jar.xz): jpackage puts every plain .jar of the input directory on the
+# application class path, which bypasses the OSGi class loaders and stops the viewer opening files.
+
 # jpackage resources: rename the launcher files to the Lite name, drop the Dicomizer launcher and
 # the custom MSI template (it registers the weasis-addisortho:// scheme with a fixed component GUID
 # that belongs to the full edition).

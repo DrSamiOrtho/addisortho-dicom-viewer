@@ -84,8 +84,12 @@ image viewer, the Dicomizer and the translations (English only).
 - `launch-options.sh <platform> lite` gives the smaller JDK module list (no `jdk.localedata`,
   `jdk.jdwp.agent`, `jdk.crypto.cryptoki`; `java.compiler` must stay because JAXB imports
   `javax.lang.model`) and its own single-instance port, 17180, so a second launch never hands files
-  to a running full viewer. The runtime is not compressed with jlink: that halves its size on disk
-  but makes the installer about 14 MB larger.
+  to a running full viewer, and the serial garbage collector (about 10% less memory than G1 while
+  scrolling a 300-slice 512x512 CT: peak 460 MB instead of 510 MB). The runtime is not compressed
+  with jlink: that halves its size on disk but makes the installer about 14 MB larger. Tried and
+  rejected: a CDS archive (`--generate-cds-archive`, no measurable start-up gain, 14 MB more) and
+  unpacked bundles (jpackage puts every plain `.jar` of the input on the class path, which bypasses
+  OSGi and stops the viewer opening files).
 - Build: `package-weasis.sh --lite`, or **Build installers** with `edition` set to `lite` or `both`
   (the default; a tag always builds both and the release holds two .msi and four .pkg).
 
