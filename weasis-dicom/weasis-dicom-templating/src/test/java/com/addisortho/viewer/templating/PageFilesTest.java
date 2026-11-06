@@ -172,14 +172,14 @@ class PageFilesTest {
       assertTrue(lib.contains("\"id\":\"" + id + "\""), id);
     }
     // r44 (31 Oct 2026): the live range files, with the bipolar and the sizes from Chunli's DWGs;
-    // Quick page since 3 Nov 2026 (r44a, q7); no PFNA range (Sami: not the Chunli PFNA)
+    // Quick page since 3 Nov 2026 (r44a, q7); Addis Ortho PFNA since 6 Nov 2026 (r44f), Nebula stays out
     assertTrue(lib.contains("\"id\":\"chunli-bipolar\""));
     assertTrue(html.contains("href=\"quick.html\""));
     assertTrue(p.get("quick.html") != null && p.get("quick.js") != null);
-    assertTrue(!lib.contains("\"range\":\"ao-pfna\"") && !lib.contains("nebula"));
+    assertTrue(lib.contains("\"id\":\"ao-pfna-short\"") && !lib.contains("nebula"));
     for (String range : new String[] {"jnj-", "zb-", "ldk-"}) {
       assertTrue(!lib.contains("\"range\":\"" + range), range);
     }
-    assertEquals("r44e", p.release());
+    assertEquals("r44f", p.release());
   }
 }

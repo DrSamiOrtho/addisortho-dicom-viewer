@@ -911,7 +911,8 @@ function bladeHit(ip) {
 }
 // a dragged point can make any circle: only a femoral head (15-40 mm radius) counts (Fable q6 P2)
 const headC = side => { const h = Q.hd && Q.hd[side], c = h && h.length === 3 && mmpp() ? G.circle3(h[0], h[1], h[2]) : null; return c && c.r * mmpp() >= 15 && c.r * mmpp() <= 40 ? c : null; };
-const angleWord = f => (f.angleAssumed ? `angle assumed (${f.maker} gives none)` : `angle from ${f.maker}'s catalogue`);
+const nailMaker = f => (f.brand === 'Addis Ortho' ? 'the supplier' : f.maker);   // an Addis Ortho nail is called Addis Ortho on screen
+const angleWord = f => (f.angleAssumed ? `angle assumed (${nailMaker(f)} gives none)` : `angle from ${nailMaker(f)}'s catalogue`);
 function armHead() { if (!mmpp()) return; Q.tool = 'head'; Q.tmp = []; msg(`The ${SIDE[Q.side]} femoral head (the side button at the top). ${HEAD_STEPS[0]}`); syncUI(); draw(); }
 // the blade on this film against the head: tip, apex, the tip-apex distance (mm), the tip's third of the head, in the head or not
 function pfnaInfo(it) {
@@ -936,7 +937,7 @@ function sideNail(f, z, to) {
   const same = f.sizes.find(q => q.side === to && q.diameterMm === z.diameterMm && q.lengthMm === z.lengthMm); if (same) return { size: same.size };
   const at = f.sizes.filter(q => q.side === to && q.lengthMm === z.lengthMm); if (!at.length) return { size: z.size, note: `${f.label} has no ${SIDE[to]} long nail of ${z.lengthMm} mm. ` };
   const dd = q => Math.abs(q.diameterMm - z.diameterMm), q = at.reduce((a, b) => (dd(b) < dd(a) || (dd(b) === dd(a) && b.diameterMm < a.diameterMm) ? b : a));   // a tie: the thinner
-  return { size: q.size, note: `No ${z.diameterMm} mm ${SIDE[to]} long nail in ${f.maker}'s list: ${q.diameterMm} mm put instead. ` };
+  return { size: q.size, note: `No ${z.diameterMm} mm ${SIDE[to]} long nail in ${nailMaker(f)}'s list: ${q.diameterMm} mm put instead. ` };
 }
 const fracWord = s => (Q.joint === 'pfna' && Q.frac ? (s === Q.frac ? 'fracture' : 'normal side') : '');
 function pfnaText(it) {
@@ -964,7 +965,7 @@ function pfnaSheet() {
     <label class="f">Template on</label><div class="choice wrap"><button data-on="frac" aria-pressed="${on === 'frac'}">The fracture side</button><button data-on="other" aria-pressed="${on === 'other'}">The normal side (${SIDE[other(fr)]}), then copy</button><button data-on="both" aria-pressed="${on === 'both'}">Both sides</button></div>
     <p class="note">${on === 'other' ? `Size the nail on the normal ${SIDE[other(fr)]} hip, then Copy ⇄ puts the same nail (a long nail: the ${SIDE[fr]} one of that size, or the nearest ${SIDE[fr]} size the maker lists) and blade on the ${SIDE[fr]} fracture side.` : on === 'both' ? `Template the ${SIDE[fr]} fracture side first; then the ${SIDE[other(fr)]} button at the top and Add, or Copy ⇄.` : `Template the ${SIDE[fr]} fracture side.`}</p>
     <label class="f">Nail</label><select id="c1">${opts('nail', nf.id)}</select>
-    <p class="warn">${esc(nf.label)}: a generic outline, not ${esc(nf.maker)}'s drawing (shape of the top from a DePuy Synthes TFN template; sizes from ${esc(nf.maker)}'s list; ${esc(angleWord(nf))}). Check it against the real nail.</p>
+    <p class="warn">${esc(nf.label)}: a generic outline, not ${esc(nailMaker(nf))}'s drawing (shape of the top from a DePuy Synthes TFN template; sizes from ${esc(nailMaker(nf))}'s list; ${esc(angleWord(nf))}). Check it against the real nail.</p>
     ${Q.orientHint && !Q.mirrored ? `<p class="warn">The ${esc(Q.orient)} suggest${/, /.test(Q.orient) ? '' : 's'} this film is mirrored (the patient's right on the image right), if it shows both hips. <button class="go alt" id="setMir">Set the film as mirrored</button></p>` : Q.orient ? `<p class="note">Film: ${esc(Q.orient)}; ${Q.mirrored ? 'set as mirrored' : 'standard (the patient\'s right on the image left)'}.</p>` : ''}
     ${Q.cal && Q.cal.method === 'ct' ? '<p class="note">Scale: the CT scanner\'s, from the scout\'s header (no ball).</p>' : ballField('sBallD')}
     <p class="note">A long nail needs a film of the whole femur, calibrated by its ball.</p>
@@ -1025,7 +1026,7 @@ function pfnaRows(sides, per, rows, systems, ready, warn) {
   }
   for (const id of [...new Set(its.filter(Boolean).map(it => (bladeFamOf(it) || {}).id).filter(Boolean))]) systems.push(`Blade: ${Q.fam[id].label}`);
   const fams = [...new Set(its.filter(Boolean).map(it => Q.fam[it.fam]))];
-  for (const f of fams) if (f.verified === false) warn.push(`${f.label}: generic outline, not ${f.maker}'s drawing (the top's shape from a DePuy Synthes TFN template; sizes from ${f.maker}'s list; ${angleWord(f)}). Check it against the real nail; measure the canal with the Length tool.`);
+  for (const f of fams) if (f.verified === false) warn.push(`${f.label}: generic outline, not ${nailMaker(f)}'s drawing (the top's shape from a DePuy Synthes TFN template; sizes from ${nailMaker(f)}'s list; ${angleWord(f)}). Check it against the real nail; measure the canal with the Length tool.`);
   warn.push('Tip-apex distance: this film\'s part only. The full TAD adds the lateral film\'s part.');
 }
 
