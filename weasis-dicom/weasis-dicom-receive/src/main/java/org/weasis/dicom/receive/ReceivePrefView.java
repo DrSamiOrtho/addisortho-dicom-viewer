@@ -341,19 +341,16 @@ public class ReceivePrefView extends AbstractItemDialogPage {
     if (answer != JOptionPane.OK_OPTION) {
       return;
     }
-    boolean failed = false;
-    for (ReceivedStudy study : selected) {
-      try {
-        service.get().deleteStudy(study);
-      } catch (IOException e) {
-        failed = true;
-        LOGGER.warn("Cannot delete a study folder: {}", e.getClass().getSimpleName());
-      }
-    }
-    if (failed) {
-      showError(Messages.getString("receive.delete.failed"));
-    }
-    refreshStudies();
+    service
+        .get()
+        .deleteStudies(
+            selected,
+            deleted -> {
+              if (!deleted) {
+                showError(Messages.getString("receive.delete.failed"));
+              }
+              refreshStudies();
+            });
   }
 
   private void removeSelectedSenders() {

@@ -66,6 +66,25 @@ public class DicomReceiver {
   private static final int RESPONSE_TIMEOUT_MS = 30_000;
   private static final int WRITE_BUFFER = 64 * 1024;
 
+  /**
+   * Without the deflated syntax: its bytes would pass through the deflater of DicomOutputStream a
+   * second time. Every sender must also offer Implicit VR Little Endian, so nothing is locked out.
+   */
+  private static final String[] TRANSFER_SYNTAXES = {
+    UID.ExplicitVRLittleEndian,
+    UID.ImplicitVRLittleEndian,
+    UID.ExplicitVRBigEndian,
+    UID.JPEGBaseline8Bit,
+    UID.JPEGExtended12Bit,
+    UID.JPEGLossless,
+    UID.JPEGLosslessSV1,
+    UID.JPEGLSLossless,
+    UID.JPEGLSNearLossless,
+    UID.JPEG2000Lossless,
+    UID.JPEG2000,
+    UID.RLELossless
+  };
+
   private final ReceiveSettings settings;
   private final ReceiveListener listener;
   private final ReceivedStudyStore store;
@@ -163,7 +182,8 @@ public class DicomReceiver {
     ae.setAssociationAcceptor(true);
     ae.setAssociationInitiator(false);
     ae.addConnection(connection);
-    ae.addTransferCapability(new TransferCapability(null, "*", TransferCapability.Role.SCP, "*"));
+    ae.addTransferCapability(
+        new TransferCapability(null, "*", TransferCapability.Role.SCP, TRANSFER_SYNTAXES));
     newDevice.addApplicationEntity(ae);
 
     DicomServiceRegistry services = new DicomServiceRegistry();

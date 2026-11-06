@@ -24,6 +24,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import org.osgi.service.component.ComponentContext;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
@@ -195,6 +196,15 @@ public class ReceiveService implements ReceiveListener {
   }
 
   private void loadPending() {
+    try {
+      loadPendingBatch();
+    } catch (RuntimeException e) {
+      // An exception here would silently cancel the timer, and with it every later arrival.
+      LOGGER.error("Cannot add received images to the explorer: {}", e.getClass().getName());
+    }
+  }
+
+  private void loadPendingBatch() {
     Optional<DicomExplorer> explorer = explorer();
     if (explorer.isEmpty()) {
       return; // The window is still starting: what arrived stays pending.
@@ -304,14 +314,44 @@ public class ReceiveService implements ReceiveListener {
     return Optional.empty();
   }
 
-  /** Closes the study in the viewer, which releases its files, then deletes its folder. */
-  public void deleteStudy(ReceivedStudy received) throws IOException {
-    explorer()
-        .ifPresent(
-            view -> {
-              DicomModel model = view.getDataExplorerModel();
-              findStudy(model, received.studyKey()).ifPresent(model::removeStudy);
-            });
-    store().deleteStudy(received.folder());
+  /**
+   * Closes the studies in the viewer, which releases their files, then deletes their folders. It
+   * runs on the loading thread, after the batch being loaded, so no file disappears under a reader.
+   *
+   * @param whenDone told on the event thread whether every folder was deleted
+   */
+  public void deleteStudies(List<ReceivedStudy> studies, Consumer<Boolean> whenDone) {
+    ReceivedStudyStore store = store();
+    Optional<DicomExplorer> explorer = explorer();
+    DicomModel.LOADING_EXECUTOR.execute(
+        () -> {
+          boolean deleted = true;
+          for (ReceivedStudy study : studies) {
+            forgetArrivals(study.studyKey());
+            explorer.ifPresent(view -> closeStudy(view.getDataExplorerModel(), study.studyKey()));
+            try {
+              store.deleteStudy(study.folder());
+            } catch (IOException e) {
+              deleted = false;
+              LOGGER.warn("Cannot delete a study folder: {}", e.getClass().getSimpleName());
+            }
+          }
+          boolean result = deleted;
+          GuiExecutor.execute(() -> whenDone.accept(result));
+        });
+  }
+
+  private static void closeStudy(DicomModel model, String studyKey) {
+    findStudy(model, studyKey)
+        .ifPresent(study -> GuiExecutor.invokeAndWait(() -> model.removeStudy(study)));
+  }
+
+  private void forgetArrivals(String studyKey) {
+    synchronized (batchLock) {
+      pendingByStudy.keySet().removeIf(uid -> studyKey.equals(ReceiveNaming.studyKey(uid)));
+    }
+    synchronized (receivedByStudy) {
+      receivedByStudy.keySet().removeIf(uid -> studyKey.equals(ReceiveNaming.studyKey(uid)));
+    }
   }
 }

@@ -236,6 +236,26 @@ class DicomReceiverTest {
   }
 
   @Test
+  void compressedAndOtherSopClassesAreAcceptedButDeflatedIsNot() throws Exception {
+    start();
+    try (TestScu scu = new TestScu(XRAY, AE, port)) {
+      assertTrue(scu.isAccepted(7));
+      assertTrue(scu.isAccepted(9));
+      assertFalse(scu.isAccepted(5));
+    }
+  }
+
+  @Test
+  void theIncomingFolderComesBackAfterTheStorageFolderWasRemoved() throws Exception {
+    start();
+    Files.delete(root.resolve(".incoming"));
+    try (TestScu scu = new TestScu(XRAY, AE, port)) {
+      assertEquals(Status.Success, scu.store(image("1.2.3.1")));
+    }
+    assertEquals(1, storedFiles().size());
+  }
+
+  @Test
   void anUnknownAeTitleIsRejected() throws Exception {
     start();
     AAssociateRJ rejected = assertThrows(AAssociateRJ.class, () -> new TestScu("OTHER", AE, port));

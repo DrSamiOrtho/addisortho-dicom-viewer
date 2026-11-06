@@ -123,7 +123,9 @@ public class ReceivedStudyStore {
     }
   }
 
+  /** Also brings the incoming folder back if the storage folder was removed and has returned. */
   public boolean hasFreeSpace() throws IOException {
+    Files.createDirectories(incoming);
     return freeSpace.of(incoming) >= MIN_FREE_BYTES;
   }
 

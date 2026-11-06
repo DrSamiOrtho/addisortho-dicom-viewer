@@ -172,8 +172,9 @@ Nothing is deleted automatically, so watch the disk.
 
 Patient names and MRNs are allowed in these file names by the owner's rule for clinical software, and
 must never reach the application log: the receiver logs UIDs, counts, AE titles and IP addresses only,
-never a storage path. Upstream's "Adding patient" lines in `LoadDicom` and `DicomModel`, which wrote the
-name, were changed for this.
+never a storage path. Upstream log lines that wrote the name or a file path were changed for this
+(`LoadDicom`, `DicomModel`, `DicomMediaIO`, `DicomImageElement`). The deflated transfer syntax is not
+accepted; every sender must offer an uncompressed one.
 
 Not tested against a real X-ray machine.
 

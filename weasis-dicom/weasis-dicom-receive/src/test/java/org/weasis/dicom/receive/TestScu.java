@@ -54,6 +54,11 @@ final class TestScu implements AutoCloseable {
     rq.setCalledAET(calledAet);
     rq.addPresentationContext(new PresentationContext(1, SOP_CLASS, TS));
     rq.addPresentationContext(new PresentationContext(3, UID.Verification, TS));
+    rq.addPresentationContext(
+        new PresentationContext(5, SOP_CLASS, UID.DeflatedExplicitVRLittleEndian));
+    rq.addPresentationContext(new PresentationContext(7, SOP_CLASS, UID.JPEGBaseline8Bit));
+    rq.addPresentationContext(
+        new PresentationContext(9, "1.2.840.10008.5.1.4.1.1.1.1", UID.ImplicitVRLittleEndian));
     try {
       association = ae.connect(local, remote, rq);
     } catch (Exception e) {
@@ -75,6 +80,10 @@ final class TestScu implements AutoCloseable {
     DimseRSP rsp = association.cstore(SOP_CLASS, sopUid, 0, writer, TS);
     rsp.next();
     return rsp.getCommand().getInt(Tag.Status, -1);
+  }
+
+  boolean isAccepted(int presentationContextId) {
+    return association.getAAssociateAC().getPresentationContext(presentationContextId).isAccepted();
   }
 
   int echo() throws Exception {
