@@ -1,0 +1,84 @@
+{
+  "weasisPreferences": [
+    {
+      "code": "felix.auto.start.70",
+      "value": "${dollar}{weasis.codebase.url}/bundle/weasis-dicom-viewer2d-${app.version}.jar${xz.ext}",
+      "description": "DICOM Viewer 2D only (Lite: no SR viewer)",
+      "type": "A",
+      "category": "FELIX_INSTALL"
+    },
+    {
+      "code": "felix.auto.start.75",
+      "value": "",
+      "description": "REMOVE - DICOM AU and ECG"
+    },
+    {
+      "code": "felix.auto.start.100",
+      "value": "",
+      "description": "REMOVE - Viewer 2D for standard images"
+    },
+    {
+      "code": "felix.auto.start.110",
+      "value": "",
+      "description": "REMOVE - DICOM send, Q/R, ISO writer, templating, stitching and the receiver"
+    },
+    {
+      "code": "felix.auto.start.115",
+      "value": "",
+      "description": "REMOVE - DICOM RT"
+    },
+    {
+      "code": "felix.auto.start.120",
+      "value": "",
+      "description": "REMOVE - DICOM Viewer 3D and JOGL"
+    },
+    {
+      "code": "felix.auto.install.121",
+      "value": "",
+      "description": "REMOVE - JOGL native package"
+    },
+    {
+      "code": "felix.auto.start.125",
+      "value": "",
+      "description": "REMOVE - 3D bones"
+    },
+    {
+      "code": "weasis.name",
+      "value": "Addis Ortho DICOM Viewer Lite",
+      "description": "Change the name of the application everywhere in UI",
+      "type": "AP",
+      "category": "LAUNCH"
+    },
+    {
+      "code": "weasis.profile",
+      "value": "addisortho-lite",
+      "description": "Separate preferences from the full Addis Ortho DICOM Viewer",
+      "type": "AP",
+      "category": "LAUNCH"
+    },
+    {
+      "code": "weasis-dicom-viewer2d.all.basic3dtoolbar.enable",
+      "value": "false",
+      "description": "Lite: hide the MPR and MIP toolbar",
+      "type": "A",
+      "javaType": "BOOLEAN",
+      "category": "UI"
+    },
+    {
+      "code": "weasis-dicom-viewer2d.all.keyobjecttoolbar.enable",
+      "value": "false",
+      "description": "Lite: hide the key object toolbar",
+      "type": "A",
+      "javaType": "BOOLEAN",
+      "category": "UI"
+    },
+    {
+      "code": "weasis-dicom-viewer2d.all.launchertoolbar.enable",
+      "value": "false",
+      "description": "Lite: hide the external launcher toolbar",
+      "type": "A",
+      "javaType": "BOOLEAN",
+      "category": "UI"
+    }
+  ]
+}

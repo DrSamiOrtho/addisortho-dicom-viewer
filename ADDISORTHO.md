@@ -76,8 +76,8 @@ The full viewer can receive images pushed by an X-ray machine or another modalit
 LAN, as a DICOM Storage SCP (`weasis-dicom/weasis-dicom-receive`). It answers C-STORE and C-ECHO, so
 the machine's "test connection" works. It is **off by default**. There is no encryption: use it only
 on the hospital LAN (TLS, forwarding to a PACS, worklist, storage commitment and auto-delete are not
-built). The 4 GB Lite on this branch includes it, off by default, as the full viewer does. The 2D Lite on
-`main` leaves it out (`lite.json`, `prepare-lite.sh`).
+built). The 4GB edition includes it, off by default, as the full viewer does. The 2D Lite leaves it out
+(`lite.json`, `prepare-lite.sh`).
 
 Set up in **File, Preferences, Receive from modality**:
 
@@ -146,6 +146,58 @@ never a storage path. Upstream log lines that wrote the name or a file path were
 accepted; every sender must offer an uncompressed one.
 
 Not tested against a real X-ray machine.
+
+## Lite edition
+
+Addis Ortho Viewer Lite is a second, smaller installer built from the same source for viewing X-ray
+and CT images in 2D: thumbnails, stack scrolling, window/level, zoom, rotation, measurements and
+annotations, DICOM CD (DICOMDIR) loading and image export. It leaves out the 3D viewer and JOGL, the
+MPR/MIP toolbar, RT, SR, ECG and audio, DICOM send and query/retrieve, CD burning, the non-DICOM
+image viewer, templating, stitching, the modality receiver, the Dicomizer and the translations (English
+only).
+
+- `weasis-distributions/etc/config/lite.json` is a profile, like `dicomizer.json`, read through
+  `-Dfelix.extended.config.properties=file:conf/lite.json`: it stops those bundles, hides the
+  MPR/MIP, key object and launcher toolbars, and sets the name and the `addisortho-lite` profile.
+- `weasis-distributions/script/prepare-lite.sh` deletes the unused bundle files, translations and
+  profiles from the jpackage input, and makes Lite copies of the platform resources (icons renamed,
+  no Dicomizer, own macOS bundle identifier, no `weasis-addisortho://` scheme).
+- `launch-options.sh <platform> lite` gives the smaller JDK module list (no `jdk.localedata`,
+  `jdk.jdwp.agent`, `jdk.crypto.cryptoki`; `java.compiler` must stay because JAXB imports
+  `javax.lang.model`) and its own single-instance port, 17180, so a second launch never hands files
+  to a running full viewer. The runtime is not compressed with jlink: that halves its size on disk
+  but makes the installer about 14 MB larger.
+- Build: `package-weasis.sh --lite`, or **Build installers** with `edition` set to `lite`, `both` or
+  `all` (the default; a tag always builds all three and the release holds three .msi and six .pkg).
+
+Measured on Linux with JDK 25 against `ao-4.7.3-1`: 117 MB installed instead of 150 MB, 25 bundles
+instead of 39; the runtime is 91 MB of it. MPR code still lives inside `weasis-dicom-viewer2d`
+(shared with the full edition); Lite only hides its toolbar.
+
+| | Lite value |
+|---|---|
+| Installed app and installer | Addis Ortho Viewer Lite |
+| Name in the interface | Addis Ortho DICOM Viewer Lite |
+| macOS bundle identifier | `com.addisortho.viewer.lite` (CFBundleName `AO Viewer Lite`, under 16 characters) |
+| Windows upgrade codes | x64 `0cad2ecd-35e6-4aa7-9647-16f80dcc7a31`, arm64 `ef84b678-2032-4f0a-b9c4-b5807f045b9a` |
+| Preference profile | `addisortho-lite` |
+| URL scheme | none |
+
+## 4GB edition
+
+Addis Ortho Viewer 4GB keeps every feature of the full viewer (3D, templating, stitching, the receiver)
+for PCs with 4 GB of RAM: a fixed 1 GB heap, the serial collector, a 256 MB image cache, a small 3D upload
+buffer, a 256-voxel 3D texture and no smooth segment surfaces. Older notes and the code call this "the Lite
+edition"; the code's `weasis.lite` property and `RenderingLayer.isLite()` mean this edition, not the 2D Lite.
+It was renamed on 6 Nov 2026 so that both can exist (Sami: keep both). No benchmark on a real 4 GB PC yet.
+
+| | 4GB value |
+|---|---|
+| Installed app and installer | Addis Ortho Viewer 4GB |
+| macOS bundle identifier | `com.addisortho.viewer.lite4gb` (CFBundleName `AO Viewer 4GB`) |
+| Windows upgrade codes | x64 `a905d395-ba9f-4dc3-831c-53687cd447a6`, arm64 `a5a09c96-fab0-47e7-9fce-7e3a1b812bae` |
+| Single-instance port | 17189 |
+| Build | `package-weasis.sh --4gb`, or **Build installers** with `edition` set to `4gb` or `all` |
 
 ## Identity
 
@@ -364,7 +416,7 @@ automatic, semi-automatic or manual, and not reviewed.
   PixelAspectRatio kept. A piece with a VOI LUT gets a note: the stitch uses a straight window.
 - Phase 1 gaps (in the design, not built): no anatomical classifiers, so order is the user's; ruler and skin are not
   excluded from the match automatically (a brightness filter stands in for "on bone"); no seam-aware uncertainty in the
-  templating page; no Lite memory and time benchmark on a real 4 GB PC yet; the VOI LUT curve is not reproduced. Not tested inside the running viewer yet:
+  templating page; no 4GB edition memory and time benchmark on a real 4 GB PC yet; the VOI LUT curve is not reproduced. Not tested inside the running viewer yet:
   the window was driven from code with synthetic phantom pieces.
 
 ## Shortcuts (6 Nov 2026)

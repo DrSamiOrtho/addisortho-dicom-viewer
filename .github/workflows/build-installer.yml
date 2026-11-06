@@ -7,16 +7,17 @@ on:
         description: 'Platforms to build: "all", "none" (only the shared native package), or a comma-separated subset of windows-x86-64,macosx-x86-64,macosx-aarch64'
         required: false
         default: 'all'
+      edition:
+        description: 'Editions to build: "all", "both" (full and lite), "full" (Addis Ortho Viewer), "lite" (Addis Ortho Viewer Lite: 2D X-ray and CT viewing only) or "4gb" (Addis Ortho Viewer 4GB: every feature, 1 GB heap)'
+        required: false
+        default: 'all'
       release_tag:
         description: 'Release from main without pushing a tag: ao-<weasis version>-<n>, for example ao-4.7.3-1. The release job creates the tag on the built commit. Leave empty for a test build.'
         required: false
         default: ''
-      lite:
-        description: '"true" builds the Lite edition, for PCs with 4 GB of RAM ("Addis Ortho Viewer Lite": 1 GB heap, smaller 3D textures); it installs beside the full edition.'
-        required: false
-        default: 'false'
-  # A tag ao-<weasis version>-<n> (for example ao-4.7.3-1) builds all three installers and publishes
-  # them as a GitHub pre-release; the complete source of the release is the tag itself.
+  # A tag ao-<weasis version>-<n> (for example ao-4.7.3-1) builds the three installers of all three
+  # editions and publishes them as a GitHub pre-release; the complete source of the release is the
+  # tag itself.
   push:
     tags:
       - 'ao-*'
@@ -31,27 +32,38 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       jpackage_matrix: ${{ steps.set.outputs.jpackage_matrix }}
+      edition_count: ${{ steps.set.outputs.edition_count }}
     steps:
       - name: Compute build matrices from the platforms input
         id: set
         shell: bash
         env:
           PLATFORMS_INPUT: ${{ inputs.platforms }}
+          EDITION_INPUT: ${{ inputs.edition }}
         run: |
           sel="$PLATFORMS_INPUT"
           [ -z "$sel" ] && sel="all"
-          jpkg=$(jq -cn --arg sel "$sel" '
+          case "${EDITION_INPUT:-all}" in
+            all) editions='["full","lite","4gb"]' ;;
+            both) editions='["full","lite"]' ;;
+            full|lite|4gb) editions="[\"$EDITION_INPUT\"]" ;;
+            *) echo "::error::edition must be all, both, full, lite or 4gb, got $EDITION_INPUT"; exit 1 ;;
+          esac
+          jpkg=$(jq -cn --arg sel "$sel" --argjson editions "$editions" '
             [
               {key:"macosx-x86-64",  os:"macos-15-intel", platform:"x64",   wsystem:"macosx",  warc:"x86-64"},
               {key:"macosx-aarch64", os:"macos-latest",   platform:"arm64", wsystem:"macosx",  warc:"aarch64"},
               {key:"windows-x86-64", os:"windows-latest", platform:"x64",   wsystem:"windows", warc:"x86-64"}
             ]
             | map(select($sel == "all" or (.key as $k | ($sel | split(",")) | index($k) != null)))
-            | map(del(.key))')
+            | map(del(.key))
+            | [.[] as $p | $editions[] | $p + {edition: .}]')
           {
             echo "jpackage_matrix=$jpkg"
+            echo "edition_count=$(echo "$editions" | jq length)"
           } >> "$GITHUB_OUTPUT"
           echo "Selected platforms: $sel"
+          echo "Selected editions: $editions"
           echo "jpackage matrix: $jpkg"
 
   build:
@@ -99,17 +111,21 @@ jobs:
           path: weasis-distributions/target/native-dist/weasis-native.*
 
   jpackage:
+    name: jpackage (${{ matrix.edition }}, ${{ matrix.wsystem }}-${{ matrix.warc }})
     env:
-      # The Lite edition is a separate app (name, identifier, Windows upgrade code), so it installs
-      # beside the full edition instead of replacing it.
-      LITE: ${{ inputs.lite == 'true' && 'lite' || '' }}
-      NAME: ${{ inputs.lite == 'true' && 'Addis Ortho Viewer Lite' || 'Addis Ortho Viewer' }}
-      IDENTIFIER: ${{ inputs.lite == 'true' && 'com.addisortho.viewer.lite' || 'com.addisortho.viewer' }}
+      # The lite edition (prepare-lite.sh) and the 4gb edition each have their own name, identifier,
+      # upgrade codes and shell port, so they install next to the full edition.
+      EDITION: ${{ matrix.edition }}
+      NAME: ${{ matrix.edition == 'lite' && 'Addis Ortho Viewer Lite' || matrix.edition == '4gb' && 'Addis Ortho Viewer 4GB' || 'Addis Ortho Viewer' }}
+      IDENTIFIER: ${{ matrix.edition == 'lite' && 'com.addisortho.viewer.lite' || matrix.edition == '4gb' && 'com.addisortho.viewer.lite4gb' || 'com.addisortho.viewer' }}
+      # CFBundleName, under 16 characters
+      MAC_PACKAGE_NAME: ${{ matrix.edition == 'lite' && 'AO Viewer Lite' || matrix.edition == '4gb' && 'AO Viewer 4GB' || 'Addis Ortho' }}
+      ARTIFACT_PREFIX: ${{ matrix.edition == 'lite' && 'addisortho-viewer-lite' || matrix.edition == '4gb' && 'addisortho-viewer-4gb' || 'addisortho-viewer' }}
       # Windows file properties (CompanyName, LegalCopyright, FileDescription) and macOS
       # NSHumanReadableCopyright; given to the app-image step as well as to the installer step.
       VENDOR: "Addis Ortho Trading PLC"
       COPYRIGHT: "© 2026 Addis Ortho Trading PLC. Based on Weasis © 2009-2026 Weasis Team"
-      DESCRIPTION: "Addis Ortho DICOM Viewer"
+      DESCRIPTION: ${{ matrix.edition == 'lite' && 'Addis Ortho DICOM Viewer Lite' || matrix.edition == '4gb' && 'Addis Ortho DICOM Viewer 4GB' || 'Addis Ortho DICOM Viewer' }}
       # Sign and notarise on macOS only when the Apple certificates are stored as repository
       # secrets; otherwise build unsigned installers for internal testing.
       MAC_SIGN: ${{ secrets.MACOS_CERTIFICATE_DEVELOPMENT != '' && 'yes' || 'no' }}
@@ -162,6 +178,15 @@ jobs:
           find ${{ env.WEASIS_INPUT_BIN }}/bundle/jogamp-* -type f ! -name "*-${{ matrix.wsystem }}-${{ matrix.warc }}-*" ! -name "jogamp-[0-9]*" -exec rm -f {} \;
           echo "$(ls ${{ env.WEASIS_INPUT_BIN }}/bundle/)"
 
+      - name: Prepare the lite edition
+        if: matrix.edition == 'lite'
+        shell: bash
+        run: |
+          LITE_RES="lite-resources"
+          bash "${{ env.WEASIS_SCRIPT }}/prepare-lite.sh" "${{ env.WEASIS_INPUT_BIN }}" \
+            "${{ env.WEASIS_SCRIPT }}/resources/${{ matrix.wsystem }}" "$LITE_RES"
+          echo "LITE_RES=$LITE_RES" >> "$GITHUB_ENV"
+
       - name: Apply the deployment specific preparation
         shell: bash
         run: |
@@ -176,7 +201,8 @@ jobs:
         # Addis Ortho: software 3D for PCs whose graphics chip has no OpenGL 3.3 (Intel HD 2000/3000).
         # The viewer loads these two DLLs from app/mesa only when the user chooses software 3D.
         # Mesa is MIT licensed; these are the pal1000/mesa-dist-win MSVC builds, checked by SHA-256.
-        if: matrix.wsystem == 'windows'
+        # The lite edition has no 3D.
+        if: matrix.wsystem == 'windows' && matrix.edition != 'lite'
         shell: bash
         env:
           MESA_VERSION: "26.2.3"
@@ -227,29 +253,40 @@ jobs:
 
       - name: Build app binary with jpackage
         shell: bash
-        env:
-          RES: "${{ env.WEASIS_SCRIPT }}/resources/${{ matrix.wsystem }}"
         run: |
           machine=${{ matrix.wsystem }}
+          RES="${LITE_RES:-${{ env.WEASIS_SCRIPT }}/resources/$machine}"
 
           # JDK_MODULES, customOptions and commonOptions are shared with package-weasis.sh
-          source "${{ env.WEASIS_SCRIPT }}/launch-options.sh" "$machine" "${{ env.LITE }}"
+          source "${{ env.WEASIS_SCRIPT }}/launch-options.sh" "$machine" "$EDITION"
 
           # jpackage takes the icon, the Windows file properties and the pkg backgrounds from files
-          # named after the app ("<name>.ico", "<name>.icns"...). Give the Lite edition copies of
+          # named after the app ("<name>.ico", "<name>.icns"...). Give the 4gb edition copies of
           # the full edition's, or its launcher, shortcuts and taskbar show the generic Java icon.
-          if [ "${{ env.NAME }}" != "Addis Ortho Viewer" ] ; then
+          # prepare-lite.sh has already done this for the lite edition.
+          if [ "$EDITION" = "4gb" ] ; then
             for f in "$RES"/"Addis Ortho Viewer"*; do
               [ -f "$f" ] || continue
               cp -f "$f" "$RES/${{ env.NAME }}${f#"$RES/Addis Ortho Viewer"}"
             done
+            # A custom Info.plist wins over --mac-package-identifier
+            if [ -f "$RES/Info.plist" ] ; then
+              sed -i.bak 's#<string>com.addisortho.viewer</string>#<string>${{ env.IDENTIFIER }}</string>#' "$RES/Info.plist"
+              rm -f "$RES/Info.plist.bak"
+            fi
             ls -la "$RES"
+          fi
+
+          # The lite edition has no Dicomizer
+          declare -a launcherArgs=()
+          if [ "$EDITION" != "lite" ] ; then
+            launcherArgs=("--add-launcher" "Dicomizer=$RES/dicomizer-launcher.properties")
           fi
 
           declare -a signArgs=()
           if [ "$machine" = "macosx" ] && [ "$MAC_SIGN" != "yes" ] ; then
             echo "No Apple signing certificate: building an unsigned app bundle"
-            signArgs=("--mac-package-identifier" "${{ env.IDENTIFIER }}" "--mac-package-name" "Addis Ortho")
+            signArgs=("--mac-package-identifier" "${{ env.IDENTIFIER }}" "--mac-package-name" "$MAC_PACKAGE_NAME")
           elif [ "$machine" = "macosx" ] ; then
             KEYCHAIN="$HOME/Library/Keychains/signing_temp.keychain-db"
 
@@ -296,14 +333,14 @@ jobs:
 
             # Use jpackage's built-in signing (--mac-sign) which applies --options runtime
             # and --timestamp correctly in inside-out order, exactly like package-weasis.sh.
-            signArgs=("--mac-package-identifier" "${{ env.IDENTIFIER }}" "--mac-package-name" "Addis Ortho" \
+            signArgs=("--mac-package-identifier" "${{ env.IDENTIFIER }}" "--mac-package-name" "$MAC_PACKAGE_NAME" \
               "--mac-signing-key-user-name" "$MAC_SIGNING_USER" \
               "--mac-sign")
           fi
 
           jpackage --type app-image --input "${{ env.WEASIS_INPUT_BIN }}" --dest "${{ env.WEASIS_OUTPUT }}" --name "${{ env.NAME }}" \
           --main-jar weasis-launcher.jar --main-class org.weasis.launcher.AppLauncher --add-modules "$JDK_MODULES" \
-          --resource-dir "${{ env.RES }}" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" --add-launcher "Dicomizer=${{ env.RES }}/dicomizer-launcher.properties" \
+          --resource-dir "$RES" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" "${launcherArgs[@]}" \
           --vendor "${{ env.VENDOR }}" --copyright "${{ env.COPYRIGHT }}" --description "${{ env.DESCRIPTION }}" \
           "${signArgs[@]}" "${customOptions[@]}" "${commonOptions[@]}"
 
@@ -358,7 +395,7 @@ jobs:
         # too old. JOGL must fail there on its own, and reach OpenGL 4.x through the bundled Mesa
         # once the viewer's loading order (libgallium_wgl.dll, then opengl32.dll, then JOGL's switch
         # to Mesa's own wgl pixel-format calls) is applied.
-        if: matrix.wsystem == 'windows'
+        if: matrix.wsystem == 'windows' && matrix.edition != 'lite'
         shell: bash
         run: |
           set -euo pipefail
@@ -442,7 +479,7 @@ jobs:
       - name: Start the real viewer in software 3D (Windows only)
         # The 3D check runs when the viewer starts, so its log shows whether the app itself reaches
         # llvmpipe. Informational: a GUI start on the runner can fail for reasons of its own.
-        if: matrix.wsystem == 'windows'
+        if: matrix.wsystem == 'windows' && matrix.edition != 'lite'
         continue-on-error: true
         shell: bash
         run: |
@@ -464,19 +501,26 @@ jobs:
       - name: Build package with jpackage
         shell: bash
         env:
-          RES: "${{ env.WEASIS_SCRIPT }}/resources/${{ matrix.wsystem }}"
           FILE_ASSOC: "${{ env.WEASIS_SCRIPT }}/file-associations.properties"
         run: |
           mkdir -p final-dist
           machine=${{ matrix.wsystem }}
           ARC_NAME=${{ matrix.warc }}
+          RES="${LITE_RES:-${{ env.WEASIS_SCRIPT }}/resources/$machine}"
           if [ "$machine" = "windows" ] ; then
-            [ "$ARC_NAME" = "aarch64" ] && UPGRADE_UID="1d34dbc0-804b-491f-b9b7-cddec4b42771" || UPGRADE_UID="4179fa98-ca01-4739-b89e-92aff0702b48"
-            if [ "${{ env.LITE }}" = "lite" ] ; then
-              # Its own upgrade code: installing the Lite edition must not remove the full one.
+            if [ "$EDITION" = "lite" ] ; then
+              # Own upgrade codes and jpackage's default MSI template (no weasis-addisortho:// scheme)
+              [ "$ARC_NAME" = "aarch64" ] && UPGRADE_UID="ef84b678-2032-4f0a-b9c4-b5807f045b9a" || UPGRADE_UID="0cad2ecd-35e6-4aa7-9647-16f80dcc7a31"
+              MSI_RES="$RES"
+            elif [ "$EDITION" = "4gb" ] ; then
+              # Own upgrade codes: installing it must not remove the full edition
               [ "$ARC_NAME" = "aarch64" ] && UPGRADE_UID="a5a09c96-fab0-47e7-9fce-7e3a1b812bae" || UPGRADE_UID="a905d395-ba9f-4dc3-831c-53687cd447a6"
+              MSI_RES="$RES/msi/${ARC_NAME}"
+            else
+              [ "$ARC_NAME" = "aarch64" ] && UPGRADE_UID="1d34dbc0-804b-491f-b9b7-cddec4b42771" || UPGRADE_UID="4179fa98-ca01-4739-b89e-92aff0702b48"
+              MSI_RES="$RES/msi/${ARC_NAME}"
             fi
-            jpackage --type "msi" --app-image "${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}" --dest "${{ env.WEASIS_OUTPUT }}" --name "${{ env.NAME }}" --resource-dir "${{ env.RES }}/msi/${ARC_NAME}" \
+            jpackage --type "msi" --app-image "${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}" --dest "${{ env.WEASIS_OUTPUT }}" --name "${{ env.NAME }}" --resource-dir "$MSI_RES" \
             --license-file "${{ env.WEASIS_INPUT }}/Licence.txt" --description "${{ env.DESCRIPTION }}" --win-upgrade-uuid "$UPGRADE_UID" \
             --win-menu --win-menu-group "${{ env.NAME }}" --copyright "${{ env.COPYRIGHT }}" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" \
             --vendor "${{ env.VENDOR }}" --file-associations "${{ env.FILE_ASSOC }}" --verbose
@@ -487,7 +531,7 @@ jobs:
             # --options runtime + --timestamp in the app-image step above.
             # Using --mac-sign at the pkg stage causes jpackage to re-sign every dylib
             # without --timestamp, which breaks Apple notarization.
-            jpackage --type "pkg" --app-image "${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}.app" --dest "${{ env.WEASIS_OUTPUT }}" --name "${{ env.NAME }}" --resource-dir "${{ env.RES }}" \
+            jpackage --type "pkg" --app-image "${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}.app" --dest "${{ env.WEASIS_OUTPUT }}" --name "${{ env.NAME }}" --resource-dir "$RES" \
             --license-file "${{ env.WEASIS_INPUT }}/Licence.txt" --copyright "${{ env.COPYRIGHT }}" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" --mac-package-identifier "${{ env.IDENTIFIER }}"
 
             # Sign the unsigned .pkg with the Developer ID Installer certificate.
@@ -496,7 +540,7 @@ jobs:
             SIGNED_PKG="final-dist/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}-${ARC_NAME}.pkg"
             if [ "$MAC_SIGN" != "yes" ] ; then
               cp "$UNSIGNED_PKG" "final-dist/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}-${ARC_NAME}-unsigned.pkg"
-              echo "APP_ARTIFACT=addisortho-viewer${{ env.LITE && '-lite' || '' }}-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
+              echo "APP_ARTIFACT=${ARTIFACT_PREFIX}-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
               exit 0
             fi
             KEYCHAIN="$HOME/Library/Keychains/signing_temp.keychain-db"
@@ -506,7 +550,7 @@ jobs:
             productsign --sign "$INSTALLER_ID" --keychain "$KEYCHAIN" --timestamp \
               "$UNSIGNED_PKG" "$SIGNED_PKG"
           fi
-          echo "APP_ARTIFACT=addisortho-viewer${{ env.LITE && '-lite' || '' }}-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
+          echo "APP_ARTIFACT=${ARTIFACT_PREFIX}-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
 
       - name: Notarize Release Build
         if: matrix.wsystem == 'macosx' && env.MAC_SIGN == 'yes'
@@ -563,7 +607,7 @@ jobs:
     name: Publish the GitHub release
     # A pushed ao-* tag, or a manual run on main with release_tag set (for clients that cannot push tags)
     if: ${{ (github.ref_type == 'tag' && startsWith(github.ref_name, 'ao-')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && startsWith(inputs.release_tag, 'ao-')) }}
-    needs: [build, jpackage]
+    needs: [setup, build, jpackage]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -572,6 +616,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       TAG: ${{ inputs.release_tag || github.ref_name }}
       WEASIS_VERSION: ${{ needs.build.outputs.version }}
+      EDITION_COUNT: ${{ needs.setup.outputs.edition_count }}
 
     steps:
       - name: Check that the tag matches the version that was built
@@ -582,7 +627,7 @@ jobs:
             *) echo "::error::Tag $TAG does not match ao-${WEASIS_VERSION}-<n>, the version in weasis-parent/pom.xml"; exit 1 ;;
           esac
 
-      - name: Download the three installers
+      - name: Download the installers of every edition
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           pattern: addisortho-viewer-*-${{ needs.build.outputs.version }}
@@ -596,8 +641,8 @@ jobs:
           shopt -s nullglob
           ls -la
           msi=(*.msi); pkg=(*.pkg)
-          if [ "${#msi[@]}" -ne 1 ] || [ "${#pkg[@]}" -ne 2 ]; then
-            echo "::error::Expected 1 .msi and 2 .pkg installers, found ${#msi[@]} and ${#pkg[@]}"
+          if [ "${#msi[@]}" -ne "$EDITION_COUNT" ] || [ "${#pkg[@]}" -ne $((2 * EDITION_COUNT)) ]; then
+            echo "::error::Expected $EDITION_COUNT .msi and $((2 * EDITION_COUNT)) .pkg installers, found ${#msi[@]} and ${#pkg[@]}"
             exit 1
           fi
           for f in *.msi *.pkg; do
@@ -629,6 +674,10 @@ jobs:
           - Windows: in the blue "Windows protected your PC" window click More info, then Run anyway.
 
           Files: macOS Apple Silicon (aarch64) and Intel (x86-64) .pkg, Windows x64 .msi, each with its .sha256 checksum.
+
+          **Addis Ortho Viewer Lite** (files named Addis-Ortho-Viewer-Lite-...): a smaller edition for viewing X-ray and CT images in 2D only, with measurements, window/level, zoom and stack scrolling. It leaves out 3D, MPR/MIP, RT, SR, ECG and audio, DICOM send and query/retrieve, CD burning, the Dicomizer and translations (English only). It installs next to the full viewer and keeps its own settings.
+
+          **Addis Ortho Viewer 4GB** (files named Addis-Ortho-Viewer-4GB-...): every feature of the full viewer, for PCs with 4 GB of RAM: a fixed 1 GB memory limit and smaller 3D textures. It installs next to the other two.
 
           The complete source code of this release is this tag: https://github.com/${GITHUB_REPOSITORY}/tree/${TAG}. The program as a whole is distributed under the GNU General Public License version 3; see the licence page of the installer and legal/THIRD-PARTY-NOTICES.txt in the installed application.
           EOF
