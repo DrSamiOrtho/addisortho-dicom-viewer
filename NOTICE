@@ -55,6 +55,11 @@ Changes made by Addis Ortho Trading PLC (see the git history from tag v4.7.3):
 - Long-leg stitching (27 Oct 2026, draft): the new bundle weasis-dicom/weasis-dicom-stitching (the
   Stitch button of the 2D viewer), listed in weasis-dicom/pom.xml, both base.json files and
   weasis-distributions/pom.xml.
+- Receive from modality: a new bundle, weasis-dicom/weasis-dicom-receive, with the module and
+  distribution wiring; the "N images received" counter on a study
+  (weasis-dicom-explorer/.../main/StudyPane.java); patient names and file paths removed from log lines
+  (weasis-dicom-explorer/.../LoadDicom.java and DicomModel.java, weasis-dicom-codec/.../DicomMediaIO.java
+  and DicomImageElement.java).
 
 Modified-file notices (Apache License 2.0, section 4(b)): every text file above that Addis Ortho
 Trading PLC changed carries the line "Modified by Addis Ortho Trading PLC, 2026." in its own

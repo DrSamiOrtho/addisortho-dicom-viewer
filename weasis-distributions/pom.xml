@@ -547,6 +547,12 @@
                 </artifactItem>
                 <artifactItem>
                   <groupId>org.weasis.dicom</groupId>
+                  <artifactId>weasis-dicom-receive</artifactId>
+                  <version>${app.version}</version>
+                  <outputDirectory>${tmp.bundle.dir}</outputDirectory>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>org.weasis.dicom</groupId>
                   <artifactId>weasis-dicom-rt</artifactId>
                   <version>${app.version}</version>
                   <outputDirectory>${tmp.bundle.dir}</outputDirectory>
