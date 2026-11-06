@@ -9,7 +9,8 @@
      tell them the measurements and sizes they need for both sides"; q2 the same day: a knee case of four views, AP and lateral
      templated with shared sizes, a CT scout sized on the scanner's own scale, Add one part, a turn handle and a fine-move pad,
      no "rep" on screen). One tap on the joint, implants as true-size outlines to drag, size and turn, copy to the other
-     side, and a card of sizes. The full planner (index.html) is unchanged; nothing here is saved to the patient list. -->
+     side, and a card of sizes. The full planner (index.html) is unchanged; nothing here is saved to the patient list. 4 Nov 2026: keys and touch gestures, the Image panel
+     (brightness, contrast, invert, window, one-line commands) and Save (a plan file the user keeps; Quick never saves by itself). -->
 <style>
   :root { --green: #034537; --lime: #A8FF30; --ink: #000; --line: #d5dedb; --warn: #8a5a00; --bad: #a40000; --bar: #0b1412; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -37,6 +38,30 @@
   #zoom[hidden] { display: none; }
   #zoom button { width: 42px; height: 42px; border-radius: 10px; border: 1px solid #3b4d48; background: rgba(29, 42, 39, .88); color: #fff; font-size: 20px; }
   table.keys td { font-size: 14px; padding: 5px 6px; }
+  /* 4 Nov 2026: the strip under the header (Image, Save, keys) and the Image panel */
+  #strip { background: #022d24; display: flex; align-items: center; gap: 6px; padding: 4px 8px; padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); color: #cfe; font-size: 14px; }
+  #strip .grow { flex: 1 1 auto; }
+  .sb { background: transparent; color: #fff; border: 1px solid #5f8a7f; border-radius: 8px; min-height: 36px; padding: 0 12px; font-size: 15px; }
+  .sb[aria-pressed="true"] { background: #fff; color: var(--green); font-weight: 700; border-color: #fff; }
+  .sb:disabled { opacity: .45; }
+  .sb.dirty { border-color: var(--lime); box-shadow: inset 0 0 0 1px var(--lime); }
+  #saveState.dirty { color: #ffd27a; font-weight: 600; }
+  #imgp { position: absolute; left: 8px; bottom: 46px; width: min(360px, calc(100% - 16px)); background: rgba(0, 0, 0, .82); color: #fff; border: 1px solid #3b4d48; border-radius: 12px; padding: 6px 10px 8px; display: grid; gap: 4px; z-index: 4; }
+  #imgp[hidden] { display: none; }
+  #imgp .ihead { display: flex; justify-content: space-between; align-items: center; }
+  #imgp .ihead b { color: var(--lime); }
+  #imgp label { display: grid; grid-template-columns: 84px 1fr; align-items: center; gap: 6px; font-size: 14px; }
+  #imgp input[type=range] { width: 100%; min-height: 30px; }
+  #imgp .irow { display: flex; flex-wrap: wrap; gap: 6px; }
+  #imgp .irow[hidden] { display: none; }
+  #imgp .irow button, #imgp #imgX, #cmdF button { background: #1d2a27; color: #fff; border: 1px solid #3b4d48; border-radius: 8px; min-height: 36px; padding: 0 10px; font-size: 14px; }
+  #imgp .irow button[aria-pressed="true"] { outline: 2px solid var(--lime); }
+  #imgp .irow label { grid-template-columns: auto 90px; }
+  #imgp .irow input { min-height: 34px; width: 90px; border-radius: 6px; border: 0; padding: 0 6px; font-size: 15px; }
+  #cmdF { display: flex; gap: 6px; }
+  #cmd { flex: 1 1 auto; min-width: 0; min-height: 38px; border-radius: 8px; border: 1px solid var(--line); padding: 0 10px; font: 16px ui-monospace, Menlo, monospace; }
+  #cmdMsg { font-size: 13px; color: #cfe; }
+  #cmdMsg:empty { display: none; }
   kbd { font: 600 13px ui-monospace, Menlo, monospace; background: #eef3f1; border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
   #pad { position: absolute; right: 8px; bottom: 50px; display: grid; grid-template-columns: repeat(3, 48px); grid-template-rows: repeat(3, 48px); gap: 4px;
     background: rgba(0, 0, 0, .55); padding: 6px; border-radius: 12px; touch-action: none; }
@@ -48,6 +73,8 @@
   #msg { position: absolute; left: 8px; right: 8px; top: 8px; background: rgba(3, 69, 55, .92); color: #fff; border-left: 4px solid var(--lime);
     padding: 8px 10px; border-radius: 6px; font-size: 14px; pointer-events: none; }
   #msg:empty { display: none; }
+  #stitchWarn { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 4; background: #fff3d6; color: #000; border-left: 4px solid #b07800; padding: 6px 8px; font-size: 12px; line-height: 1.35; border-radius: 4px; max-height: 30%; overflow: auto; }
+  #stitchWarn.red { background: #fde8e8; border-left-color: #9b1c1c; }
   #scale { position: absolute; left: 8px; bottom: 8px; background: rgba(0, 0, 0, .7); color: #fff; border: 1px solid #456; border-radius: 16px;
     padding: 6px 12px; font-size: 14px; min-height: 34px; }
   #scale.bad { border-color: #e0a000; color: #ffd27a; }
@@ -113,11 +140,29 @@
   <button class="hb" id="undoB" aria-label="Undo" disabled>↶</button>
   <button class="hb" id="menuB" aria-label="Menu">☰</button>
 </header>
+<div id="strip">
+  <button class="sb" id="imgB" aria-pressed="false" aria-label="Image: brightness, contrast, invert, window, reset" title="Image (/ for a command)">Image</button>
+  <button class="sb" id="saveB" disabled aria-label="Save the plan to a file (Ctrl+S)" title="Save the plan (Ctrl+S). Until you save, an unsaved draft is kept on this phone only.">Save</button>
+  <span id="saveState" aria-live="polite"></span>
+  <span class="grow"></span>
+  <button class="sb" id="helpB" aria-label="Keys, gestures and image commands" title="Keys and gestures (?)">? Keys</button>
+</div>
+<input type="file" id="planFile" accept=".json,application/json" hidden>
 <nav id="tabs" aria-label="Knee films" hidden><button data-v="ap">AP</button><button data-v="lat">Lateral</button><button data-v="other">Other ▾</button></nav>
 <div id="stage">
   <canvas id="cv"></canvas>
   <div id="msg"></div>
+  <div id="stitchWarn" hidden role="status"></div>
   <button id="scale" aria-label="Scale and ball size"></button>
+  <div id="imgp" hidden role="group" aria-label="Image controls">
+    <div class="ihead"><b>Image</b><button id="imgX" aria-label="Close the image controls">&#10005;</button></div>
+    <label>Brightness <input id="lvB" type="range" min="0" max="100" step="1" aria-label="Brightness"></label>
+    <label>Contrast <input id="lvC" type="range" min="0" max="100" step="1" aria-label="Contrast"></label>
+    <div class="irow"><button id="lvInv" aria-pressed="false">Invert</button><button id="lvAuto">Auto</button><button id="lvFile">As in file</button><button id="lvDrag" aria-pressed="false" title="One finger drags brightness and contrast (W)">Drag levels</button><button id="lvReset">Reset</button></div>
+    <div class="irow" id="lvWin" hidden><label>Centre <input id="lvC0" type="number" inputmode="numeric" aria-label="Window centre"></label><label>Width <input id="lvW0" type="number" inputmode="numeric" min="1" aria-label="Window width"></label></div>
+    <form id="cmdF" autocomplete="off"><input id="cmd" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="b60 c70 i   (? lists them)" aria-label="Image command"><button type="submit">Go</button></form>
+    <div id="cmdMsg" role="status"></div>
+  </div>
   <div id="zoom" hidden><button id="zIn" aria-label="Zoom in" title="Zoom in (+)">+</button><button id="zOut" aria-label="Zoom out" title="Zoom out (−)">−</button><button id="zFit" aria-label="Fit the film" title="Fit the film (Ctrl+0)">⤢</button></div>
   <div id="pad" hidden aria-label="Fine move, half a millimetre a tap">
     <span></span><button data-d="0,-1" aria-label="Up">↑</button><span>0.5 mm<br>a tap</span>
@@ -131,8 +176,10 @@
       <p>For a quick look at sizes on a phone. Open the X-ray, tap the joint, then drag, turn and resize the implants.</p>
       <p class="note">Hip or knee: choose at the top first. A knee case takes the AP, the lateral, the skyline and the long leg (or a CT scout); open the AP first and add the others from the tabs.</p>
       <label class="filebtn">Open X-ray<input type="file" id="file" accept=".dcm,.dicom,application/dicom,image/png,image/jpeg,image/webp,image/*"></label>
+      <p><button type="button" id="joinBtn" class="filebtn">Join 2 to 4 films into one long leg</button></p>
       <p class="note">DICOM, JPEG or PNG. An X-ray needs the calibration ball in the picture (25 mm unless your surgeon uses another; you can change it) or a known length: the sizes depend on it. A CT scout (DICOM) needs no ball: the scanner's own scale is used. The film stays on this phone.</p>
       <p class="note" id="openErr" style="color:var(--bad)"></p>
+      <p class="warn" id="draftNote" hidden><span id="draftText"></span> <button class="go alt" id="draftX" type="button">Discard the unsaved plan</button></p>
       <p class="note"><a href="./">Full planner</a> for a surgeon's plan (landmarks, leg length, offset, knee cuts, saved to the patient list).</p>
     </div>
   </div>

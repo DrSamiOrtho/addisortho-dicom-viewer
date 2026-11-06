@@ -46,7 +46,7 @@ Note: on the Quick page C is Copy to the other side, because it has no Cobb tool
 
 Templating only, the same on both pages: Up and Down or Page Up and Page Down size, Shift+arrows move 0.5 mm (with Alt too,
 2 mm), comma and full stop turn 0.5 degrees (with Shift 2 degrees), N next implant. Quick page also: I add an implant,
-Shift+R and Shift+L side, C copy, V valgus, S sizes, Alt+1, 2, 3 knee views, ? this list.
+Shift+R and Shift+L side, C copy, X flip the film, V valgus, S sizes, Alt+1, 2, 3 knee views, / the image command box, ? this list.
 
 Rotating or flipping the film has no key on the templating pages on purpose: those pages hold the plan's side and orientation.
 

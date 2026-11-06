@@ -24,18 +24,28 @@
 // PFNA card asks the fracture side and where to template (the fracture side, the normal side then Copy, or both); Copy works for
 // a nail (a long nail becomes the other side's nail of the same size); each side has its own femoral head; the Sizes card names
 // the fracture and the normal side.
-import { decodeAny, decodeBitmap } from './dicom.js';
+import { decodeAny, decodeBitmap, parseDicom } from './dicom.js';
 import { decodePNG } from './imageio.js';
 import * as G from './geom.js';
 import { findBalls, findMarkers } from './auto.js';
 import { kneePairCheck, insertGroupOf } from './autoplan.js';
+// ONE copy of what the full planner and Quick share (4 Nov 2026, SYNC.md): sides, makers' defaults, knee and diaphyseal tables,
+// tumour length text, the grey-level maths, the image command and the plan file rules. tests/sync_test.mjs refuses a second definition.
+import { SHARED_REV, SIDE, other, CT_SOP, MAKER_DEFAULT, KNEE_TYPES, ktPairOf, DIA_TYPES, fmm, tumBodyLen, tumParts, collarList, collarMm,
+  percentileWindow, wlFromSliders, slidersFromWl, wlDrag, fillGray, IMAGE_HELP, parseImageCommand,
+  PLAN_FORMAT, PLAN_VERSION, PLAN_MAX_BYTES, planFileName, validatePlanFile, filmId,
+  stitchFromMeta, stitchCal, stitchStatus, stitchWarning, stitchScaleLine, stitchHash, stitchCrosses,
+  bipInnerHead, bipHeadSpan, bipHeadHeld, bipNearest } from './shared.js';
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const SIDE = { R: 'right', L: 'left' }, other = s => (s === 'R' ? 'L' : 'R');
-const KIND = { cup: 'Cup', stem: 'Stem', 'tka-femur': 'Femur', 'tka-tibia': 'Tray', 'humeral-body': 'Humerus', nail: 'Nail' };
+const KIND = { cup: 'Cup', bipolar: 'Bipolar shell', stem: 'Stem', 'tka-femur': 'Femur', 'tka-tibia': 'Tray', 'humeral-body': 'Humerus', nail: 'Nail' };
 const SLOTS = { hip: ['cup', 'stem'], knee: ['tka-femur', 'tka-tibia'], pfna: ['nail'] };
-const DEFAULT = { cup: 'chunli-cup', stem: 'chunli-be2-133s', 'tka-femur': 'chunli-tka-femur', 'tka-tibia': 'chunli-tka-tibia', nail: 'ao-pfna-short' };
+// a hip planned as a bipolar (hemiarthroplasty, 5 Nov 2026) has a shell where a total hip has a cup
+const slotsOf = j => (j === 'hip' && Q.hemi ? ['bipolar', 'stem'] : SLOTS[j]);
+// the procedure follows what is already on the side shown (a plan opened, the other side's button)
+function syncHemi() { if (Q.joint !== 'hip') return; const its = Q.items.filter(it => it.side === Q.side); if (its.some(it => kindOf(it) === 'bipolar')) Q.hemi = true; else if (its.length) Q.hemi = false; }
+const DEFAULT = { ...MAKER_DEFAULT, nail: 'ao-pfna-short' };   // the makers' defaults are shared; the nail is Quick's (q6)
 const JOINT_WORD = { hip: 'hip', knee: 'knee', tumour: 'tumour', pfna: 'PFNA' };
 const VIEW = { hip: 'Hip', ap: 'AP', lat: 'Lateral', sky: 'Skyline', long: 'Long leg', tum: 'Tumour' };
 const IMAGE_MAX = 80 * 1024 * 1024, PIXELS_MAX = 60000000;   // as the full planner (projects.js)
@@ -46,12 +56,15 @@ const ballSaved = () => { try { const v = parseFloat(localStorage.getItem(BALL_K
 // AP and scout without the sphere". Each view keeps the size last used for it on this phone (hip, AP, lateral, long leg); a view
 // never used starts at 25, never another view's size.
 const ballFor = fv => { try { const v = parseFloat(localStorage.getItem(`${BALL_KEY}-${fv}`)); return v >= 5 && v <= 60 ? v : 25; } catch (e) { return 25; } };
+// the unsaved draft kept on this phone (4 Nov 2026; see "saving" below). Declared here: syncSaveUI may run before that section is reached
+const DRAFT_KEY = 'aoc-quick-draft', DRAFT_DAYS = 7;
+let draftT = 0, draftFp = null, draftMine = false;   // draftMine: this page wrote or restored the draft, so Save or New case may remove it
 const STAMP = 'Quick estimate made on a phone (Quick templating). The surgeon confirms the plan and the sizes.';
 
 // one film: its picture, its own scale, zoom and implants. Q.img, Q.items ... are the film on screen (accessors below).
 let filmSeq = 0, ballDef = ballSaved();   // ballDef: the size a new film starts with (the last one typed on this phone)   // each film's identity: Undo restores a snapshot only onto the film it was taken from (Astra q2 P1)
-const blankFilm = () => ({ id: ++filmSeq, ballD: ballDef, img: null, off: null, name: '', cal: null, items: [], rul: [], lld: [], hd: { R: [], L: [] }, vg: [], vgSide: '', view: { s: 1, tx: 0, ty: 0 }, mirrored: false, orient: '', orientHint: false, fv: 'hip', src: '', scout: false });
-const Q = { lib: null, fam: {}, joint: 'hip', side: 'R', sel: -1, tool: null, tmp: [], choice: {}, hist: [], label: '', films: [blankFilm()], cur: 0, pend: null };
+const blankFilm = () => ({ id: ++filmSeq, ballD: ballDef, img: null, off: null, name: '', cal: null, items: [], rul: [], lld: [], hd: { R: [], L: [] }, vg: [], vgSide: '', view: { s: 1, tx: 0, ty: 0 }, mirrored: false, orient: '', orientHint: false, fv: 'hip', src: '', scout: false, wl: null, wl0: null, wlFile: null, ref: null, invertView: false });
+const Q = { hemi: false, lib: null, fam: {}, joint: 'hip', side: 'R', sel: -1, tool: null, tmp: [], choice: {}, hist: [], label: '', films: [blankFilm()], cur: 0, pend: null, savedFp: '', levelsMode: false };
 // Q.ballD is the film's own ball size: the field, the ball finder and every recalibration of that film use it (Astra q2 recheck P1)
 for (const k of ['ballD', 'img', 'off', 'name', 'cal', 'items', 'rul', 'lld', 'hd', 'vg', 'vgSide', 'tp', 'dia', 'view', 'mirrored', 'orient', 'orientHint'])
   Object.defineProperty(Q, k, { get: () => Q.films[Q.cur][k], set: v => { Q.films[Q.cur][k] = v; } });
@@ -71,15 +84,21 @@ function refText(f = F()) {
 }
 
 // ---------------------------------------------------------------- the library: only what a quick plan can take
-// A primary hip (cup + stem) or a primary knee (femur + tray). Tumour bodies, the PFR and PHR, the bipolar shell and the
-// stem extensions are planned in the full planner only.
+// A primary hip (cup + stem), a bipolar hip (shell + stem, 5 Nov 2026) or a primary knee (femur + tray). Tumour bodies, the PFR and
+// PHR and the stem extensions are planned in the full planner only.
 const tumourish = f => !!f.tumour || /-(ptr|dfr)-/.test(f.id) || f.sizes.some(z => 'reconstructionMm' in z || 'hingePost' in z || 'bodySize' in z);
-const famsOf = kind => (Q.lib ? Q.lib.families.filter(f => f.kind === kind && f.sizes && f.sizes.length && !tumourish(f)) : []);
+const famsOf = kind => (Q.lib ? Q.lib.families.filter(f => f.kind === kind && f.sizes && f.sizes.length && !tumourish(f) && !(kind === 'stem' && Q.hemi && Q.joint === 'hip' && !bipStemOk(f))) : []);
+// ---- the bipolar hip (5 Nov 2026): a shell with its own head per size (shared.js bipInnerHead), on a stem whose head system takes it
+const headKindsQ = f => (f.headKinds || ['ceramic', 'cocr']).filter(k => Q.lib && Q.lib.heads && ((Q.lib.heads || {})[k] || {}).sizes);
+const bipShells = () => (Q.lib ? Q.lib.families.filter(f => f.kind === 'bipolar' && f.innerHead && f.sizes && f.sizes.some(z => bipHeadHeld(Q.lib, f, z))) : []);
+const bipStemOk = sf => !!sf && sf.kind === 'stem' && bipShells().some(b => headKindsQ(sf).includes(b.innerHead.kind));
+const bipAvail = () => bipShells().length > 0 && !!Q.lib && Q.lib.families.some(f => f.kind === 'stem' && f.sizes && f.sizes.length && bipStemOk(f));
+const bipAssumedQ = z => !!z && (!!(z.sheet && z.sheet.assumed) || /inner part assumed/.test(z.label || ''));
 function sizesOf(f, side) {   // half sizes are not stocked; a long nail (q6) is a left or a right one
-  const w = f.sizes.filter(z => !/\.5$/.test(String(z.size)) && (!side || !z.side || z.side === side)); return w.length ? w : f.sizes;
+  const w = f.sizes.filter(z => !/\.5$/.test(String(z.size)) && (!side || !z.side || z.side === side) && (f.kind !== 'bipolar' || bipHeadHeld(Q.lib, f, z))); return w.length ? w : f.sizes;
 }
 const sizeRec = it => { const f = Q.fam[it.fam]; return f && f.sizes.find(z => z.size === it.size); };
-const sizeWord = (f, z) => String(f.kind === 'cup' || (z && Number.isFinite(z.reconstructionMm)) ? z.size : z.label || z.size);   // a tumour body by its code (2-L60): the label is on the card
+const sizeWord = (f, z) => String(f.kind === 'cup' || f.kind === 'bipolar' || (z && Number.isFinite(z.reconstructionMm)) ? z.size : z.label || z.size);   // a tumour body by its code (2-L60): the label is on the card
 const kindOf = it => Q.fam[it.fam].kind;
 function startFam(kind) {
   const list = famsOf(kind), c = Q.choice[kind] && Q.fam[Q.choice[kind]];
@@ -104,6 +123,7 @@ function geomOf(it) {
 function pivotOf(it, gm) {
   const k = kindOf(it);
   if (k === 'cup') return [0, 0];
+  if (k === 'bipolar') return [0, -(sizeRec(it).headOffset || 0)];   // the shell turns about its outer centre, the centre of rotation; the outline's origin is the head centre
   if (k === 'stem') return gm.headM;
   if (k === 'tka-femur') return [0, gm.jointLineY || 0];
   if (k === 'tka-tibia') return [0, gm.cutY || 0];
@@ -161,7 +181,7 @@ function handleOf(it) {
 }
 
 // ---------------------------------------------------------------- drawing (the screen and the saved picture share it)
-const draw = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; drawNow(); }); };
+const draw = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; drawNow(); syncSaveUI(); }); };
 function drawNow() {
   g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#000'; g.fillRect(0, 0, cv.width, cv.height);
   if (!Q.img) return;
@@ -199,15 +219,16 @@ function scene(c, T, k, live) {
     if (sel) { c.fillStyle = 'rgba(168,255,48,.10)'; c.fill('evenodd'); }
     c.lineWidth = (sel ? 2.4 : 1.8) * k; c.strokeStyle = col; c.setLineDash(it.recheck ? [7 * k, 4 * k] : []); c.stroke(); c.setLineDash([]);
     if (f.kind === 'stem' && gm.headM) {   // the head drawn on the sheet's head, size as drawn
-      const hd = parseFloat((f.sheetHead && f.sheetHead.diameter) || 32), h = T(X(gm.headM)), r = (hd / 2) / mmpp() * (T(G.P(1, 0)).x - T(G.P(0, 0)).x);
+      const bpIt = Q.items.find(x => x.side === it.side && kindOf(x) === 'bipolar'), hd = bpIt ? bipInnerHead(Q.fam[bpIt.fam], sizeRec(bpIt)).diameter : parseFloat((f.sheetHead && f.sheetHead.diameter) || 32), h = T(X(gm.headM)), r = (hd / 2) / mmpp() * (T(G.P(1, 0)).x - T(G.P(0, 0)).x);
       c.beginPath(); c.arc(h.x, h.y, r, 0, 7); c.lineWidth = 1.4 * k; c.stroke();
       if (gm.neckCut) { c.setLineDash([6 * k, 4 * k]); line(X(gm.neckCut.lateral), X(gm.neckCut.medial)); c.setLineDash([]); }
     }
     if (f.kind === 'cup') { const o = X([0, 0]); dot(o, 2.5, col); }
+    if (f.kind === 'bipolar') { dot(X([0, -(sizeRec(it).headOffset || 0)]), 2.5, col); dot(X([0, 0]), 1.6, col); }   // the outer centre (centre of rotation) and the head centre
     if (f.kind === 'nail') nailScene(c, T, k, it, gm, X, col, line);
-    const lab = f.kind === 'nail' ? X([0, -12]) : f.kind === 'cup' ? X([0, -(sizeRec(it).outerDiameter || 50) / 2 - 7]) : f.kind === 'stem' ? X(gm.tip || gm.rings[0][0]) : X([0, f.kind === 'tka-femur' ? -30 : 40]);
+    const lab = f.kind === 'nail' ? X([0, -12]) : f.kind === 'cup' ? X([0, -(sizeRec(it).outerDiameter || 50) / 2 - 7]) : f.kind === 'bipolar' ? X([0, -(sizeRec(it).headOffset || 0) + (sizeRec(it).outerDiameter || 46) / 2 + 7]) : f.kind === 'stem' ? X(gm.tip || gm.rings[0][0]) : X([0, f.kind === 'tka-femur' ? -30 : 40]);
     // the picked implant's label in larger type (Medstrat labels each placed part with its size; the range is on the Sizes card)
-    const word = `${Q.joint === 'tumour' || isTumBody(f) ? partName(it) : KIND[f.kind]} ${it.side} ${sizeRec(it).size}${stemRec(it) ? ' + stem' : ''}${bladeRec(it) ? ` + blade ${bladeRec(it).lengthMm}` : ''}${f.kind === 'cup' ? ` · ${cupIncl(it).toFixed(0)}°` : ''}${it.recheck ? ' · recheck fit' : ''}`;
+    const word = `${Q.joint === 'tumour' || isTumBody(f) ? partName(it) : KIND[f.kind]} ${it.side} ${sizeRec(it).size}${stemRec(it) ? ' + stem' : ''}${bladeRec(it) ? ` + blade ${bladeRec(it).lengthMm}` : ''}${f.kind === 'cup' ? ` · ${cupIncl(it).toFixed(0)}°` : ''}${f.kind === 'bipolar' ? ` · ${bipInnerHead(f, sizeRec(it)).diameter} mm head` : ''}${it.recheck ? ' · recheck fit' : ''}`;
     tag(lab, word, col, sel);
   });
   if (Q.joint === 'tumour') { tumScene(c, T, k, line, tag); const pp = q => { if (live) { dot(q, 7, 'rgba(0,0,0,.55)'); dot(q, 5, '#ff9de2'); } else dot(q, 3.5, '#ff9de2'); };
@@ -265,7 +286,6 @@ async function openFile(file) {
 }
 // what the DICOM says: a CT, a scout when its header says so (as r44 app.js ctScoutOf: Image Type LOCALIZER, or TOPOGRAM,
 // SCOUT, SURVIEW, SCANOGRAM, LOCALIZER in its image type or series description), else an X-ray; a picture says nothing
-const CT_SOP = ['1.2.840.10008.5.1.4.1.1.2', '1.2.840.10008.5.1.4.1.1.2.1'];
 function dicomSource(img) {
   const m = img.meta || {};
   if (String(m.Modality || '').toUpperCase().trim() !== 'CT' && !CT_SOP.includes(String(m.SOPClassUID || '').trim())) return { src: 'xray', scout: false };
@@ -332,8 +352,8 @@ function commitFilm(img, name, fv, src, scout, wb = false, ball = null) {
   if (copyPending()) return;   // a film dropped on the page while copies wait
   let i = Q.joint === 'knee' ? Q.films.findIndex(f => f.img && f.fv === fv) : 0;
   if (Q.joint === 'knee' && i >= 0 && Q.films[i].items.length && !confirm(`Replace the ${VIEW[fv]} film? Its implants are removed.`)) { msg(refText()); return; }
-  if (Q.joint !== 'knee' && F().img && Q.items.length && !confirm('Open this film instead? The implants on the film open now are removed.')) { msg(refText()); return; }
-  const f = blankFilm(); Object.assign(f, { img, name, fv, src, scout: !!scout, wb: !!wb, ballD: ball || ballFor(fv) });
+  if (Q.joint !== 'knee' && F().img && isDirty() && !confirm('The plan on this film has not been saved and will be lost. Open this film anyway? (Cancel, then Save, keeps it.)')) { msg(refText()); return; }
+  const f = blankFilm(); Object.assign(f, { img, fid: filmId(img), name, fv, src, scout: !!scout, wb: !!wb, ballD: ball || ballFor(fv) });
   if (Q.joint !== 'knee') { Q.films = [f]; Q.cur = 0; Q.hist = []; }   // a new hip or tumour film is a new case
   else {
     if (i < 0) i = Q.films.findIndex(x => !x.img || x.fv === 'pending');
@@ -341,15 +361,19 @@ function commitFilm(img, name, fv, src, scout, wb = false, ball = null) {
     Q.cur = i;
   }
   Q.sel = -1; Q.tmp = []; Q.tool = null;
-  let lo = img.wc - img.ww / 2, w = img.ww;
-  if (img.ww >= 0.95 * (img.max - img.min)) {   // a window over the whole range shows a flat grey film: 1st to 99th percentile
-    const d = img.data, step = Math.max(1, Math.floor(d.length / 200000)), smp = [];
-    for (let j = 0; j < d.length; j += step) smp.push(d[j]);
-    smp.sort((a, b) => a - b); const a = smp[Math.floor(smp.length * 0.01)], b = smp[Math.floor(smp.length * 0.99)]; lo = a; w = Math.max(1, b - a);
-  }
-  Q.dragTool = null; f.win0 = { lo, w }; f.win = { lo, w }; f.inv = false; paintFilm(f);
+  // the window the film opens with: the file's, or (a window over the whole range shows a flat grey film) the 1st to 99th percentile
+  f.wlFile = img.ww >= 1 ? { c: img.wc, w: img.ww } : null;
+  f.wl0 = img.ww >= 0.95 * (img.max - img.min) || !(img.ww >= 1) ? percentileWindow(img.data) : { c: img.wc, w: img.ww };
+  Q.dragTool = null; f.wl = { ...f.wl0 }; f.invertView = false; f.ref = null; renderFilm(f);
+  if (Q.joint !== 'knee') Q.savedFp = fingerprint();   // a new hip, tumour or PFNA film is a new case: nothing on it is unsaved
   $('open').hidden = true; resize(); fit(); syncUI();
+  if (sizable()) { f.stitch = stitchFromMeta(img.meta); if (f.stitch) f.wb = true; }   // from the header only: set before a draft restore returns early (Fable, PR 7)
+  if (offerDraft()) return;   // the scale comes back with the draft: no ball search
   if (!sizable()) { msg(refText()); return; }
+  // a joined film (stitch.js, 4 Nov 2026): recognised from its own header by any path it came; its scale is its anchor film's own
+  // ball or known length carried into its pixels; the warning stays on screen while it is open (DESIGN-2026-11-04-stitching.md)
+  f.stitch = stitchFromMeta(img.meta);
+  if (f.stitch) { f.cal = stitchCal(f.stitch); f.wb = true; msg(''); syncUI(); draw(); if (f.cal) startSheet(); return; }
   if (f.src === 'ct') {   // a scout: the scanner's scale at once, or why there is none (no ball search on a CT)
     f.cal = ctScanScale(f);
     if (f.cal) { msg("Scale from the CT scanner (the scout's Pixel Spacing): no ball needed."); syncUI(); draw(); startSheet(); }
@@ -362,14 +386,6 @@ function commitFilm(img, name, fv, src, scout, wb = false, ball = null) {
 // copies waiting for their tap: no other film until they are placed or undone (Astra q2 P2)
 // Q.pendCopy: the side whose copies still wait for their tap (kept apart from the tool, saved and restored by Undo; Astra q2
 // recheck P2); while it is set no other film, tool, scale change or Sizes card
-// 6 Nov 2026: the film's picture from its window (W, 0) and invert (F11), the viewer's keys; display only
-let wlRaf = 0;
-function paintFilm(f) {
-  const img = f.img, off = f.off || document.createElement('canvas'); off.width = img.cols; off.height = img.rows;
-  const oc = off.getContext('2d'), id = oc.createImageData(img.cols, img.rows), px = id.data, k = 255 / f.win.w;
-  for (let j = 0, n = img.cols * img.rows; j < n; j++) { let v = (img.data[j] - f.win.lo) * k; v = v < 0 ? 0 : v > 255 ? 255 : v; if (!!img.invert !== f.inv) v = 255 - v; px[4 * j] = px[4 * j + 1] = px[4 * j + 2] = v; px[4 * j + 3] = 255; }
-  oc.putImageData(id, 0, 0); f.off = off;
-}
 function copyPending() { if (!Q.pendCopy) return false; Q.tool = 'mirrorTo'; msg(`First tap the ${SIDE[Q.pendCopy]} ${Q.joint} to put the copies there, or Undo.`); syncUI(); return true; }
 function switchFilm(i) {
   if (i === Q.cur || !Q.films[i] || !Q.films[i].img) return;
@@ -516,12 +532,28 @@ function shareSize(it) {
 // the parts on the other films for this side: a new placement here starts from them (the lateral from the AP's sizes)
 function pairKeep(side) { const k = {}; for (const o of pairFilms().reverse()) for (const it of o.items) if (it.side === side) k[kindOf(it)] = it; return k; }
 const fromOther = it => !!it && pairFilms().some(o => o.items.includes(it));
+// the shell's axis on a stem: from the neck toward the head and on to the dome (the planner's bipAxis); the shell's outer centre goes
+// on the tap (the native head centre) and the stem's head centre on the shell's head centre (the planner places the stem by the
+// shell the same way). Without a stem the dome points up and in. Image: x right, y down; local +y is the dome.
+const stemOfSide = side => Q.items.find(it => it.side === side && kindOf(it) === 'stem') || null;
+function stemAxis(s) {
+  const gm = geomOf(s); if (!gm || !gm.headM || !gm.neckDir) return null;
+  const X = xf(s), H = X(gm.headM), N = X([gm.headM[0] + gm.neckDir[0], gm.headM[1] + gm.neckDir[1]]), d = G.dist(H, N);
+  return d > 1e-9 ? G.mul(G.sub(N, H), 1 / d) : null;
+}
+// movePair: the stem moves onto the shell (a new set); else the shell goes on the stem's head (a shell added to a stem already there)
+function bipSeat(b, s, movePair) {
+  const u = (s && stemAxis(s)) || G.P(latLeft(b.side) ? 0.7071 : -0.7071, -0.7071), ho = (sizeRec(b).headOffset || 0) / mmpp();
+  b.angle = Math.atan2(-u.x, u.y);
+  if (s && !movePair) { const X = xf(s), H = X(geomOf(s).headM); b.x = H.x - u.x * ho; b.y = H.y - u.y * ho; b.flip = s.flip; }
+  else if (s && movePair) { s.x = b.x + u.x * ho; s.y = b.y + u.y * ho; }
+}
 function placeAt(ip) {
-  const kinds = Q.placeKinds || SLOTS[Q.joint];
+  const kinds = Q.placeKinds || slotsOf(Q.joint);
   snap();
   const side = Q.side, keep = pairKeep(side);
   for (const it of Q.items) if (it.side === side) keep[kindOf(it)] = it;
-  Q.items = Q.items.filter(it => !(it.side === side && kinds.includes(kindOf(it))));
+  Q.items = Q.items.filter(it => !(it.side === side && (kinds.includes(kindOf(it)) || (Q.joint === 'hip' && kinds.some(k => k === 'cup' || k === 'bipolar') && (kindOf(it) === 'cup' || kindOf(it) === 'bipolar')))));   // a hip has a cup or a shell, never both
   const fromPair = kinds.map(k => keep[k]).find(fromOther), pairName = fromPair && VIEW[pairFilms().find(o => o.items.includes(fromPair)).fv];
   const placed = [];
   if (Q.joint === 'pfna') {
@@ -537,13 +569,19 @@ function placeAt(ip) {
       : Q.frac && side !== Q.frac ? ` When it fits, Copy ⇄ puts it on the ${SIDE[Q.frac]} fracture side.` : '';
     msg(`${wideWarn(Q.img.cols > 1.3 * Q.img.rows, ip.x < Q.img.cols / 2, side)}${nextStep ? `${SIDE[side][0].toUpperCase() + SIDE[side].slice(1)} hip (${fracWord(side)}). ` : ''}Turn the nail (green ⟳ handle) so its shaft runs down the middle of the canal; drag the blade along its line so its outer end is at the lateral cortex. − + nail size; Add: blade length and the femoral head (tip-apex distance).${nextStep}`);
   } else if (Q.joint === 'hip') {
-    const cf = kinds.includes('cup') && startFam('cup'), sf = kinds.includes('stem') && startFam('stem'), fl = hipFlip(side);
+    const cf = kinds.includes('cup') && startFam('cup'), bf = kinds.includes('bipolar') && startFam('bipolar'), sf = kinds.includes('stem') && startFam('stem'), fl = hipFlip(side);
     // a start only, the same on every film (a femoral head's edge on a phone picture is too faint to size it from): the user sizes it
     const c50 = cf ? sizesOf(cf).reduce((a, z) => (Math.abs(parseFloat(z.size) - CUP_START_MM) < Math.abs(parseFloat(a.size) - CUP_START_MM) ? z : a)).size : null;
     if (cf) { const c = newItem(cf, side, ip, keep.cup && keep.cup.fam === cf.id ? keep.cup.size : c50); c.flip = fl; c.angle = (fl ? -1 : 1) * G.rad(CUP_START_DEG); placed.push(c); }   // as r43 autoCup: the face opens down and out, the dome up and in
-    if (sf) { const s = newItem(sf, side, ip, keep.stem && keep.stem.fam === sf.id ? keep.stem.size : null); s.flip = fl; placed.push(s); }
+    let sPlaced = null;
+    if (sf) { const s = newItem(sf, side, ip, keep.stem && keep.stem.fam === sf.id ? keep.stem.size : null); s.flip = fl; placed.push(s); sPlaced = s; }
+    if (bf) {   // the bipolar shell: sized from the femoral head circle when it is marked, else a middle size; the stem, if any, goes on its head
+      const hc = headC(side), list = sizesOf(bf, side), size = keep.bipolar && keep.bipolar.fam === bf.id ? keep.bipolar.size : hc ? bipNearest(list, 2 * hc.r * mmpp()).size : list[Math.floor((list.length - 1) / 2)].size;
+      const b = newItem(bf, side, ip, size); b.flip = fl; bipSeat(b, sPlaced || stemOfSide(side), !!sPlaced); placed.unshift(b);
+    }
     const wide = Q.img.cols > 1.3 * Q.img.rows, onLeft = ip.x < Q.img.cols / 2;
-    msg(`${wideWarn(wide, onLeft, side)}${cf && sf ? 'Drag the cup onto the socket and the stem down the canal.' : `Drag the ${cf ? 'cup onto the socket' : 'stem down the canal'}.`} Tap an implant to pick it; − + size, the green ⟳ handle turns it.`);
+    const bz = bf && placed.find(it => kindOf(it) === 'bipolar'), bh = bz ? bipInnerHead(bf, sizeRec(bz)).diameter : 0;
+    msg(`${wideWarn(wide, onLeft, side)}${bf ? `${sf ? 'Drag the shell onto the femoral head and the stem down the canal.' : 'Drag the shell onto the femoral head.'} Shell ${bz.size} takes the ${bh} mm head; − + change the shell and its head follows. ` : cf && sf ? 'Drag the cup onto the socket and the stem down the canal.' : `Drag the ${cf ? 'cup onto the socket' : 'stem down the canal'}.`} Tap an implant to pick it; − + size, the green ⟳ handle turns it.`);
   } else {
     const keepF = keep['tka-femur'], ff = kinds.includes('tka-femur') ? (fromOther(keepF) ? Q.fam[keepF.fam] : startFam('tka-femur')) : null;
     const femNow = ff || (Q.items.find(it => it.side === side && kindOf(it) === 'tka-femur') && Q.fam[Q.items.find(it => it.side === side && kindOf(it) === 'tka-femur').fam]);
@@ -578,6 +616,7 @@ function setSize(v) { const it = Q.items[Q.sel]; if (!it || it.size === v) retur
 function afterSize(it) {
   let lost = '';
   if (it.stem && !stemRec(it)) { lost = `The stem was removed: size ${it.size} does not take it on the maker's sheet. `; it.stem = null; }   // (Fable q5 P3)
+  if (kindOf(it) === 'bipolar') { const st = stemOfSide(it.side), g = st ? bipGap(it, st) : null; if (g !== null && g <= 4) { const gm = geomOf(st), d = G.sub(xf(it)([0, 0]), xf(st)(gm.headM)); st.x += d.x; st.y += d.y; } }   // a new shell size has its own head offset: the stem's head stays on the shell's head (the planner keeps the centre of rotation the same way)
   shareSize(it); msg(lost);
   const re = pairFilms().filter(o => o.items.some(x => x.recheck));
   if (re.length) msg(`${lost}Same size on the ${re.map(o => VIEW[o.fv]).join(' and ')}: check its fit there.`);
@@ -609,7 +648,7 @@ function mirror() {
   const made = [], swapNote = [];
   for (const it of src) {
     const k = kindOf(it), c = { ...it, side: to, x: 2 * mx - it.x, angle: -it.angle, recheck: false };
-    if (k === 'cup' || k === 'stem' || k === 'nail') c.flip = !it.flip;   // a knee femur takes the other side's own outline; the tray is the same both sides
+    if (k === 'cup' || k === 'bipolar' || k === 'stem' || k === 'nail') c.flip = !it.flip;   // a knee femur takes the other side's own outline; the tray is the same both sides
     if (k === 'nail') { const sw = sideNail(Q.fam[it.fam], sizeRec(it), to); if (sw.size !== it.size) { c.size = sw.size; if (sw.note) swapNote.push(sw.note); } }
     Q.items.push(c); made.push(c);
   }
@@ -622,7 +661,7 @@ function mirror() {
 // the mirrored copies moved together so their anchor (the cup's centre, else the stem's head; the femur's joint line) is on the tap
 function mirrorTo(ip) {
   const to = Q.pendCopy || Q.side, its = Q.items.filter(it => it.side === to); if (!its.length) { Q.tool = null; Q.pendCopy = null; syncUI(); return; }
-  const a = its.find(it => kindOf(it) === 'cup' || kindOf(it) === 'tka-femur') || its[0], dx = ip.x - a.x, dy = ip.y - a.y;
+  const a = its.find(it => kindOf(it) === 'cup' || kindOf(it) === 'bipolar' || kindOf(it) === 'tka-femur') || its[0], dx = ip.x - a.x, dy = ip.y - a.y;
   for (const it of its) { it.x += dx; it.y += dy; }
   Q.side = to; Q.tool = null; Q.pendCopy = null; msg(`Placed on the ${SIDE[to]} ${Q.joint === 'pfna' ? 'hip' : Q.joint}. Drag to fine-tune; − + change the size of the one picked.${Q.joint === 'pfna' ? ' Add: this side\'s femoral head for its tip-apex distance.' : ''}`); syncUI(); draw();
 }
@@ -637,7 +676,7 @@ function flipLat() {
 function reflip() {
   if (F().fv === 'lat') return;
   for (const it of Q.items) {
-    const k = kindOf(it), f = k === 'cup' || k === 'stem' || k === 'nail' ? hipFlip(it.side) : kneeFlip();
+    const k = kindOf(it), f = k === 'cup' || k === 'bipolar' || k === 'stem' || k === 'nail' ? hipFlip(it.side) : kneeFlip();
     if (f !== it.flip) { it.flip = f; it.angle = -it.angle; }
   }
 }
@@ -651,6 +690,7 @@ function hitItem(ip) {
   for (const i of order) {
     const it = Q.items[i], gm = geomOf(it); if (!gm || !gm.rings) continue; const X = xf(it), poly = gm.rings[0].map(X);
     if (kindOf(it) === 'cup') { const r = (sizeRec(it).outerDiameter || 50) / 2 / mmpp(); if (G.dist(ip, X([0, 0])) <= r + tol) return i; continue; }
+    if (kindOf(it) === 'bipolar') { const r = (sizeRec(it).outerDiameter || 46) / 2 / mmpp(); if (G.dist(ip, G.P(it.x, it.y)) <= r + tol) return i; continue; }
     if (inPoly(ip, poly) || nearPoly(ip, poly, tol)) return i;
     if (kindOf(it) === 'stem' && gm.headM && G.dist(ip, X(gm.headM)) <= 16 / mmpp() + tol) return i;
   }
@@ -661,8 +701,14 @@ function nearPoly(p, poly, tol) { for (let i = 0; i < poly.length; i += 3) if (G
 const sp = e => { const r = cv.getBoundingClientRect(); return G.P(e.clientX - r.left, e.clientY - r.top); };
 cv.addEventListener('pointerdown', e => {
   if (!Q.img) return; cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, sp(e));
-  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; gest = { mode: 'pinch', d0: G.dist(a, b) || 1, s0: Q.view.s, m0: G.mid(a, b), ip0: toI(G.mid(a, b)) }; return; }
+  if (ptrs.size === 2) {   // two fingers: pinch zooms the film; a clear twist (little change in the spread) turns the picked implant
+    const [a, b] = [...ptrs.values()], si = Q.items[Q.sel];
+    gest = { mode: 'pinch', d0: G.dist(a, b) || 1, s0: Q.view.s, m0: G.mid(a, b), ip0: toI(G.mid(a, b)), th0: Math.atan2(b.y - a.y, b.x - a.x), tw: si && !Q.tool && mmpp() ? 'idle' : 'off', it: si || null, ang0: si ? si.angle : 0 }; return;
+  }
   const p = sp(e), ip = toI(p);
+  // the full planner's window drag: right button or Shift + drag; and, on a touch screen, Levels mode (the Image panel) with one finger
+  if (e.button === 2 || (e.button === 0 && e.shiftKey && !Q.tool) || (Q.levelsMode && !Q.tool)) { if (F().wl) gest = { mode: 'wl', p0: p, wl0: { ...F().wl } }; return; }
+  if (e.button === 1) { gest = { mode: 'pan', p0: p, last: p }; return; }
   if (Q.tool) { gest = { mode: 'tap', p0: p, last: p }; return; }
   const sel = Q.items[Q.sel], H = sel && handleOf(sel);
   if (H && G.dist(p, H.h) <= 24) { gest = { mode: 'turn', p0: p, snapped: false }; return; }
@@ -671,19 +717,26 @@ cv.addEventListener('pointerdown', e => {
   if (bh >= 0) { Q.sel = bh; Q.side = Q.items[bh].side; const it = Q.items[bh]; gest = { mode: 'blade', p0: p, ip0: ip, s0: slideOf(it), snapped: false }; syncUI(); draw(); return; }
   const h = mmpp() ? hitItem(ip) : -1;
   if (h >= 0) { Q.sel = h; Q.side = Q.items[h].side; const it = Q.items[h]; gest = { mode: 'drag', p0: p, off: G.sub(ip, G.P(it.x, it.y)), snapped: false }; syncUI(); draw(); return; }
-  gest = { mode: Q.dragTool || 'pan', p0: p, last: p, win: F().win ? { ...F().win } : null };
+  gest = Q.dragTool === 'wl' && F().wl ? { mode: 'wl', p0: p, wl0: { ...F().wl } } : { mode: Q.dragTool === 'zoom' ? 'zoom' : 'pan', p0: p, last: p, moved: false };   // W, M, Z: the viewer's keys (6 Nov 2026)
 });
 cv.addEventListener('pointermove', e => {
   if (!ptrs.has(e.pointerId) || !gest) return; ptrs.set(e.pointerId, sp(e)); const p = sp(e);
+  if (gest.mode === 'wl') { const n = wlDrag(gest.wl0, p.x - gest.p0.x, p.y - gest.p0.y); F().wl = n; relevel(); return; }
   if (gest.mode === 'pinch' && ptrs.size >= 2) {
     const [a, b] = [...ptrs.values()], m = G.mid(a, b), r = cv.getBoundingClientRect(), base = Math.min(r.width / Q.img.cols, r.height / Q.img.rows);
+    if (gest.tw !== 'off') {
+      let dth = Math.atan2(b.y - a.y, b.x - a.x) - gest.th0; dth = Math.atan2(Math.sin(dth), Math.cos(dth));   // wrapped to +-180 degrees
+      const spread = Math.abs(Math.log((G.dist(a, b) || 1) / gest.d0));
+      if (gest.tw === 'idle' && Math.abs(dth) > G.rad(10) && spread < 0.12) { gest.tw = 'rotate'; snap(); }   // one Undo step for the whole twist
+      else if (gest.tw === 'idle' && spread >= 0.12) gest.tw = 'zoom';
+      if (gest.tw === 'rotate') { gest.it.angle = gest.ang0 + dth; gest.it.recheck = false; draw(); return; }
+    }
     const s = Math.min(base * 40, Math.max(base * 0.5, gest.s0 * G.dist(a, b) / gest.d0));
     Q.view = { s, tx: m.x - gest.ip0.x * s, ty: m.y - gest.ip0.y * s }; draw(); return;
   }
   if (gest.mode === 'tap' && G.dist(p, gest.p0) > 10) gest.mode = 'pan';
-  if (gest.mode === 'wl') { const f = F(), w0 = gest.win; if (w0) { const w = Math.max(1, w0.w * Math.exp((p.x - gest.p0.x) / 200)), c = w0.lo + w0.w / 2 - (p.y - gest.p0.y) * w0.w / 400; f.win = { lo: c - w / 2, w }; if (!wlRaf) wlRaf = requestAnimationFrame(() => { wlRaf = 0; paintFilm(f); draw(); }); } return; }
   if (gest.mode === 'zoom') { zoomAt(gest.p0, Math.exp((gest.last.y - p.y) / 150)); gest.last = p; return; }
-  if (gest.mode === 'pan') { Q.view.tx += p.x - gest.last.x; Q.view.ty += p.y - gest.last.y; gest.last = p; draw(); return; }
+  if (gest.mode === 'pan') { if (G.dist(p, gest.p0) > 8) gest.moved = true; Q.view.tx += p.x - gest.last.x; Q.view.ty += p.y - gest.last.y; gest.last = p; draw(); return; }
   if (gest.mode === 'turn') {
     const it = Q.items[Q.sel]; if (!it) return;
     if (!gest.snapped && G.dist(p, gest.p0) > 3) { snap(); gest.snapped = true; }
@@ -707,7 +760,12 @@ cv.addEventListener('pointermove', e => {
 });
 const endPtr = e => {
   if (!ptrs.has(e.pointerId)) return; ptrs.delete(e.pointerId);
-  if (gest && gest.mode === 'pinch') { gest = ptrs.size === 1 ? { mode: 'pan', p0: [...ptrs.values()][0], last: [...ptrs.values()][0] } : null; return; }
+  if (gest && gest.mode === 'pinch') { const twisted = gest.tw === 'rotate'; gest = ptrs.size === 1 ? { mode: 'pan', p0: [...ptrs.values()][0], last: [...ptrs.values()][0], moved: true } : null; if (twisted) syncUI(); return; }
+  if (gest && gest.mode === 'wl' && e.type === 'pointerup') msg(lvText());
+  if (gest && gest.mode === 'pan' && !gest.moved && e.type === 'pointerup' && !Q.tool && G.dist(sp(e), gest.p0) < 8) {   // a double tap (or double click) on the bare film: fit, or zoom in there
+    const now = performance.now(), q = sp(e);
+    if (lastTap && now - lastTap.t < 350 && G.dist(q, lastTap.p) < 30) { lastTap = null; doubleTap(q); } else lastTap = { t: now, p: q };
+  }
   if (gest && gest.mode === 'tap' && e.type === 'pointerup') toolTap(toI(sp(e)));
   if (gest && gest.mode === 'turn' && gest.snapped) syncUI();
   if (gest && gest.mode === 'point' && gest.snapped) msg(pointText(gest.ref));
@@ -715,6 +773,12 @@ const endPtr = e => {
   if (!ptrs.size) gest = null;
 };
 cv.addEventListener('pointerup', endPtr); cv.addEventListener('pointercancel', endPtr);
+cv.addEventListener('contextmenu', e => e.preventDefault());   // right-drag is the window drag, as in the full planner
+let lastTap = null;
+function doubleTap(q) {
+  const r = cv.getBoundingClientRect(), base = Math.min(r.width / Q.img.cols, r.height / Q.img.rows);
+  if (Q.view.s > base * 1.15) fit(); else zoomAt(q, 2.5);
+}
 cv.addEventListener('wheel', e => { e.preventDefault(); zoomAt(sp(e), Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
 // Sami, 31 Oct 2026: "adjusting measurements should be easy": every point of a ruler, the leg-length marks and the valgus
 // taps is dragged where it belongs; the length or angle is redone at once (Undo brings the old point back)
@@ -991,14 +1055,11 @@ function stemSheet() {
   });
 }
 
-// ---------------------------------------------------------------- knee types (q5, as the full planner's r43 KNEE_TYPES)
-const KNEE_TYPES = [
-  { id: 'primary', label: 'Primary' },
-  { id: 'cck', label: 'CCK (constrained condylar)', fem: 'chunli-cck-femur', tib: 'chunli-cck-tibia' },
-  { id: 'ldk', label: 'Hinge (LDK XR)', fem: 'ldk-xr-femur', tib: 'ldk-xr-tibia' }];
-const KT_PAIR = new Set(KNEE_TYPES.flatMap(k => (k.fem ? [k.fem, k.tib] : [])));
+// ---------------------------------------------------------------- knee types (q5, as the full planner's r43 KNEE_TYPES_Q)
+// the full planner's table, without the tumour pairs (PTR, DFR are Quick's separate Tumour case); not a second table
+const KNEE_TYPES_Q = KNEE_TYPES.filter(k => !k.tumour), KT_PAIR_Q = ktPairOf(KNEE_TYPES_Q);
 const ktHeld = k => (k.fem ? !!(Q.fam[k.fem] && Q.fam[k.tib]) : true);
-const ktNow = () => { const id = Q.choice['tka-femur']; return (KNEE_TYPES.find(k => k.fem === id) || KNEE_TYPES[0]).id; };
+const ktNow = () => { const id = Q.choice['tka-femur']; return (KNEE_TYPES_Q.find(k => k.fem === id) || KNEE_TYPES_Q[0]).id; };
 
 // ---------------------------------------------------------------- tumour sets (q5)
 // Sami, 31 Oct 2026: "ADD TUMORS", "All tumour sets". The full planner's rules (r22-r44), ported: the resection comes only from
@@ -1017,12 +1078,8 @@ const TUM_SETS = {
 const tumSetOk = k => { const s = TUM_SETS[k]; return k === 'dia' ? Object.values(Q.fam).some(f => f.range === 'ao-tumour' || f.rangeOwn === 'ao-tumour') : [s.body, s.body2, s.partner].filter(Boolean).every(id => Q.fam[id]); };
 const isTumBody = f => !!(f && f.sizes && f.sizes[0] && Number.isFinite(f.sizes[0].reconstructionMm));
 const isGtBody = f => !!(f && (f.tumour === 'pfr' || f.tumour === 'phr'));
-const tumBodyLen = z => (Number.isFinite(z.bodyLengthMm) ? z.bodyLengthMm : z.reconstructionMm - (z.extensionMm || 0));
-const fmm = x => (Number.isFinite(x) ? String(Math.round(x * 100) / 100) : '-');
-const tumParts = (z, c) => { const g = Number.isFinite(z.junctionGapMm) ? ` + gap ${z.junctionGapMm}` : '';
-  return `${fmm(tumBodyLen(z))}${g}${z.extensionMm ? ` + extension ${z.extensionMm}${g}` : ''} + collar ${c === null ? 'c' : c}`; };
-const collarsOf = it => { const sf = stemFamOf(it); return sf ? [...new Set(sf.sizes.map(q => q.collarMm).filter(Number.isFinite))].sort((a, b) => a - b) : []; };
-const tumCollar = it => { const s = stemRec(it); return s && Number.isFinite(s.collarMm) ? s.collarMm : Number.isFinite(it.c) ? it.c : null; };
+const collarsOf = it => collarList(stemFamOf(it));
+const tumCollar = it => collarMm(stemRec(it), it.c);
 const bodyNo = size => String(size).split('-')[0];
 function partName(it) {
   const f = Q.fam[it.fam]; if (!f) return '';
@@ -1066,7 +1123,7 @@ function tumOptionsQ(it, sPlan) {   // every length (same body number for a knee
 const tumBodies = () => Q.items.filter(it => isTumBody(Q.fam[it.fam]));
 const roleOf = it => it.role || 'p';
 function tumSheet() {
-  const t = F().tp || (F().tp = { set: '', src: '', ext: '', mg: '', ext2: '', mg2: '', near: '', far: '', body: '2', head: '' });
+  const t = F().tp || (F().tp = { ...TP_BLANK });
   const sets = Object.keys(TUM_SETS).filter(tumSetOk), set = TUM_SETS[t.set] ? t.set : '';
   if (!sets.length) { msg('No Addis Ortho tumour range is open to your account. Ask Addis Ortho to open it.'); return; }
   const knee = set === 'dfr' || set === 'ptr' || set === 'tf', bodyF = set && TUM_SETS[set].body2 ? Q.fam[TUM_SETS[set].body2] : set && TUM_SETS[set].body ? Q.fam[TUM_SETS[set].body] : null;
@@ -1165,7 +1222,6 @@ function diaLevels() {
   const at = s => G.add(D.ref, G.mul(u, s / mmpp()));
   return { u, at, ok, near, far, mg, s1: ok ? near - mg : null, s2: ok ? far + mg : null };
 }
-const DIA_TYPES = { III: [40, 165], VI: [50, 310] };   // Chunli, Segmental Bone Defect Prosthesis, slides 18-19 (as app.js DIA_TYPES)
 function tumRowsQ() {
   const R = [], t = F().tp || {}, set = TUM_SETS[t.set]; if (!set) return R;
   const b0 = tumBodies()[0]; R.push([set.label, `${SIDE[b0 ? b0.side : Q.side]} side`]);   // the placed parts' side, never the header button's (Fable q5 recheck P3)
@@ -1173,7 +1229,7 @@ function tumRowsQ() {
     const L = diaLevels();
     if (!L) { R.push(['Levels', 'not measured: tap the joint line and the shaft axis', 'warn']); return R; }
     if (!L.ok) { R.push(['Resection', 'not planned: enter MRI or CT, the near and far ends (far beyond near) and the margin', 'warn']); return R; }
-    const D = L.s2 - L.s1, ty = Object.entries(DIA_TYPES).filter(([, r]) => D >= r[0] && D <= r[1]).map(([k]) => 'Type ' + k);
+    const D = L.s2 - L.s1, ty = Object.entries(DIA_TYPES).filter(([, T]) => D >= T.defect[0] && D <= T.defect[1]).map(([k]) => 'Type ' + k);
     R.push(['Tumour', `${fmm(L.near)} to ${fmm(L.far)} mm from the joint line tapped, from the ${t.src} (entered by the surgeon)`]);
     R.push(['Osteotomies', `${fmm(L.s1)} and ${fmm(L.s2)} mm from that joint line, along the shaft axis tapped (margin ${fmm(L.mg)} mm each end)`, L.s1 < 0 ? 'warn' : '']);
     R.push(['Defect length', `${fmm(D)} mm`]);
@@ -1249,6 +1305,7 @@ function tumScene(c, T, k, line, tag) {
 // ---------------------------------------------------------------- the panel and the sheets
 function msg(t) { $('msg').textContent = t || ''; }
 function syncUI() {
+  syncSaveUI();
   for (const [id, j] of [['jHip', 'hip'], ['jKnee', 'knee'], ['jTum', 'tumour'], ['jPfna', 'pfna']]) $(id).setAttribute('aria-pressed', String(Q.joint === j));
   for (const [id, s] of [['sR', 'R'], ['sL', 'L']]) $(id).setAttribute('aria-pressed', String(Q.side === s));
   // the knee's films: AP, Lateral, Other (skyline, long leg); one on screen at a time
@@ -1275,31 +1332,37 @@ function syncUI() {
   sc.hidden = !sizable(); sc.classList.toggle('bad', sizable() && !Q.cal);
   $('zoom').hidden = !Q.img || !$('pad').hidden;
   if (sizable() && !Q.cal && F().src === 'ct') sc.textContent = 'CT scout: no scanner scale ✎';
+  if (sizable() && Q.cal && Q.cal.how === 'stitched') sc.textContent = `Joined film: ${Q.cal.method === 'ball' ? `ball ${Q.cal.ballD} mm` : 'known length'}${Q.cal.stitch ? ` of film ${Q.cal.stitch.anchor + 1}` : ''} ✎`;
+  const sw = $('stitchWarn'), sr = Q.img && F().stitch;
+  if (sw) { sw.hidden = !sr; if (sr) { const st = stitchStatus(sr); sw.className = st.level; sw.textContent = `${stitchWarning(sr)} ${stitchScaleLine(sr)}${st.reasons.length ? ` Check: ${st.reasons.join('; ')}.` : ''}`; } }
 }
 function sheet(html, bind) { $('sheetCard').innerHTML = html; $('sheet').hidden = false; $('sheet').dataset.modal = ''; if (bind) bind($('sheetCard')); }
 const closeSheet = () => { $('sheet').hidden = true; };
 $('sheet').addEventListener('click', e => { if (e.target === $('sheet') && !$('sheet').dataset.modal) closeSheet(); });   // the film card is answered, not dismissed
-const opts = (kind, cur, range) => famsOf(kind).filter(f => !range || f.range === range).filter(f => Q.joint !== 'knee' || (ktNow() === 'primary' ? !KT_PAIR.has(f.id) : KT_PAIR.has(f.id) && KNEE_TYPES.find(k => k.id === ktNow())[kind === 'tka-femur' ? 'fem' : 'tib'] === f.id)).map(f => `<option value="${esc(f.id)}"${f.id === cur ? ' selected' : ''}>${esc(f.label)}</option>`).join('');
+const opts = (kind, cur, range) => famsOf(kind).filter(f => !range || f.range === range).filter(f => Q.joint !== 'knee' || (ktNow() === 'primary' ? !KT_PAIR_Q.has(f.id) : KT_PAIR_Q.has(f.id) && KNEE_TYPES_Q.find(k => k.id === ktNow())[kind === 'tka-femur' ? 'fem' : 'tib'] === f.id)).map(f => `<option value="${esc(f.id)}"${f.id === cur ? ' selected' : ''}>${esc(f.label)}</option>`).join('');
 function startSheet() {
   if (!sizable()) { msg(refText()); return; }
   if (Q.joint === 'tumour') { tumSheet(); return; }
   if (Q.joint === 'pfna') { pfnaSheet(); return; }
-  const hip = Q.joint === 'hip', k1 = hip ? 'cup' : 'tka-femur', k2 = hip ? 'stem' : 'tka-tibia', f1 = startFam(k1), f2 = hip ? startFam(k2) : f1 ? trayFamFor(f1) : startFam(k2);
+  if (Q.joint === 'hip' && Q.hemi && !bipAvail()) Q.hemi = false;   // no bipolar range open to this account
+  const hip = Q.joint === 'hip', k1 = hip ? (Q.hemi ? 'bipolar' : 'cup') : 'tka-femur', k2 = hip ? 'stem' : 'tka-tibia', f1 = startFam(k1), f2 = hip ? startFam(k2) : f1 ? trayFamFor(f1) : startFam(k2);
   if (!f1 && !f2) { msg(`No ${hip ? 'hip' : 'knee'} implant range is open to your account.`); return; }
   sheet(`<h2>What are we templating?</h2>
     <label class="f">Side of surgery</label><div class="choice"><button data-s="R" aria-pressed="${Q.side === 'R'}">Right</button><button data-s="L" aria-pressed="${Q.side === 'L'}">Left</button></div>
-    ${hip ? '' : `<label class="f">Knee type</label><div class="choice wrap">${KNEE_TYPES.filter(ktHeld).map(k => `<button data-kt="${k.id}" aria-pressed="${ktNow() === k.id}">${esc(k.label)}</button>`).join('')}</div>
+    ${hip && bipAvail() ? `<label class="f">Procedure</label><div class="choice"><button data-hemi="0" aria-pressed="${!Q.hemi}">Total hip (cup)</button><button data-hemi="1" aria-pressed="${Q.hemi}">Bipolar (hemi)</button></div>` : ''}
+    ${hip ? '' : `<label class="f">Knee type</label><div class="choice wrap">${KNEE_TYPES_Q.filter(ktHeld).map(k => `<button data-kt="${k.id}" aria-pressed="${ktNow() === k.id}">${esc(k.label)}</button>`).join('')}</div>
       <p class="note">CCK and the hinge take stems: pick the part, then Add, then Stem. Tumour knees (DFR, PTR): Tumour at the top.</p>`}
-    <label class="f">${hip ? 'Cup' : 'Femur'}</label><select id="c1">${opts(k1, f1 && f1.id)}</select>
+    <label class="f">${hip ? (Q.hemi ? 'Bipolar shell' : 'Cup') : 'Femur'}</label><select id="c1">${opts(k1, f1 && f1.id)}</select>
     <label class="f">${hip ? 'Stem' : 'Tray'}</label><select id="c2">${opts(k2, f2 && f2.id, hip || !f1 ? null : f1.range)}</select>
     ${Q.cal && Q.cal.method === 'ct' ? '<p class="note">Scale: the CT scanner\'s, from the scout\'s header (no ball).</p>' : ballField('sBallD')}
     ${Q.orientHint && !Q.mirrored ? `<p class="warn">The ${esc(Q.orient)} suggest${/, /.test(Q.orient) ? '' : 's'} this film is mirrored (the patient's right on the image right), if it shows both hips. <button class="go alt" id="setMir">Set the film as mirrored</button></p>` : Q.orient ? `<p class="note">Film: ${esc(Q.orient)}; ${Q.mirrored ? 'set as mirrored' : 'standard (the patient\'s right on the image left)'}.</p>` : ''}
     <button class="go" id="goPlace">Tap the ${hip ? 'hip' : 'knee'} on the X-ray</button>`, card => {
-    card.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { Q.side = b.dataset.s; syncUI(); startSheet(); });
+    card.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { Q.side = b.dataset.s; syncHemi(); syncUI(); startSheet(); });
+    card.querySelectorAll('[data-hemi]').forEach(b => b.onclick = () => { Q.hemi = b.dataset.hemi === '1'; startSheet(); });
     card.querySelectorAll('[data-kt]').forEach(b => b.onclick = () => {   // a type sets the femur and the tray as one pair
-      const kt = KNEE_TYPES.find(k => k.id === b.dataset.kt);
+      const kt = KNEE_TYPES_Q.find(k => k.id === b.dataset.kt);
       if (kt.fem) { Q.choice['tka-femur'] = kt.fem; Q.choice['tka-tibia'] = kt.tib; }
-      else { const p = famsOf('tka-femur').find(f => !KT_PAIR.has(f.id)); if (p) Q.choice['tka-femur'] = p.id; delete Q.choice['tka-tibia']; }
+      else { const p = famsOf('tka-femur').find(f => !KT_PAIR_Q.has(f.id)); if (p) Q.choice['tka-femur'] = p.id; delete Q.choice['tka-tibia']; }
       startSheet();
     });
     card.querySelector('#c1').onchange = e => { Q.choice[k1] = e.target.value; if (!hip) delete Q.choice['tka-tibia']; startSheet(); };
@@ -1315,14 +1378,14 @@ function addSheet() {
   if (!mmpp()) { armPlace(); return; }
   if (!Q.items.some(it => it.side === Q.side)) { startSheet(); return; }
   if (Q.joint === 'pfna') { pfnaAddSheet(); return; }
-  const [a, b] = SLOTS[Q.joint], has = k => Q.items.some(it => it.side === Q.side && kindOf(it) === k);
+  const [a, b] = slotsOf(Q.joint), has = k => Q.items.some(it => it.side === Q.side && kindOf(it) === k);
   sheet(`<h2>Add on the ${SIDE[Q.side]} ${Q.joint}</h2><div class="menu">
     <button data-k="${a},${b}">${KIND[a]} and ${KIND[b]}</button>
     <button data-k="${a}">${KIND[a]} only${has(a) ? ' (replaces this one)' : ''}</button>
     <button data-k="${b}">${KIND[b]} only${has(b) ? ' (replaces this one)' : ''}</button>
     ${Q.items[Q.sel] && stemList(Q.items[Q.sel]).length ? `<button id="aStem">Stem on the picked ${esc(partName(Q.items[Q.sel]))} ${Q.items[Q.sel].side}${stemRec(Q.items[Q.sel]) ? ` (${esc(stemWord(stemRec(Q.items[Q.sel])))})` : ''}</button>` : ''}
     <button id="aSys">Change the implant system or the side</button></div>
-    <p class="note">Then tap the ${Q.joint === 'hip' ? 'femoral head (the cup centre, the stem head)' : 'knee joint line'} on the X-ray.</p>
+    <p class="note">Then tap the ${Q.joint === 'hip' ? (Q.hemi ? 'femoral head (the shell centre, the stem head)' : 'femoral head (the cup centre, the stem head)') : 'knee joint line'} on the X-ray.</p>
     <button class="go alt" id="aClose">Close</button>`, card => {
     card.querySelectorAll('[data-k]').forEach(x => x.onclick = () => { closeSheet(); armPlace(x.dataset.k.split(',')); });
     card.querySelector('#aSys').onclick = startSheet;
@@ -1345,7 +1408,7 @@ function setJoint(j) {
   if (j === Q.joint) return;
   const any = Q.films.some(f => f.items.length), more = Q.films.filter(f => f.img).length > 1;
   if ((any || more) && !confirm(`Start a ${JOINT_WORD[j]} case? ${more ? 'The other films and all' : 'All'} the implants are removed; the film on screen stays.`)) return;
-  const f = F(); Q.joint = j; Q.frac = null; Q.pOn = null; Q.films = [f]; Q.cur = 0; Q.hist = []; Q.sel = -1; Q.tool = null; Q.tmp = []; Q.pendCopy = null;
+  const f = F(); Q.joint = j; Q.hemi = false; Q.frac = null; Q.pOn = null; Q.films = [f]; Q.cur = 0; Q.hist = []; Q.sel = -1; Q.tool = null; Q.tmp = []; Q.pendCopy = null;
   f.items = []; f.rul = []; f.lld = []; f.hd = { R: [], L: [] }; f.vg = []; f.vgSide = ''; if (j !== 'hip' && j !== 'pfna') f.orient = '';
   msg('');
   if (f.img) {
@@ -1356,9 +1419,17 @@ function setJoint(j) {
   if (f.img && sizable() && Q.cal) startSheet(); else if (f.img) msg(refText() || (!Q.cal ? `Tap the ${Q.ballD} mm ball on the X-ray.` : ''));
 }
 function newCase() {
-  if (Q.films.some(f => f.items.length) && !confirm('Start a new case? Every film and implant open now is removed.')) return;
-  Q.films = [blankFilm()]; Q.cur = 0; Q.hist = []; Q.sel = -1; Q.tool = null; Q.tmp = []; Q.label = ''; Q.pendCopy = null; hidePad();
+  if (isDirty() && !confirm('The plan on screen has not been saved and will be lost. Start a new case anyway? (Cancel, then Save, keeps it.)')) return;
+  Q.hemi = false; Q.films = [blankFilm()]; Q.cur = 0; Q.hist = []; Q.sel = -1; Q.tool = null; Q.tmp = []; Q.label = ''; Q.pendCopy = null; Q.savedFp = ''; Q.levelsMode = false; hidePad(); dropDraft();
   $('open').hidden = false; msg(''); syncUI(); draw();
+}
+// "Join films" (4 Nov 2026): the shared sheet (stitchui.js, loaded only now) hands back the joined film as a DICOM file, opened as any film
+async function openJoin() {
+  if (copyPending()) return;
+  try {
+    const UI = await import('./stitchui.js');
+    UI.openStitchSheet({ decodeAny, decodePNG, decodeBitmap, parseDicom, findBalls, detectBall: G.detectBall, ballMm: Q.ballD, onDone: file => openFile(file) });
+  } catch (e) { msg('The join tool could not be loaded: ' + ((e && e.message) || e)); }
 }
 function pickFile(slot) { if (copyPending()) return; Q.pend = slot; $('file').value = ''; $('file').click(); }
 function otherViews() {
@@ -1371,30 +1442,241 @@ function otherViews() {
 }
 // zoom from the buttons and the keyboard: about the middle of the screen
 function zoomBy(k) { if (!Q.img) return; const r = cv.getBoundingClientRect(); zoomAt(G.P(r.width / 2, r.height / 2), k); }
-const SHORTCUTS = [
-  ['L', 'Length (same key in the viewer)'], ['W  /  M  /  Z', 'Dragging on the film sets W/L / pans / zooms (same keys in the viewer)'],
-  ['0', "The film's own W/L"], ['F11', 'Invert'], ['F', 'Full screen'],
-  ['Ctrl+0  /  Ctrl+1', 'Fit the film / actual size (⌘ on a Mac)'], ['Ctrl and +  or  −', 'Zoom (also + and − alone, two fingers, or the mouse wheel)'], ['Ctrl+Shift+\\', 'Reset the view'], ['Ctrl+arrows', 'Move the film'],
-  ['I', 'Add an implant (the whole set or one part)'], ['N  or  Tab', 'Pick the next implant'], ['Shift+R  /  Shift+L', 'Right / left side'],
-  ['↑  or  Page Up', 'Next size up'], ['↓  or  Page Down', 'Next size down'], [',  /  .', 'Turn 0.5° (with Shift 2°)'],
-  ['Shift+arrows', 'Move the picked implant 0.5 mm (with Alt too, 2 mm)'],
-  ['C', 'Copy to the other side (on a lateral: Flip)'], ['V', 'Valgus cut angle (long leg)'], ['S', 'Sizes card'],
-  ['Alt+1  /  2  /  3', 'Knee: AP / Lateral / other views'], ['Delete', 'Remove the picked implant'],
-  ['Ctrl+Z  or  ⌘Z', 'Undo'], ['Esc', 'Close a card, or stop the tap you started'], ['?', 'This list'],
+// ---------------------------------------------------------------- image levels (4 Nov 2026)
+// Sami: brightness and the other image options in Quick, with short commands and on-screen controls. The maths is the full planner's
+// (shared.js): the same 0-100 brightness and contrast, the same window drag. Display only: never part of the plan, never undone by
+// Undo, and a change here never makes the plan "not saved".
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const lvRef = f => f.ref || (f.ref = percentileWindow(f.img.data));
+function renderFilm(f) {
+  const { cols, rows, data } = f.img;
+  if (!f.off) f.off = document.createElement('canvas');
+  f.off.width = cols; f.off.height = rows;
+  const oc = f.off.getContext('2d'), id = oc.createImageData(cols, rows);
+  fillGray(id.data, data, cols * rows, f.wl, f.img.invert !== f.invertView);
+  oc.putImageData(id, 0, 0);
+}
+let lvRaf = 0;
+function relevel() {   // sliders and the window drag: one redraw a frame
+  if (!lvRaf) lvRaf = requestAnimationFrame(() => { lvRaf = 0; const f = F(); if (f.img && f.wl) { renderFilm(f); draw(); } syncImgPanel(); });
+}
+const lvText = (f = F()) => { const v = slidersFromWl(lvRef(f), f.wl); return `Brightness ${v.b}, contrast ${v.c}${f.invertView ? ', inverted' : ''}`; };
+function applyImageOps(ops) {
+  const f = F(); if (!f.img || !f.wl) return 'Open an X-ray first.';
+  let note = '';
+  for (const o of ops) {
+    if (o.op === 'b' || o.op === 'c') { const v = slidersFromWl(lvRef(f), f.wl); v[o.op] = clamp(Math.round(o.rel ? v[o.op] + o.value : o.value), 0, 100); f.wl = wlFromSliders(lvRef(f), v.b, v.c); }
+    else if (o.op === 'i') f.invertView = 'value' in o ? !!o.value : !f.invertView;
+    else if (o.op === 'a') f.wl = { ...lvRef(f) };
+    else if (o.op === 'o') { if (f.wlFile) f.wl = { ...f.wlFile }; else note = 'This picture has no stored window.'; }
+    else if (o.op === 'w') f.wl = { c: o.c, w: Math.max(1, o.w) };
+    else if (o.op === 'z') {
+      const r = cv.getBoundingClientRect(), base = Math.min(r.width / f.img.cols, r.height / f.img.rows);
+      if (o.step) zoomBy(o.step > 0 ? 1.4 : 1 / 1.4); else zoomAt(G.P(r.width / 2, r.height / 2), Math.min(base * 40, Math.max(base * 0.5, base * o.value)) / Q.view.s);
+    }
+    else if (o.op === 'p') { const r = cv.getBoundingClientRect(); Q.view.tx += r.width * o.x / 100; Q.view.ty += r.height * o.y / 100; draw(); }
+    else if (o.op === 'f') fit();
+    else if (o.op === 'r') { f.wl = { ...f.wl0 }; f.invertView = false; fit(); }
+  }
+  renderFilm(f); draw(); syncImgPanel();
+  return note || lvText(f);
+}
+function syncImgPanel() {
+  const f = F(), open = !$('imgp').hidden; $('imgB').setAttribute('aria-pressed', String(open));
+  if (!open || !f.img || !f.wl) return;
+  const v = slidersFromWl(lvRef(f), f.wl), idle = id => document.activeElement !== $(id);
+  if (idle('lvB')) $('lvB').value = v.b; if (idle('lvC')) $('lvC').value = v.c;
+  $('lvInv').setAttribute('aria-pressed', String(f.invertView)); $('lvDrag').setAttribute('aria-pressed', String(!!Q.levelsMode));
+  const raw = !!(f.img.meta && f.img.meta.Modality !== 'picture'); $('lvWin').hidden = !raw;   // window centre and width: a DICOM's own grey units
+  if (raw) { if (idle('lvC0')) $('lvC0').value = Math.round(f.wl.c); if (idle('lvW0')) $('lvW0').value = Math.round(f.wl.w); }
+}
+function toggleImgPanel(show = $('imgp').hidden) { $('imgp').hidden = !show; if (!show) { Q.levelsMode = false; $('cmdMsg').textContent = ''; } syncImgPanel(); }
+function runCommand(text) {
+  const t = String(text).trim().replace(/^[/:]\s*/, '');
+  if (t === '?' || t === 'help') { helpSheet(); return; }
+  const r = parseImageCommand(t);
+  $('cmdMsg').textContent = r.error || applyImageOps(r.ops);
+  if (!r.error) $('cmd').value = '';
+}
+function imageKey(text) { if (!Q.img) return; msg(applyImageOps(parseImageCommand(text).ops)); }
+{
+  const fromSl = () => { const f = F(); if (!f.img || !f.wl) return; f.wl = wlFromSliders(lvRef(f), +$('lvB').value, +$('lvC').value); relevel(); };
+  $('lvB').oninput = fromSl; $('lvC').oninput = fromSl;
+  $('imgB').onclick = () => toggleImgPanel(); $('imgX').onclick = () => toggleImgPanel(false);
+  $('lvInv').onclick = () => { $('cmdMsg').textContent = applyImageOps([{ op: 'i' }]); };
+  $('lvAuto').onclick = () => { $('cmdMsg').textContent = applyImageOps([{ op: 'a' }]); };
+  $('lvFile').onclick = () => { $('cmdMsg').textContent = applyImageOps([{ op: 'o' }]); };
+  $('lvReset').onclick = () => { $('cmdMsg').textContent = applyImageOps([{ op: 'r' }]); };
+  $('lvDrag').onclick = () => { Q.levelsMode = !Q.levelsMode; $('cmdMsg').textContent = Q.levelsMode ? 'Drag on the film: up/down brightness, left/right contrast. Tap again to move implants.' : ''; syncImgPanel(); };
+  $('lvC0').onchange = $('lvW0').onchange = () => { const c = parseFloat($('lvC0').value), w = parseFloat($('lvW0').value); if (Number.isFinite(c) && w > 0) $('cmdMsg').textContent = applyImageOps([{ op: 'w', c, w }]); };
+  $('cmdF').onsubmit = e => { e.preventDefault(); runCommand($('cmd').value); if (window.matchMedia && matchMedia('(pointer: coarse)').matches) $('cmd').blur(); };
+}
+
+// ---------------------------------------------------------------- saving (4 Nov 2026)
+// Sami: in Quick the template is saved when the user saves it, not automatically as in the full planner. Save puts the plan in a
+// file the user keeps (implants, measurements, scale, view; no pixels, no patient details, not even the film's file name). Leaving
+// the page warns only when the plan has changed since it was last saved or opened.
+// The draft (Sami, 4 Nov 2026, "yes"): an iPhone does not show the leave warning, so an UNSAVED plan is also kept on this phone
+// (localStorage, the same content as a plan file) until it is saved, and offered back when the same film is opened again. It is
+// never a save: the marker still reads "Not saved", nothing is downloaded, and it is removed by Save, New case, Discard or after
+// DRAFT_DAYS. tests/sync_test.mjs checks the plan is written nowhere else.
+const TP_BLANK = { set: '', src: '', ext: '', mg: '', ext2: '', mg2: '', near: '', far: '', body: '2', head: '' };
+const tpUsed = tp => !!tp && Object.keys(tp).some(k => String(tp[k] ?? '') !== String(TP_BLANK[k] ?? ''));   // opening the Tumour card is not a plan (Fable, 5 Nov)
+const hasContent = f => !!(f.img && (f.items.length || f.rul.length || f.lld.length || (f.hd && (f.hd.R.length || f.hd.L.length)) || f.vg.length || tpUsed(f.tp) || f.dia));
+const filmData = f => ({ fid: f.fid || undefined, sh: f.stitch ? stitchHash(f.stitch) : undefined, fv: f.fv, src: f.src, scout: !!f.scout, wb: !!f.wb, cols: f.img.cols, rows: f.img.rows, ballD: f.ballD, cal: f.cal, mirrored: !!f.mirrored, orient: f.orient || '', orientHint: !!f.orientHint,
+  items: f.items, rul: f.rul, lld: f.lld, hd: f.hd || { R: [], L: [] }, vg: f.vg, vgSide: f.vgSide || '', tp: tpUsed(f.tp) ? f.tp : null, dia: f.dia || null });
+function planContent() {
+  const films = Q.films.filter(hasContent).map(filmData);
+  return films.length ? { joint: Q.joint, side: Q.side, choice: Q.choice, frac: Q.frac || null, pOn: Q.pOn || null, films } : null;
+}
+const fingerprint = () => { const c = planContent(); return c ? JSON.stringify(c) : ''; };
+function isDirty() { const fp = fingerprint(); return fp !== '' && fp !== Q.savedFp; }   // an empty plan has nothing to lose
+function syncSaveUI() {
+  const has = Q.films.some(hasContent), dirty = isDirty();
+  $('saveB').disabled = !has; $('saveB').classList.toggle('dirty', dirty);
+  $('saveState').textContent = !has ? '' : dirty ? 'Not saved' : 'Saved'; $('saveState').classList.toggle('dirty', dirty);
+  if (dirty && fingerprint() !== draftFp) draftSoon();
+}
+function planFileOf(c) {   // the plan file's object: the content, each film's view and levels, the shared revision and the time
+  const live = Q.films.filter(hasContent);
+  return { format: PLAN_FORMAT, v: PLAN_VERSION, shared: SHARED_REV, savedAt: new Date().toISOString(), ...c,
+    films: c.films.map((fd, i) => ({ ...fd, view: live[i].view, lv: live[i].wl ? { c: live[i].wl.c, w: live[i].wl.w, inv: !!live[i].invertView } : null })) };
+}
+function savePlan() {
+  const c = planContent(); if (!c) { msg('Nothing to save yet: place an implant or take a measurement first.'); return false; }
+  const text = JSON.stringify(planFileOf(c));
+  if (text.length > PLAN_MAX_BYTES) { msg('This plan is too large to save as a file.'); return false; }
+  const name = planFileName(Q.joint, Q.side), u = URL.createObjectURL(new Blob([text], { type: 'application/json' })), a = document.createElement('a');
+  a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000);
+  // the page cannot tell whether the browser kept the file (a cancelled iPhone sheet, a blocked download: Fable, 5 Nov 2026), so
+  // the same content also stays on this phone as the draft until New case or Discard, and the marker says to check
+  Q.savedFp = JSON.stringify(c); keepDraft(true); showDraftNote(); syncSaveUI();
+  msg(`Plan saved as ${name}: check it is in your Downloads (or Files). It holds no picture and no patient details: to continue later open the same X-ray, then Menu, Open a saved plan. A copy also stays on this phone until you start another plan.`);
+  return true;
+}
+// a plan (from a file, or the phone's draft) onto the open films of the same view and size. draft: only films with nothing on
+// them yet take it, and the plan stays "Not saved"
+function applyPlan(o, draft) {
+  if (o.joint !== Q.joint) { msg(`This plan is for a ${JOINT_WORD[o.joint]} case. Choose ${JOINT_WORD[o.joint]} at the top, open the X-ray, then open the plan.`); return false; }
+  // a plan made on a joined film fits only the same join (Fable F18): same size is not enough
+  const joinOf = x => (x.stitch ? stitchHash(x.stitch) : ''), joinIn = pf => (typeof pf.sh === 'string' ? pf.sh : pf.cal && pf.cal.stitch && typeof pf.cal.stitch.hash === 'string' ? pf.cal.stitch.hash : '');
+  const sized = o.films.map(pf => [pf, Q.films.find(x => x.img && x.fv === pf.fv && x.img.cols === pf.cols && x.img.rows === pf.rows && !(draft && hasContent(x)))]).filter(([, f]) => f);
+  // the film's identity (filmId, Fable 5 Nov 2026): a plan opens only on the very film it was made on, never on another patient's
+  // film of the same size; plans saved before 5 Nov carry no identity and fall back to size and join, after a warning
+  const legacy = o.films.some(pf => !pf.fid);
+  const hits = sized.filter(([pf, f]) => (pf.fid ? !!f.fid && f.fid === pf.fid : joinOf(f) === joinIn(pf)));
+  if (!hits.length && sized.some(([pf]) => pf.fid)) { msg('This plan was made on a different X-ray (same size, different picture). Open the X-ray it was made on. A JPEG or PNG can read slightly differently on another phone or browser: open the plan on the device it was made on, or from the DICOM.'); return false; }
+  if (!hits.length && sized.length) { msg('This plan was made on a different joined film (or on a film that was not joined): open the film it was made on.'); return false; }
+  if (!hits.length) { msg('Open the same X-ray first (a plan fits only the film it was made on, checked by its width and height), then open the plan.'); return false; }
+  if (legacy && hits.some(([pf]) => !pf.fid) && !confirm('This plan was saved before Quick could recognise the X-ray it was made on. It checks only the size, and it brings its own scale. Open it ONLY if this is the same patient\'s X-ray. Continue?')) return false;
+  if (!draft && isDirty() && !confirm('The plan on screen has not been saved and will be replaced by the one in the file. Continue?')) return false;
+  snap(); let dropped = 0;
+  try {
+    const P = q => G.P(q.x, q.y);
+    for (const [pf, f] of hits) {
+      const items = pf.items.filter(it => { const fam = Q.fam[it.fam]; return fam && fam.sizes && fam.sizes.some(z => z.size === it.size) && (it.side === 'R' || it.side === 'L'); });
+      dropped += pf.items.length - items.length;
+      f.items = items; f.rul = (pf.rul || []).map(m => ({ a: P(m.a), b: P(m.b) })); f.lld = (pf.lld || []).map(P);
+      f.hd = { R: ((pf.hd || {}).R || []).map(P), L: ((pf.hd || {}).L || []).map(P) }; f.vg = (pf.vg || []).map(P); f.vgSide = pf.vgSide === 'R' || pf.vgSide === 'L' ? pf.vgSide : '';
+      f.tp = pf.tp && typeof pf.tp === 'object' ? pf.tp : null; f.dia = pf.dia && typeof pf.dia === 'object' ? pf.dia : null;
+      if (pf.cal && typeof pf.cal === 'object') f.cal = pf.cal;
+      if (pf.ballD >= 5 && pf.ballD <= 60) f.ballD = pf.ballD;
+      f.mirrored = !!pf.mirrored; f.orient = String(pf.orient || '').slice(0, 80); f.orientHint = !!pf.orientHint;
+      if (pf.lv && Number.isFinite(pf.lv.c) && pf.lv.w > 0) { f.wl = { c: pf.lv.c, w: pf.lv.w }; f.invertView = !!pf.lv.inv; renderFilm(f); }
+    }
+    if (o.side === 'R' || o.side === 'L') Q.side = o.side;
+    for (const [k, v] of Object.entries(o.choice || {})) if (typeof v === 'string' && Q.fam[v]) Q.choice[k] = v;
+    Q.frac = o.frac === 'R' || o.frac === 'L' ? o.frac : null; Q.pOn = typeof o.pOn === 'string' && /^[a-z]{1,8}$/.test(o.pOn) ? o.pOn : null;
+  } catch (e) { undo(); msg('That plan could not be applied: ' + ((e && e.message) || e)); return false; }
+  Q.sel = Q.items.length ? 0 : -1; Q.tool = null; Q.tmp = []; syncHemi(); hidePad(); fit();
+  if (draft) { Q.savedFp = ''; draftMine = true; } else Q.savedFp = fingerprint();   // a draft, even the copy kept at Save, reads "Not saved": the file may never have been kept (Fable, PR 7)   // a draft was never saved: it stays "Not saved"
+  syncUI(); draw();
+  const miss = o.films.length - hits.length;
+  msg(`${draft ? (o.saved ? 'The copy kept at Save restored from this phone; Save again if the file is not in your Downloads' : 'Unsaved plan restored from this phone; Save it to keep it') : 'Plan opened'}${dropped ? `; ${dropped} implant${dropped > 1 ? 's' : ''} left out (not in the ranges open to your account)` : ''}${miss ? `; ${miss} film${miss > 1 ? 's' : ''} in it did not match an open film${draft ? ' (open the other films to get them back too)' : ' and ' + (miss > 1 ? 'were' : 'was') + ' not loaded'}` : ''}. Check every implant on the X-ray.`);
+  return true;
+}
+
+// ---- the draft kept on this phone (see the note at the top of this section)
+function readDraft() {
+  try {
+    const t = localStorage.getItem(DRAFT_KEY); if (!t) return null;
+    const o = JSON.parse(t), age = Date.now() - Date.parse(o.savedAt);
+    if (validatePlanFile(o) || !(age >= 0 && age < DRAFT_DAYS * 864e5)) { localStorage.removeItem(DRAFT_KEY); return null; }   // broken or too old
+    return o;
+  } catch (e) { return null; }
+}
+function keepDraft(saved = false) {   // an unsaved plan, or (saved) a copy of the plan just saved; never a download, never the patient list
+  clearTimeout(draftT); draftT = 0;
+  const c = (saved || isDirty()) && planContent(); if (!c) return;
+  const fp = JSON.stringify(c); if (!saved && fp === draftFp) return;
+  try { const text = JSON.stringify({ ...planFileOf(c), draft: true, ...(saved ? { saved: true } : {}) }); if (text.length <= PLAN_MAX_BYTES) { localStorage.setItem(DRAFT_KEY, text); draftFp = fp; draftMine = true; } } catch (e) { /* private mode or full: no draft */ }
+}
+function dropDraft(any = false) { clearTimeout(draftT); draftT = 0; if (!draftMine && !any) return; try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* nothing kept */ } draftFp = null; draftMine = false; showDraftNote(); }
+const draftSoon = () => { if (!draftT) draftT = setTimeout(keepDraft, 1500); };
+addEventListener('pagehide', () => keepDraft());   // an iPhone leaving the page or the app: fired where beforeunload is not
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') keepDraft(); });
+const whenWord = iso => { const d = new Date(iso), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+function showDraftNote() {   // on the opening card: there is an unsaved plan on this phone
+  const o = readDraft(), n = $('draftNote'); if (!n) return;
+  n.hidden = !o; if (!o) return;
+  $('draftText').textContent = `${o.saved ? 'A copy of the' : 'An unsaved'} ${JOINT_WORD[o.joint]} plan ${o.saved ? 'saved' : 'from'} ${whenWord(o.savedAt)} is kept on this phone. Open the same X-ray to get it back, or discard it.`;
+}
+function offerDraft() {   // after a film opens: the draft fits it? (same joint, view and size, nothing on the film yet)
+  const o = readDraft(), f = F(); if (!o || o.joint !== Q.joint || hasContent(f)) return false;
+  if (!o.films.some(pf => pf.fv === f.fv && pf.cols === f.img.cols && pf.rows === f.img.rows && (!pf.fid || pf.fid === f.fid))) return false;
+  if (!confirm(`${o.saved ? 'The plan saved' : 'An unsaved plan from'} ${whenWord(o.savedAt)} fits this film. Restore it? (Cancel keeps it on the phone for later.)`)) return false;
+  return applyPlan(o, true);
+}
+$('draftX').onclick = () => { dropDraft(true); };
+
+function openPlanFile(file) {
+  if (copyPending()) return;
+  if (file.size > PLAN_MAX_BYTES) { msg('That file is too large to be a Quick plan.'); return; }
+  const rd = new FileReader();
+  rd.onerror = () => msg('That file could not be read.');
+  rd.onload = () => {
+    let o; try { o = JSON.parse(String(rd.result)); } catch (e) { msg('That is not a Quick plan file.'); return; }
+    const bad = validatePlanFile(o); if (bad) { msg(bad); return; }
+    applyPlan(o, false);
+  };
+  rd.readAsText(file);
+}
+$('saveB').onclick = () => savePlan();
+$('planFile').onchange = e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) openPlanFile(f); };
+$('helpB').onclick = () => { if ($('sheet').hidden) helpSheet(); };
+
+// ---------------------------------------------------------------- keys, gestures and the help overlay
+// Same keys on a computer; the touch gestures do the same on a phone. Implants stay true size: "scale" is zoom, or the next
+// catalogue size (. and ,); a swipe-to-size and neighbour ghosts were dropped on 30 Oct (Astra) and stay dropped.
+const HELP = [
+  ['Move and turn', [['Shift+arrows', 'Move the picked implant 0.5 mm (with Alt too, 2 mm)'], ['Ctrl+arrows', 'Move the film (⌘ on a Mac)'], [',  /  .', 'Turn 0.5° (with Shift 2°)'], ['N  or  Tab', 'Pick the next implant'], ['Delete', 'Remove the picked implant']]],
+  ['Size and side', [['↑  or  Page Up', 'Next size up'], ['↓  or  Page Down', 'Next size down'], ['I', 'Add an implant (the whole set or one part)'], ['C   X', 'Copy to the other side (on a lateral: Flip); flip the film'], ['Shift+R  /  Shift+L', 'Right / left side']]],
+  ['Touch', [['Drag', 'Move an implant; drag the ⟳ handle to turn it; drag the film to pan'], ['Two fingers', 'Pinch zooms the film; twist turns the picked implant'], ['Double-tap', 'Fit the film, or zoom in there']]],
+  ['View and image', [['W  /  M  /  Z', 'Dragging on the film sets W/L / pans / zooms (same keys in the viewer; right-drag or Shift-drag also sets W/L)'], ['0', "The film's own W/L"], ['F11', 'Invert'], ['F', 'Full screen'],
+    ['Ctrl+0  /  Ctrl+1', 'Fit the film / actual size (⌘ on a Mac)'], ['Ctrl and +  or  −', 'Zoom (also + and − alone, two fingers, or the mouse wheel)'], ['Ctrl+Shift+\\', 'Reset the image and the view'],
+    ['/', 'Open the Image panel and type a command (below)']]],
+  ['Plan', [['Ctrl+S  or  ⌘S', 'Save the plan to a file; until then an unsaved draft stays on this phone only'], ['Ctrl+Z  or  ⌘Z', 'Undo'], ['L   V   S', 'Length (same key in the viewer); valgus cut angle (long leg); Sizes card'], ['Alt+1  /  2  /  3', 'Knee: AP / Lateral / other views'], ['Esc   ?', 'Close a card or stop a tap; this list']]],
 ];
+const SHORTCUTS = HELP.flatMap(([, rows]) => rows);   // kept as one list for the tests
 function helpSheet() {
-  sheet(`<h2>Shortcuts and help</h2>
-    <p class="note">On a phone: two fingers zoom and move the film; drag an implant to move it, the green ⟳ handle to turn it; drag any measurement point to adjust it. On a computer the keys below do the same.</p>
-    <table class="res keys">${SHORTCUTS.map(([k, v]) => `<tr><td class="k"><kbd>${esc(k)}</kbd></td><td>${esc(v)}</td></tr>`).join('')}</table>
-    <p class="note">Words used: AP front-to-back film; Lat lateral; CT scout the CT scanner's planning picture (scanner scale, no sphere); valgus cut angle the femoral shaft axis to the mechanical axis (hip centre to knee centre), set on the intramedullary guide.</p>
+  sheet(`<h2>Keys, gestures and image commands</h2>
+    ${HELP.map(([h, rows]) => `<h3>${esc(h)}</h3><table class="res keys">${rows.map(([k, v]) => `<tr><td class="k"><kbd>${esc(k)}</kbd></td><td>${esc(v)}</td></tr>`).join('')}</table>`).join('')}
+    <h3>Image command (the box in the Image panel, or press /)</h3>
+    <p class="note">One letter per option, several in a line: <kbd>b60 c70 i</kbd>. A number is absolute; with + or − it is relative.</p>
+    <table class="res keys">${IMAGE_HELP.map(([k, v]) => `<tr><td class="k"><kbd>${esc(k)}</kbd></td><td>${esc(v)}</td></tr>`).join('')}</table>
+    <p class="note">Brightness, contrast and the window follow the full planner exactly. They change the picture only; Undo and Save do not touch them. Words: AP front-to-back film; Lat lateral; CT scout the CT scanner's planning picture (scanner scale, no sphere); valgus cut angle the femoral shaft axis to the mechanical axis (hip centre to knee centre), set on the intramedullary guide.</p>
     <button class="go alt" id="hClose">Close</button>`, card => { card.querySelector('#hClose').onclick = closeSheet; });
 }
 const press = id => { const b = $(id); if (b && !b.disabled && !b.hidden) b.click(); };
 document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') {   // never the browser's "save page"
+    e.preventDefault(); if (!$('sheet').dataset.modal || $('sheet').hidden) savePlan(); return;
+  }
   const t = e.target, typing = t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA');
   if (e.key === 'Escape') {
     if (typing) { t.blur(); return; }   // the first Esc commits a typed sphere size (Safari keeps a hidden field unblurred), a second closes the card
     if (!$('sheet').hidden) { if (!$('sheet').dataset.modal) closeSheet(); return; }
+    if (Q.levelsMode) { Q.levelsMode = false; syncImgPanel(); return; }
     if (Q.tool && !Q.pendCopy) { Q.tool = null; Q.tmp = []; Q.placeKinds = null; msg('Stopped.'); syncUI(); draw(); }
     return;
   }
@@ -1408,7 +1690,7 @@ document.addEventListener('keydown', e => {
   if (mod) {
     if (e.altKey) return;
     const f = F();
-    const act = code === 'Backslash' && big ? () => { Q.dragTool = null; if (f.win0) { f.win = { ...f.win0 }; f.inv = false; paintFilm(f); } fit(); draw(); }
+    const act = code === 'Backslash' && big ? () => { Q.dragTool = null; if (f.wl0) { f.wl = { ...f.wl0 }; f.invertView = false; renderFilm(f); syncImgPanel(); } fit(); draw(); }
       : k === '0' || code === 'Numpad0' ? fit
       : k === '1' || code === 'Numpad1' ? () => { const r = cv.getBoundingClientRect(); zoomAt(G.P(r.width / 2, r.height / 2), 1 / Q.view.s); }
       : k === '+' || k === '=' || code === 'NumpadAdd' ? () => zoomBy(1.25)
@@ -1429,12 +1711,13 @@ document.addEventListener('keydown', e => {
   }
   const tool = t => () => { Q.dragTool = t; msg({ wl: 'Dragging on the film now sets W/L (brightness and contrast). M goes back to pan.', pan: 'Dragging on the film now pans.', zoom: 'Dragging on the film now zooms. M goes back to pan.' }[t]); };
   const low = k.length === 1 ? k.toLowerCase() : k;
+  if (k === '/' || k === ':') { e.preventDefault(); toggleImgPanel(true); $('cmd').focus(); return; }
   const act = {
     '+': () => zoomBy(1.4), '=': () => zoomBy(1.4), '-': () => zoomBy(1 / 1.4), '_': () => zoomBy(1 / 1.4),
     f: () => { if (document.fullscreenElement) document.exitFullscreen(); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {}); },
     w: tool('wl'), m: tool('pan'), z: tool('zoom'),
-    0: () => { const f = F(); if (f.win0) { f.win = { ...f.win0 }; paintFilm(f); draw(); } },
-    F11: () => { const f = F(); if (f.win) { f.inv = !f.inv; paintFilm(f); draw(); } },
+    0: () => { const f = F(); if (f.wl0) { f.wl = { ...f.wl0 }; renderFilm(f); draw(); syncImgPanel(); } },
+    F11: () => imageKey('i'),
     l: () => { if (big) press('sL'); else if (mmpp() && !copyPending()) { Q.tool = 'ruler'; Q.tmp = []; msg('Tap one end.'); syncUI(); } },
     r: () => { if (big) press('sR'); },
     i: () => press('placeB'), c: () => press('mirrorB'), s: () => press('doneB'),
@@ -1445,14 +1728,22 @@ document.addEventListener('keydown', e => {
     Delete: () => { if (it && !Q.pendCopy) removeSel(); }, Backspace: () => { if (it && !Q.pendCopy) removeSel(); },
     n: () => { if (Q.items.length && !Q.tool) { Q.sel = (Q.sel + 1) % Q.items.length; Q.side = Q.items[Q.sel].side; syncUI(); draw(); } },
     Tab: () => { if (Q.items.length && !Q.tool) { e.preventDefault(); Q.sel = (Q.sel + (big ? Q.items.length - 1 : 1)) % Q.items.length; Q.side = Q.items[Q.sel].side; syncUI(); draw(); } },
+    x: flipFilm,
   }[low];
   if (act) { if (k !== 'Tab') e.preventDefault(); act(); }
 });
+function flipFilm() {   // the film is mirrored (the patient's right on the image right) or not; the implants turn to match
+  if (!sizable()) return; if (F().fv === 'lat') { flipLat(); return; }
+  if (Q.items.length) snap(); Q.mirrored = !Q.mirrored; Q.orient = `set by hand: ${Q.mirrored ? 'mirrored film' : 'standard film'}`; Q.orientHint = false; reflip(); closeSheet(); msg(`Film set as ${Q.mirrored ? 'mirrored' : 'standard'}: the implants were turned to match. Check them on the X-ray.`); syncUI(); draw();
+}
 function menu() {
   if (copyPending()) return;
   const it = Q.items[Q.sel], knee = Q.joint === 'knee';
   sheet(`<h2>Menu</h2><div class="menu">
     ${knee ? `<button id="mAdd"${Q.img ? '' : ' disabled'}>Add a knee view (AP, lateral, skyline, long leg)</button>` : '<button id="mOpen">Open another X-ray</button>'}
+    <button id="mJoin">Join 2 to 4 films into one long leg</button>
+    <button id="mSave"${Q.films.some(hasContent) ? '' : ' disabled'}>Save the plan (Ctrl+S)</button>
+    <button id="mOpenPlan"${Q.img ? '' : ' disabled'}>Open a saved plan…</button>
     <button id="mNew">New case (clears every film)</button>
     <button id="mSys"${sizable() && Q.cal ? '' : ' disabled'}>Implant system and side</button>
     <button id="mBall"${sizable() ? '' : ' disabled'}>Tap the ball again</button>
@@ -1460,18 +1751,21 @@ function menu() {
     <button id="mDel"${it ? '' : ' disabled'}>Remove the selected implant</button>
     <button id="mClr"${Q.rul.length || Q.lld.length || Q.hd.R.length || Q.hd.L.length || Q.vg.length ? '' : ' disabled'}>Clear the measurements</button>
     <button id="mFit"${Q.img ? '' : ' disabled'}>Fit the film to the screen</button>
-    <button id="mHelp">Shortcuts and help (?)</button>
+    <button id="mHelp">Keys, gestures and image commands (?)</button>
     </div>
     ${sizable() ? ballField('mBallD') : ''}
     <p class="note"><a href="./">Full planner</a>: landmarks, leg length and offset plan, knee cuts and alignment, saved to the patient list.</p>
     <button class="go alt" id="mClose">Close</button>`, card => {
     const on = (id, fn) => { const b = card.querySelector(id); if (b) b.onclick = fn; };
     on('#mOpen', () => { closeSheet(); pickFile(null); });
+    on('#mJoin', () => { closeSheet(); openJoin(); });
     on('#mAdd', () => { closeSheet(); pickFile(null); });
+    on('#mSave', () => { closeSheet(); savePlan(); });
+    on('#mOpenPlan', () => { closeSheet(); $('planFile').click(); });
     on('#mNew', () => { closeSheet(); newCase(); });
     on('#mSys', () => startSheet());
     on('#mBall', () => { closeSheet(); Q.tool = 'ball'; msg(`Tap the middle of the ${Q.ballD} mm ball.`); syncUI(); });
-    on('#mMir', () => { if (Q.items.length) snap(); Q.mirrored = !Q.mirrored; Q.orient = `set by hand: ${Q.mirrored ? 'mirrored film' : 'standard film'}`; Q.orientHint = false; reflip(); closeSheet(); msg(`Film set as ${Q.mirrored ? 'mirrored' : 'standard'}: the implants were turned to match. Check them on the X-ray.`); syncUI(); draw(); });
+    on('#mMir', flipFilm);
     on('#mDel', () => { closeSheet(); removeSel(); });
     on('#mClr', () => { snap(); Q.rul = []; Q.lld = []; Q.hd = { R: [], L: [] }; Q.vg = []; closeSheet(); syncUI(); draw(); });
     on('#mFit', () => { closeSheet(); fit(); });
@@ -1509,12 +1803,31 @@ function caseItems() {
 function sideOf(side, items) {
   const o = {}; for (const it of items) if (it.side === side) o[kindOf(it)] = it; return o;
 }
+// the bipolar rows: the head each shell takes, what to have ready when a neighbouring size takes the other head, sizes the
+// library marks as assumed, and a stem whose head system does not take the shell's head
+function bipRowsQ(sides, per, rows, ready, warn) {
+  const its = sides.map(s => per[s].bipolar);
+  rows.push(['Bipolar head', its.map(it => (it ? `${bipInnerHead(Q.fam[it.fam], sizeRec(it)).diameter} mm ${((Q.lib.heads || {})[bipInnerHead(Q.fam[it.fam], sizeRec(it)).kind] || {}).label || bipInnerHead(Q.fam[it.fam], sizeRec(it)).kind}` : '-'))]);
+  sides.forEach((sd, i) => {
+    const it = its[i]; if (!it) return; const f = Q.fam[it.fam], z = sizeRec(it), nb = near(f, it.size, sd).map(n => f.sizes.find(q => q.size === n)).filter(Boolean), me = bipInnerHead(f, z).diameter;
+    const heads = [...new Set(nb.map(q => bipInnerHead(f, q).diameter))];
+    if (heads.length > 1) warn.push(`${SIDE[sd][0].toUpperCase()}${SIDE[sd].slice(1)}: shells ${nb.map(q => q.size).join(', ')} take ${nb.map(q => bipInnerHead(f, q).diameter).join(', ')} mm heads: have both heads ready.`);
+    if (bipAssumedQ(z)) warn.push(`${SIDE[sd][0].toUpperCase()}${SIDE[sd].slice(1)}: shell ${z.size} mm: its inner part is assumed (Chunli has not drawn it); the ${me} mm head is Sami's decision until Chunli confirms.`);
+    const st = per[sd].stem; if (st) { const sf = Q.fam[st.fam]; if (sf && !headKindsQ(sf).includes(bipInnerHead(f, z).kind)) warn.push(`${SIDE[sd][0].toUpperCase()}${SIDE[sd].slice(1)}: this stem does not take the shell's ${((Q.lib.heads || {})[bipInnerHead(f, z).kind] || {}).label || bipInnerHead(f, z).kind} head: choose an Addis Ortho (Chunli) stem.`); }
+  });
+}
+// how far the stem's head centre is from the shell's head centre (mm), null without a scale
+function bipGap(b, s) {
+  const gm = geomOf(s); if (!gm || !gm.headM || !mmpp()) return null;
+  return G.dist(xf(b)([0, 0]), xf(s)(gm.headM)) * mmpp();
+}
 function resultGrid() {
   const items = caseItems(), sides = ['R', 'L'].filter(s => items.some(it => it.side === s)), per = Object.fromEntries(sides.map(s => [s, sideOf(s, items)]));
-  const kinds = SLOTS[Q.joint], rows = [], systems = [], ready = [], warn = [];
+  const kinds = Q.joint === 'hip' ? ['cup', 'bipolar', 'stem'] : SLOTS[Q.joint], rows = [], systems = [], ready = [], warn = [];   // a hip side has a cup or a bipolar shell: the empty one is skipped
   for (const k of kinds) {
     const its = sides.map(s => per[s][k]); if (!its.some(Boolean)) continue;
-    rows.push([KIND[k], its.map(it => (it ? String(sizeRec(it).label || sizeRec(it).size).replace(/ mm$/, '') : '-'))]);
+    rows.push([KIND[k], its.map(it => (it ? String(k === 'bipolar' ? sizeRec(it).size : sizeRec(it).label || sizeRec(it).size).replace(/ mm$/, '') : '-'))]);
+    if (k === 'bipolar') bipRowsQ(sides, per, rows, ready, warn);
     const fams = [...new Set(its.filter(Boolean).map(it => it.fam))];
     for (const id of fams) {
       const f = Q.fam[id], on = sides.filter((s, i) => its[i] && its[i].fam === id);
@@ -1529,6 +1842,7 @@ function resultGrid() {
     }
   }
   if (Q.joint === 'pfna') pfnaRows(sides, per, rows, systems, ready, warn);
+  if (Q.joint === 'hip') for (const sd of sides) if (per[sd].bipolar && per[sd].stem) { const g = bipGap(per[sd].bipolar, per[sd].stem); if (g !== null && g > 2) warn.push(`${SIDE[sd][0].toUpperCase()}${SIDE[sd].slice(1)}: the stem's head centre is ${g.toFixed(1)} mm from the shell's head centre: drag one onto the other.`); }
   if (Q.joint === 'hip') { const its = sides.map(s => per[s].cup); if (its.some(Boolean)) rows.push([`Cup angle${tdLine() ? ' (teardrops)' : ''}`, its.map(it => (it ? `${cupIncl(it).toFixed(0)}°` : '-'))]); }
   if (Q.joint === 'knee') {
     const tf = sides.map(s => per[s]['tka-tibia']);
@@ -1551,12 +1865,13 @@ function measureRows() {
 }
 function caseAngles() {
   return Q.films.filter(f => vgOk(f) && vgAngle(f) !== null).map(f => [`Valgus cut angle${f.vgSide ? ', ' + SIDE[f.vgSide] : ''}: ${filmName(f)}`,
-    `${vgAngle(f).toFixed(1)}° femoral shaft axis to mechanical axis; ${longWord(f)}`]);
+    `${vgAngle(f).toFixed(1)}° femoral shaft axis to mechanical axis; ${longWord(f)}${f.stitch && stitchCrosses(f.stitch, f.vg.map(p => p.y)) ? '; measured across a join of a stitched film: check it' : ''}`]);
 }
 function scaleOf(f) {
   const c = f.cal; if (!c) return 'not set';
   if (c.method === 'ct') return `CT scanner scale, ${c.mmPerPx} mm per pixel from the scout's header (no ball, no magnification)`;
   const over = ctScanScale(f) ? `, replacing the CT scanner's ${ctScanScale(f).mmPerPx} mm per pixel (${((c.mmPerPx / ctScanScale(f).mmPerPx - 1) * 100).toFixed(1)} % from it)` : '';
+  if (c.how === 'stitched') return `${c.method === 'ball' ? `${c.ballD} mm ball` : `known length ${c.lengthMm} mm`} of film ${c.stitch ? c.stitch.anchor + 1 : '?'} of a joined film, carried into its pixels (each film scaled by its own ball or length, or through a join)`;
   if (c.method === 'length') return `known length ${c.len} mm tapped on the film (no ball)${over}`;
   return `${c.ballD} mm ball (${c.how === 'found' ? 'found by the page' : c.how === 'edges' ? 'its two edges tapped' : 'tapped'})${over}`;
 }
@@ -1642,12 +1957,13 @@ function sharePic() {
 
 // ---------------------------------------------------------------- buttons
 $('file').addEventListener('change', e => { const f = e.target.files && e.target.files[0]; if (f) openFile(f); else Q.pend = null; });
+$('joinBtn').addEventListener('click', () => openJoin());
 $('jHip').onclick = () => setJoint('hip');
 $('jKnee').onclick = () => setJoint('knee');
 $('jTum').onclick = () => setJoint('tumour');
 $('jPfna').onclick = () => setJoint('pfna');
-$('sR').onclick = () => { Q.side = 'R'; const i = Q.items.findIndex(it => it.side === 'R'); if (i >= 0) Q.sel = i; syncUI(); draw(); };
-$('sL').onclick = () => { Q.side = 'L'; const i = Q.items.findIndex(it => it.side === 'L'); if (i >= 0) Q.sel = i; syncUI(); draw(); };
+$('sR').onclick = () => { Q.side = 'R'; const i = Q.items.findIndex(it => it.side === 'R'); if (i >= 0) Q.sel = i; syncHemi(); syncUI(); draw(); };
+$('sL').onclick = () => { Q.side = 'L'; const i = Q.items.findIndex(it => it.side === 'L'); if (i >= 0) Q.sel = i; syncHemi(); syncUI(); draw(); };
 for (const b of $('tabs').querySelectorAll('button')) b.onclick = () => {
   const v = b.dataset.v; if (v === 'other') return otherViews();
   const i = Q.films.findIndex(f => f.img && f.fv === v); if (i >= 0) switchFilm(i); else pickFile(v);
@@ -1674,7 +1990,8 @@ for (const [id, d] of [['rotL', -1], ['rotR', 1]]) {   // 1 degree a tap; held, 
   b.addEventListener('pointerdown', e => { e.preventDefault(); if (!Q.items[Q.sel]) return; if (!snapped) snap(); snapped = true; turn(d); t0 = setTimeout(() => { t1 = setInterval(() => turn(d), 70); }, 380); });
   b.addEventListener('pointerup', () => { stop(); snapped = false; }); b.addEventListener('pointerleave', () => { stop(); snapped = false; }); b.addEventListener('pointercancel', () => { stop(); snapped = false; });
 }
-window.addEventListener('beforeunload', e => { if (Q.films.some(f => f.items.length)) { e.preventDefault(); e.returnValue = ''; } });
+// leaving: warned only when the plan has changed since it was saved (4 Nov 2026; before, any implant on screen warned)
+window.addEventListener('beforeunload', e => { if (isDirty()) { e.preventDefault(); e.returnValue = ''; } });
 new ResizeObserver(() => { const had = !!Q.img; resize(); if (had && !Q.items.length) fit(); }).observe($('stage'));
 document.addEventListener('dragover', e => e.preventDefault());
 document.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) openFile(f); });
@@ -1690,5 +2007,5 @@ document.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTra
     $('jPfna').hidden = !famsOf('nail').length;   // q6: shown only to an account that holds a nail range
     if (!famsOf('cup').length && !famsOf('stem').length && !famsOf('nail').length && famsOf('tka-femur').length === 0 && famsOf('tka-tibia').length === 0) $('openErr').textContent = 'No hip or knee implant range is open to your account yet. Ask Addis Ortho to open one.';
   } catch (e) { $('openErr').textContent = 'The implant library did not load: ' + ((e && e.message) || e); }
-  syncUI(); resize();
+  syncUI(); resize(); showDraftNote();
 })();
