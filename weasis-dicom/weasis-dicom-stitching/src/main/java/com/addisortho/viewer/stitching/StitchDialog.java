@@ -20,6 +20,7 @@ import java.awt.Window;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Line2D;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -28,6 +29,10 @@ import java.util.Locale;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.Icon;
+import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
@@ -43,6 +48,7 @@ import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.table.AbstractTableModel;
+import javax.swing.table.DefaultTableCellRenderer;
 import org.dcm4che3.data.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -84,6 +90,9 @@ final class StitchDialog extends JDialog {
   private final JProgressBar progress = new JProgressBar();
   private final JLabel state = new JLabel(" ");
   private final ImagePanel preview = new ImagePanel(null);
+  private final JLabel previewCaption = new JLabel(" ");
+  private SwingWorker<Void, Loaded> pictures;
+  private boolean showingStitch;
 
   private List<Piece> chosen = List.of();
   private List<Seam> seams = List.of();
@@ -98,11 +107,17 @@ final class StitchDialog extends JDialog {
   private static final class Row {
     final StitchService.Candidate candidate;
     boolean use;
+    PiecePicture picture;
+    Icon thumb;
+    boolean pictureFailed;
 
     Row(StitchService.Candidate candidate) {
       this.candidate = candidate;
     }
   }
+
+  /** A row's picture, or null when the image could not be read. */
+  private record Loaded(Row row, PiecePicture picture) {}
 
   StitchDialog(Window owner, StitchService.Study study) {
     super(owner, Messages.getString("StitchDialog.title"), ModalityType.MODELESS);
@@ -128,13 +143,112 @@ final class StitchDialog extends JDialog {
     setPreferredSize(new Dimension(1100, 760));
     pack();
     setLocationRelativeTo(owner);
+    if (!rows.isEmpty()) {
+      pieceTable.setRowSelectionInterval(0, 0);
+    }
+    loadPictures();
+  }
+
+  // one image at a time, in the background: the window is usable while the pictures arrive
+  private void loadPictures() {
+    List<Row> all = List.copyOf(rows);
+    pictures =
+        new SwingWorker<>() {
+          @Override
+          protected Void doInBackground() {
+            for (Row row : all) {
+              if (isCancelled()) {
+                break;
+              }
+              try {
+                publish(new Loaded(row, PiecePicture.of(row.candidate.piece())));
+              } catch (IOException | RuntimeException | OutOfMemoryError e) {
+                LOGGER.warn("No picture for a stitch piece", e);
+                publish(new Loaded(row, null));
+              }
+            }
+            return null;
+          }
+
+          @Override
+          protected void process(List<Loaded> chunks) {
+            for (Loaded done : chunks) {
+              Row row = done.row();
+              row.picture = done.picture();
+              row.pictureFailed = done.picture() == null;
+              row.thumb = done.picture() == null ? null : new ImageIcon(done.picture().thumb());
+              int i = rows.indexOf(row);
+              pieceModel.fireTableRowsUpdated(i, i);
+              if (i == pieceTable.getSelectedRow() && !showingStitch) {
+                showSelectedPiece();
+              }
+            }
+          }
+        };
+    pictures.execute();
+  }
+
+  @Override
+  public void dispose() {
+    if (pictures != null) {
+      pictures.cancel(false);
+    }
+    super.dispose();
+  }
+
+  private void showSelectedPiece() {
+    int i = pieceTable.getSelectedRow();
+    if (i < 0 || i >= rows.size()) {
+      return;
+    }
+    Row row = rows.get(i);
+    String label = row.candidate.piece().label();
+    showingStitch = false;
+    preview.setImage(row.picture == null ? null : row.picture.large(), null);
+    previewCaption.setText(
+        Messages.getString(
+                row.pictureFailed ? "StitchDialog.previewNoPicture" : "StitchDialog.previewPiece")
+            .formatted(label));
+  }
+
+  private static String html(String s) {
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+  }
+
+  // the image column: the label, then whatever else the file says, so the rows can be told apart
+  private static String imageCell(StitchService.Candidate c) {
+    StringBuilder s = new StringBuilder("<html><b>").append(html(c.piece().label())).append("</b>");
+    if (!c.fileName().isEmpty()) {
+      s.append("<br>")
+          .append(html(Messages.getString("StitchDialog.file").formatted(c.fileName())));
+    }
+    List<String> details = c.piece().details();
+    if (!details.isEmpty()) {
+      s.append("<br>").append(html(String.join(", ", details)));
+    }
+    return s.append("</html>").toString();
   }
 
   private JPanel layoutContent() {
     pieceTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+    pieceTable.setRowHeight(PiecePicture.THUMB_PX + 6);
     pieceTable.getColumnModel().getColumn(0).setMaxWidth(50);
-    pieceTable.getColumnModel().getColumn(1).setPreferredWidth(260);
-    pieceTable.getColumnModel().getColumn(2).setPreferredWidth(360);
+    pieceTable.getColumnModel().getColumn(1).setMinWidth(PiecePicture.THUMB_PX + 16);
+    pieceTable.getColumnModel().getColumn(1).setMaxWidth(PiecePicture.THUMB_PX + 16);
+    pieceTable
+        .getColumnModel()
+        .getColumn(1)
+        .setCellRenderer(
+            new DefaultTableCellRenderer() {
+              @Override
+              protected void setValue(Object value) {
+                setHorizontalAlignment(CENTER);
+                setIcon(value instanceof Icon icon ? icon : null);
+                setText(value instanceof Icon ? "" : String.valueOf(value));
+              }
+            });
+    pieceTable.getColumnModel().getColumn(2).setPreferredWidth(300);
+    pieceTable.getColumnModel().getColumn(3).setPreferredWidth(240);
     seamTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 
     up.addActionListener(e -> moveSelected(-1));
@@ -146,7 +260,7 @@ final class StitchDialog extends JDialog {
     JPanel pieces = new JPanel(new BorderLayout(0, 4));
     pieces.add(SeamEditor.text(Messages.getString("StitchDialog.intro"), 2), BorderLayout.NORTH);
     JScrollPane pieceScroll = new JScrollPane(pieceTable);
-    pieceScroll.setPreferredSize(new Dimension(640, 140));
+    pieceScroll.setPreferredSize(new Dimension(640, 2 * (PiecePicture.THUMB_PX + 6) + 30));
     pieces.add(pieceScroll, BorderLayout.CENTER);
     JPanel piecesSouth = new JPanel(new BorderLayout());
     piecesSouth.add(order, BorderLayout.NORTH);
@@ -198,15 +312,23 @@ final class StitchDialog extends JDialog {
     JPanel seamButtons = new JPanel(new FlowLayout(FlowLayout.LEFT));
     seamButtons.add(inspect);
     seamPanel.add(seamButtons, BorderLayout.SOUTH);
-    seamPanel.setPreferredSize(new Dimension(640, 200));
+    seamPanel.setPreferredSize(new Dimension(640, 150));
 
+    // the pieces take the spare height, so that all the pictures show on a tall window
+    JPanel lower = new JPanel();
+    lower.setLayout(new BoxLayout(lower, BoxLayout.Y_AXIS));
+    lower.add(confirm);
+    lower.add(Box.createVerticalStrut(8));
+    lower.add(seamPanel);
     JPanel left = new JPanel(new BorderLayout(0, 8));
-    left.add(pieces, BorderLayout.NORTH);
-    left.add(confirm, BorderLayout.CENTER);
-    left.add(seamPanel, BorderLayout.SOUTH);
+    left.add(pieces, BorderLayout.CENTER);
+    left.add(lower, BorderLayout.SOUTH);
 
     preview.setPreferredSize(new Dimension(320, 640));
-    JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, preview);
+    JPanel previewPanel = new JPanel(new BorderLayout(0, 4));
+    previewPanel.add(previewCaption, BorderLayout.NORTH);
+    previewPanel.add(preview, BorderLayout.CENTER);
+    JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, previewPanel);
     split.setResizeWeight(0.7);
 
     JPanel south = new JPanel(new BorderLayout(0, 4));
@@ -246,12 +368,22 @@ final class StitchDialog extends JDialog {
           }
         });
     seamTable.getSelectionModel().addListSelectionListener(e -> refresh());
+    pieceTable
+        .getSelectionModel()
+        .addListSelectionListener(
+            e -> {
+              if (!e.getValueIsAdjusting()) {
+                showSelectedPiece();
+              }
+            });
     seamTable.addMouseListener(
         new MouseAdapter() {
           @Override
           public void mouseClicked(MouseEvent e) {
             if (e.getClickCount() == 2) {
               inspectSelected();
+            } else if (!showingStitch) {
+              showPreview();
             }
           }
         });
@@ -287,7 +419,7 @@ final class StitchDialog extends JDialog {
     seams = List.of();
     chosen = List.of();
     seamModel.fireTableDataChanged();
-    preview.setImage(null, null);
+    showSelectedPiece();
     refresh();
   }
 
@@ -452,6 +584,8 @@ final class StitchDialog extends JDialog {
             g2.drawString(Integer.toString(i + 1), 4f, (float) (ys[i] * scale) - 4);
           }
         });
+    showingStitch = true;
+    previewCaption.setText(Messages.getString("StitchDialog.previewStitch"));
     s.noScaleReason()
         .ifPresent(r -> state.setText(Messages.getString("StitchDialog.noScale").formatted(r)));
   }
@@ -524,6 +658,7 @@ final class StitchDialog extends JDialog {
   private final class PieceModel extends AbstractTableModel {
     private final String[] names = {
       Messages.getString("StitchDialog.use"),
+      Messages.getString("StitchDialog.picture"),
       Messages.getString("StitchDialog.image"),
       Messages.getString("StitchDialog.notes")
     };
@@ -558,8 +693,13 @@ final class StitchDialog extends JDialog {
       Row row = rows.get(r);
       return switch (c) {
         case 0 -> row.use;
-        case 1 -> row.candidate.piece().label();
-        default -> String.join("; ", row.candidate.notes());
+        case 1 ->
+            row.thumb != null
+                ? row.thumb
+                : Messages.getString(
+                    row.pictureFailed ? "StitchDialog.noPicture" : "StitchDialog.reading");
+        case 2 -> imageCell(row.candidate);
+        default -> "<html>" + html(String.join("; ", row.candidate.notes())) + "</html>";
       };
     }
 

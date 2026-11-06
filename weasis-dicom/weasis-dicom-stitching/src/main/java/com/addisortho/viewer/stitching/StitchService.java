@@ -10,6 +10,7 @@ package com.addisortho.viewer.stitching;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -43,7 +44,7 @@ final class StitchService {
   private StitchService() {}
 
   /** An image of the study that can be a piece, with anything the user should know about it. */
-  record Candidate(Piece piece, List<String> notes) {}
+  record Candidate(Piece piece, List<String> notes, String fileName) {}
 
   /** Eligible images and the images left out, with why. */
   record Study(DicomModel model, List<Candidate> candidates, List<String> excluded) {}
@@ -76,10 +77,23 @@ final class StitchService {
           continue;
         }
         Piece p = new Piece(h, h.getInt(Tag.Columns, 0), h.getInt(Tag.Rows, 0), () -> read(image));
-        out.add(new Candidate(p, notes(p)));
+        out.add(new Candidate(p, notes(p), fileName(image.getMediaReader().getUri())));
       }
     }
     return new Study(model, out, excluded);
+  }
+
+  /**
+   * The name the file was opened under, or empty when there is none worth showing: a name of only
+   * digits and dots is a DICOM UID or a machine's counter and says nothing about the image.
+   */
+  static String fileName(URI uri) {
+    String path = uri == null ? null : uri.getPath();
+    if (path == null) {
+      return "";
+    }
+    String name = path.substring(path.lastIndexOf('/') + 1);
+    return name.replaceFirst("(?i)\\.dcm$", "").matches("[0-9.]*") ? "" : name;
   }
 
   /** Why an image cannot be a piece, or null when it can. */

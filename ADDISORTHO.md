@@ -339,7 +339,10 @@ Design: `DESIGN-2026-10-27-long-leg-stitching.md` (reviewed by Fable and GPT-6 A
 automatic, semi-automatic or manual, and not reviewed.
 
 - `weasis-dicom/weasis-dicom-stitching`: the **Stitch** button (2D viewer toolbar) opens a window for the selected
-  image's study. The user ticks two to four CR/DX/DR/RG pieces of one acquisition (none ticked at first), orders them
+  image's study. Radiographers often give every piece the same series description, so each row shows a picture
+  (`PiecePicture`, loaded in the background, same orientation and polarity as the match, never used for matching),
+  the file name unless it is only digits and dots, and the series, time, body part, view, side and comments the file
+  states; clicking a row shows that image large on the right. The user ticks two to four CR/DX/DR/RG pieces of one acquisition (none ticked at first), orders them
   head to foot, and confirms one acquisition, projection, position, target leg and the part of the image to match on
 (whole width, or the left or right half as shown, for a film of both legs); none has a default. **Line up** matches each
   seam (`SeamMatcher`, pure Java, no OpenCV keypoints needed): a coarse correlation of gradient magnitude on a 2 mm grid,
