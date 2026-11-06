@@ -507,6 +507,19 @@ public interface ViewCanvas<E extends ImageElement>
       if (c != null) {
         c.maximizedSelectedImagePane(c.getSelectedViewCanvas(), null);
       }
+    } else if (sm.matches(ShortcutManager.ID_VIEWER_INVERT, keyCode, modifiers)) {
+      eventManager.getAction(ActionW.INVERT_LUT).ifPresent(a -> a.setSelected(!a.isSelected()));
+    } else if (sm.matches(ShortcutManager.ID_VIEWER_FLIP_VERTICAL, keyCode, modifiers)) {
+      // A vertical flip is a horizontal one turned half way round
+      eventManager.getAction(ActionW.FLIP).ifPresent(f -> f.setSelected(!f.isSelected()));
+      eventManager
+          .getAction(ActionW.ROTATION)
+          .ifPresent(a -> a.setSliderValue((a.getSliderValue() + 180) % 360));
+    } else if (sm.matches(ShortcutManager.ID_VIEWER_EXPORT, keyCode, modifiers)) {
+      List<Action> export = getExportActions();
+      if (export != null && !export.isEmpty()) {
+        export.getFirst().actionPerformed(null);
+      }
     } else if (sm.matches(ShortcutManager.ID_VIEWER_ROTATE_LEFT, keyCode, modifiers)) {
       // Counterclockwise
       eventManager

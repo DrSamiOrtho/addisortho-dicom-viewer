@@ -343,8 +343,7 @@ public class View3DFactory implements SeriesViewerFactory {
     String unavailable = SoftwareGl.unavailableReason();
     if (unavailable != null) {
       LOGGER.warn("Software 3D is not available: {}", unavailable);
-      items.add(
-          new JLabel(Messages.getString("software.3d.missing").formatted(unavailable)));
+      items.add(new JLabel(Messages.getString("software.3d.missing").formatted(unavailable)));
     } else if (SoftwareGl.isAvailable() && !SoftwareGl.isChosen()) {
       items.add(new JLabel(Messages.getString("software.3d.offer")));
       JButton softwareButton = new JButton(Messages.getString("software.3d.use"));

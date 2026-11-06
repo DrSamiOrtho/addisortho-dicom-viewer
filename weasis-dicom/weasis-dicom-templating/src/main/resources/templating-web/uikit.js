@@ -14,25 +14,48 @@ export function focusKind(a, editor) {
 }
 
 // The shortcut a key press stands for, or null (then the page leaves the key alone). e: a KeyboardEvent or its fields.
-//   Esc: stop what is armed.  Ctrl/⌘+Z: undo; Ctrl/⌘+Shift+Z and Ctrl+Y: redo (15 Oct 2026).
-//   F: fit the X-ray to the window, also with no implant selected.
-//   ↑ / ↓ (and PgUp / PgDn, + / -): next / previous size of the selected implant.
-//   Shift+arrows: move it 0.5 mm along the screen; Shift+Alt+arrows: 2 mm.  , and .: turn it 0.5° (with Shift 2°).
-// Tab is never a shortcut (it moves the focus, as everywhere). Typing in another language (composition) is left alone,
-// and so are Ctrl, ⌘ and Alt with any other key.
+// Sami, 6 Nov 2026: the viewer, the 3D view, the full page and the Quick page share one set of keys, RadiAnt's (SHORTCUTS.md).
+//   Viewing: W window, M pan, Z zoom (what a left-drag on the film does), L length, A angle, 0 the film's own window, F full
+//   screen, F11 invert, F12 reference lines, Ctrl/⌘+0 fit, +1 actual size, ++/- zoom, +Shift+\ reset the view, Esc stop.
+//   Implants (no viewer equivalent): ↑ ↓ (PgUp PgDn) size, Shift+arrows move 0.5 mm (Shift+Alt 2 mm), , . turn 0.5° (Shift 2°),
+//   N next implant, Delete remove. Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z and Ctrl+Y redo.
+// Tab is never a shortcut (it moves the focus, as everywhere). Typing in another language (composition) is left alone.
 export function shortcut(e, where) {
   if (e.isComposing || e.keyCode === 229 || where === 'text') return null;
-  const mod = e.ctrlKey || e.metaKey, k = e.key;
+  const mod = e.ctrlKey || e.metaKey, k = e.key, code = e.code || '';
   if (k === 'Escape') return mod || e.altKey ? null : { act: 'escape' };
-  // Ctrl/Cmd+Z undo; Ctrl/Cmd+Shift+Z and Ctrl+Y redo (Sami, 15 Oct: a Redo beside Undo)
-  if (mod) return e.altKey ? null : (k === 'z' || k === 'Z') ? { act: e.shiftKey ? 'redo' : 'undo' } : (k === 'y' || k === 'Y') && e.ctrlKey && !e.metaKey && !e.shiftKey ? { act: 'redo' } : null;
+  if (mod) {
+    if (e.altKey) return null;
+    if (k === 'z' || k === 'Z') return { act: e.shiftKey ? 'redo' : 'undo' };
+    if ((k === 'y' || k === 'Y') && e.ctrlKey && !e.metaKey && !e.shiftKey) return { act: 'redo' };
+    if (where !== 'editor') return null;
+    if (code === 'Backslash' && e.shiftKey) return { act: 'resetView' };
+    if (k === '0' || code === 'Numpad0') return { act: 'fit' };
+    if (k === '1' || code === 'Numpad1') return { act: 'actual' };
+    if (k === '+' || k === '=' || code === 'NumpadAdd') return { act: 'zoom', k: 1.25 };
+    if (k === '-' || k === '_' || code === 'NumpadSubtract') return { act: 'zoom', k: 0.8 };
+    return null;
+  }
   if (where !== 'editor') return null;
   const arrow = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k];
   if (arrow && e.shiftKey) return { act: 'move', dx: arrow[0], dy: arrow[1], mm: e.altKey ? 2 : 0.5 };
   if (e.altKey) return null;
-  if (k === 'f' || k === 'F') return { act: 'fit' };
-  if (k === 'ArrowUp' || k === 'PageUp' || k === '+' || k === '=') return { act: 'size', d: 1 };
-  if (k === 'ArrowDown' || k === 'PageDown' || k === '-') return { act: 'size', d: -1 };
+  if (k === 'F11') return { act: 'invert' };
+  if (k === 'F12') return { act: 'lines' };
+  if (k === 'Delete' || k === 'Backspace') return { act: 'remove' };
+  const low = k.length === 1 ? k.toLowerCase() : '';
+  if (low === 'f') return { act: 'fullscreen' };
+  if (low === 'l') return { act: 'length' };
+  if (low === 'a') return { act: 'angle' };
+  if (low === 'w') return { act: 'tool', tool: 'wl' };
+  if (low === 'm') return { act: 'tool', tool: 'pan' };
+  if (low === 'z') return { act: 'tool', tool: 'zoom' };
+  if (low === 'n') return { act: 'next' };
+  if (k === '0') return { act: 'window' };
+  if (k === '+' || k === '=') return { act: 'zoom', k: 1.25 };
+  if (k === '-' || k === '_') return { act: 'zoom', k: 0.8 };
+  if (k === 'ArrowUp' || k === 'PageUp') return { act: 'size', d: 1 };
+  if (k === 'ArrowDown' || k === 'PageDown') return { act: 'size', d: -1 };
   if (k === ',' || k === '<') return { act: 'turn', deg: e.shiftKey ? -2 : -0.5 };
   if (k === '.' || k === '>') return { act: 'turn', deg: e.shiftKey ? 2 : 0.5 };
   return null;

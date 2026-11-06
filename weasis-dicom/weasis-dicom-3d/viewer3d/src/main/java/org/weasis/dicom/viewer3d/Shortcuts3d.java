@@ -38,14 +38,14 @@ import org.weasis.dicom.viewer3d.vr.View3dVideoExport;
  *   <li>Ctrl+plus / Ctrl+minus zoom, Ctrl+0 fits the visible part, 0 restores the default window,
  *       Ctrl+S toggles the shading, Ctrl+R resets the scene, Ctrl+Alt+0 restores the whole volume.
  *   <li>Scalpel: Delete cuts inside the area, Enter cuts outside, Escape clears the area (then a
- *       pending measure, then it resets the view as before), Ctrl+Z / Ctrl+Y undo and redo a cut or
- *       a crop box change, Ctrl+Shift+Alt+Z clears the history.
+ *       pending measure; Ctrl+Shift+Backslash resets the view), Ctrl+Z / Ctrl+Y undo and redo a cut or a
+ *       crop box change, Ctrl+Shift+Alt+Z clears the history.
  *   <li>1 to 6: anterior, posterior, left, right, superior, inferior, centred (see {@link
  *       StandardView}).
  *   <li>Ctrl+F2 exports a rotation video (RadiAnt's advanced movie).
  *   <li>Ctrl+C copies the image, Ctrl+E saves it as JPEG, F2 starts or stops the quick movie, K
  *       takes a 3D snapshot of the view state, [ and ] show the previous and next one, F12 toggles
- *       the annotations, F shows the view full screen (F11 as before).
+ *       the annotations, F shows the view full screen, F11 inverts.
  * </ul>
  *
  * The Cmd key stands in for Ctrl on macOS.
@@ -233,7 +233,8 @@ public final class Shortcuts3d {
       {"F2 / Ctrl+F2", Messages.getString("help.movie")}, // NON-NLS
       {"K  [  ]", Messages.getString("help.snapshot")}, // NON-NLS
       {"Ctrl+C / Ctrl+E", Messages.getString("help.picture")}, // NON-NLS
-      {"F / F12", Messages.getString("help.screen")}, // NON-NLS
+      {"F / F12 / F11", Messages.getString("help.screen")}, // NON-NLS
+      {"Ctrl+Shift+\\", Messages.getString("help.resetView")}, // NON-NLS
       {"Alt+drag", Messages.getString("help.alt")} // NON-NLS
     };
     StringBuilder html = new StringBuilder("<html><table cellpadding='2'>"); // NON-NLS

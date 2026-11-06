@@ -117,16 +117,33 @@ public class MeasureToolBar extends WtoolBar {
             public int getKeyCode() {
               return 0;
             }
+
+            @Override
+            public String getUIName() {
+              return Messages.getString("MeasureToolBar.draw_line"); // a plain line, no length
+            }
           });
     }
     if (p.getBooleanProperty("weasis.draw.polyline", true)) {
-      drawGraphicList.add(new PolylineGraphic());
+      drawGraphicList.add(
+          new PolylineGraphic() {
+            @Override
+            public int getKeyCode() {
+              return 0;
+            }
+          });
     }
     if (p.getBooleanProperty("weasis.draw.rectangle", true)) {
       drawGraphicList.add(new ObliqueRectangleGraphic());
     }
     if (p.getBooleanProperty("weasis.draw.ellipse", true)) {
-      drawGraphicList.add(new EllipseGraphic());
+      drawGraphicList.add(
+          new EllipseGraphic() {
+            @Override
+            public int getKeyCode() {
+              return 0;
+            }
+          });
     }
     if (p.getBooleanProperty("weasis.draw.threeptcircle", true)) {
       drawGraphicList.add(new ThreePointsCircleGraphic());

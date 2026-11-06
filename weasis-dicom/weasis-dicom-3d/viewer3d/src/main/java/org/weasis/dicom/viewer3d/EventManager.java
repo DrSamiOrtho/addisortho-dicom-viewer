@@ -27,7 +27,6 @@ import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JRadioButtonMenuItem;
-import javax.swing.KeyStroke;
 import org.dcm4che3.img.lut.PresetWindowLevel;
 import org.joml.Quaterniond;
 import org.osgi.framework.BundleContext;
@@ -907,7 +906,8 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
         for (final ResetTools action : ResetTools.values()) {
           final JMenuItem item = new JMenuItem(action.toString());
           if (ResetTools.ALL.equals(action)) {
-            item.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0));
+            item.setAccelerator(
+                ShortcutManager.getInstance().getKeyStroke(ShortcutManager.ID_VIEWER_ESCAPE));
           }
           item.addActionListener(e -> reset(action));
           menu.add(item);

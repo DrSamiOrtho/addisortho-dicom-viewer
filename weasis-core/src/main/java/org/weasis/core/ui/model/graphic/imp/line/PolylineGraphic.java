@@ -21,6 +21,7 @@ import java.util.Objects;
 import java.util.Optional;
 import javax.swing.Icon;
 import org.weasis.core.Messages;
+import org.weasis.core.api.gui.util.ShortcutManager;
 import org.weasis.core.api.image.measure.MeasurementsAdapter;
 import org.weasis.core.api.image.util.MeasurableLayer;
 import org.weasis.core.api.image.util.Unit;
@@ -200,5 +201,15 @@ public class PolylineGraphic extends AbstractDragGraphic {
         setPointNumber(UNDEFINED);
       }
     }
+  }
+
+  @Override
+  public int getKeyCode() {
+    return ShortcutManager.getInstance().getKeyCode(ShortcutManager.ID_GRAPHIC_POLYLINE);
+  }
+
+  @Override
+  public int getModifier() {
+    return ShortcutManager.getInstance().getModifier(ShortcutManager.ID_GRAPHIC_POLYLINE);
   }
 }

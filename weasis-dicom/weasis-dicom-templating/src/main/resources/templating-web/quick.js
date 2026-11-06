@@ -347,10 +347,7 @@ function commitFilm(img, name, fv, src, scout, wb = false, ball = null) {
     for (let j = 0; j < d.length; j += step) smp.push(d[j]);
     smp.sort((a, b) => a - b); const a = smp[Math.floor(smp.length * 0.01)], b = smp[Math.floor(smp.length * 0.99)]; lo = a; w = Math.max(1, b - a);
   }
-  const off = document.createElement('canvas'); off.width = img.cols; off.height = img.rows;
-  const oc = off.getContext('2d'), id = oc.createImageData(img.cols, img.rows), px = id.data, k = 255 / w;
-  for (let j = 0, n = img.cols * img.rows; j < n; j++) { let v = (img.data[j] - lo) * k; v = v < 0 ? 0 : v > 255 ? 255 : v; if (img.invert) v = 255 - v; px[4 * j] = px[4 * j + 1] = px[4 * j + 2] = v; px[4 * j + 3] = 255; }
-  oc.putImageData(id, 0, 0); f.off = off;
+  Q.dragTool = null; f.win0 = { lo, w }; f.win = { lo, w }; f.inv = false; paintFilm(f);
   $('open').hidden = true; resize(); fit(); syncUI();
   if (!sizable()) { msg(refText()); return; }
   if (f.src === 'ct') {   // a scout: the scanner's scale at once, or why there is none (no ball search on a CT)
@@ -365,6 +362,14 @@ function commitFilm(img, name, fv, src, scout, wb = false, ball = null) {
 // copies waiting for their tap: no other film until they are placed or undone (Astra q2 P2)
 // Q.pendCopy: the side whose copies still wait for their tap (kept apart from the tool, saved and restored by Undo; Astra q2
 // recheck P2); while it is set no other film, tool, scale change or Sizes card
+// 6 Nov 2026: the film's picture from its window (W, 0) and invert (F11), the viewer's keys; display only
+let wlRaf = 0;
+function paintFilm(f) {
+  const img = f.img, off = f.off || document.createElement('canvas'); off.width = img.cols; off.height = img.rows;
+  const oc = off.getContext('2d'), id = oc.createImageData(img.cols, img.rows), px = id.data, k = 255 / f.win.w;
+  for (let j = 0, n = img.cols * img.rows; j < n; j++) { let v = (img.data[j] - f.win.lo) * k; v = v < 0 ? 0 : v > 255 ? 255 : v; if (!!img.invert !== f.inv) v = 255 - v; px[4 * j] = px[4 * j + 1] = px[4 * j + 2] = v; px[4 * j + 3] = 255; }
+  oc.putImageData(id, 0, 0); f.off = off;
+}
 function copyPending() { if (!Q.pendCopy) return false; Q.tool = 'mirrorTo'; msg(`First tap the ${SIDE[Q.pendCopy]} ${Q.joint} to put the copies there, or Undo.`); syncUI(); return true; }
 function switchFilm(i) {
   if (i === Q.cur || !Q.films[i] || !Q.films[i].img) return;
@@ -666,7 +671,7 @@ cv.addEventListener('pointerdown', e => {
   if (bh >= 0) { Q.sel = bh; Q.side = Q.items[bh].side; const it = Q.items[bh]; gest = { mode: 'blade', p0: p, ip0: ip, s0: slideOf(it), snapped: false }; syncUI(); draw(); return; }
   const h = mmpp() ? hitItem(ip) : -1;
   if (h >= 0) { Q.sel = h; Q.side = Q.items[h].side; const it = Q.items[h]; gest = { mode: 'drag', p0: p, off: G.sub(ip, G.P(it.x, it.y)), snapped: false }; syncUI(); draw(); return; }
-  gest = { mode: 'pan', p0: p, last: p };
+  gest = { mode: Q.dragTool || 'pan', p0: p, last: p, win: F().win ? { ...F().win } : null };
 });
 cv.addEventListener('pointermove', e => {
   if (!ptrs.has(e.pointerId) || !gest) return; ptrs.set(e.pointerId, sp(e)); const p = sp(e);
@@ -676,6 +681,8 @@ cv.addEventListener('pointermove', e => {
     Q.view = { s, tx: m.x - gest.ip0.x * s, ty: m.y - gest.ip0.y * s }; draw(); return;
   }
   if (gest.mode === 'tap' && G.dist(p, gest.p0) > 10) gest.mode = 'pan';
+  if (gest.mode === 'wl') { const f = F(), w0 = gest.win; if (w0) { const w = Math.max(1, w0.w * Math.exp((p.x - gest.p0.x) / 200)), c = w0.lo + w0.w / 2 - (p.y - gest.p0.y) * w0.w / 400; f.win = { lo: c - w / 2, w }; if (!wlRaf) wlRaf = requestAnimationFrame(() => { wlRaf = 0; paintFilm(f); draw(); }); } return; }
+  if (gest.mode === 'zoom') { zoomAt(gest.p0, Math.exp((gest.last.y - p.y) / 150)); gest.last = p; return; }
   if (gest.mode === 'pan') { Q.view.tx += p.x - gest.last.x; Q.view.ty += p.y - gest.last.y; gest.last = p; draw(); return; }
   if (gest.mode === 'turn') {
     const it = Q.items[Q.sel]; if (!it) return;
@@ -726,7 +733,7 @@ function setPoint(r, ip) { if (r.k === 'hd') Q.hd[r.s][r.i] = ip; else if (r.k =
 function pointText(r) {
   if (r.k === 'gt' || r.k === 'dia') return tumSummary();
   if (r.k === 'hd') return headC(r.s) ? pfnaText(Q.items.find(it => kindOf(it) === 'nail' && it.side === r.s)) || `${SIDE[r.s]} femoral head ${(2 * headC(r.s).r * mmpp()).toFixed(0)} mm.` : 'These three points do not make a femoral head (in a line, or under 30 or over 80 mm across): drag them round the head.';
-  if (r.k === 'rul') { const m = Q.rul[r.i]; return mmpp() ? `Ruler ${r.i + 1}: ${(G.dist(m.a, m.b) * mmpp()).toFixed(0)} mm.` : ''; }
+  if (r.k === 'rul') { const m = Q.rul[r.i]; return mmpp() ? `Length ${r.i + 1}: ${(G.dist(m.a, m.b) * mmpp()).toFixed(0)} mm.` : ''; }
   if (r.k === 'lld') return Q.lld.length === 4 ? (lldText() || 'The two teardrops are too close together: drag them apart.') : '';
   const a = vgAngle(F()); return a === null ? 'Points too close together: drag them apart to get the angle.' : `Valgus cut angle ${a.toFixed(1)}° (${longWord(F())}).${a < 3 || a > 10 ? ' Outside the usual 5-7°: check the four points and that the patella faces forward.' : ''}`;
 }
@@ -948,7 +955,7 @@ function pfnaRows(sides, per, rows, systems, ready, warn) {
   }
   for (const id of [...new Set(its.filter(Boolean).map(it => (bladeFamOf(it) || {}).id).filter(Boolean))]) systems.push(`Blade: ${Q.fam[id].label}`);
   const fams = [...new Set(its.filter(Boolean).map(it => Q.fam[it.fam]))];
-  for (const f of fams) if (f.verified === false) warn.push(`${f.label}: generic outline, not ${f.maker}'s drawing (the top's shape from a DePuy Synthes TFN template; sizes from ${f.maker}'s list; ${angleWord(f)}). Check it against the real nail; measure the canal with the ruler.`);
+  for (const f of fams) if (f.verified === false) warn.push(`${f.label}: generic outline, not ${f.maker}'s drawing (the top's shape from a DePuy Synthes TFN template; sizes from ${f.maker}'s list; ${angleWord(f)}). Check it against the real nail; measure the canal with the Length tool.`);
   warn.push('Tip-apex distance: this film\'s part only. The full TAD adds the lateral film\'s part.');
 }
 
@@ -974,7 +981,7 @@ function stemSheet() {
     ${list.length ? '' : `<p class="warn">${esc(f.label)} size ${esc(it.size)}: no stem drawn for it on the maker's sheet.</p>`}
     ${c !== null ? `<p class="note">Stems with a ${c} mm collar (the length chosen); choose another length to see the others.</p>` : ''}
     <div class="menu"><button data-s="">No stem</button>${shown.map(q => `<button data-s="${esc(q.size)}"${q.size === it.stem ? ' aria-pressed="true"' : ''}>${esc(stemWord(q))}${q.size === it.stem ? ' ✓' : ''}</button>`).join('')}</div>
-    <p class="note">Check the diameter against the canal with the ruler. The stem is drawn at the part's junction on this film${geomOf(it) && geomOf(it).stemPort ? '' : ' (this view has no junction drawn: the stem is listed, not drawn)'}.</p>
+    <p class="note">Check the diameter against the canal with the Length tool. The stem is drawn at the part's junction on this film${geomOf(it) && geomOf(it).stemPort ? '' : ' (this view has no junction drawn: the stem is listed, not drawn)'}.</p>
     <button class="go alt" id="sClose">Close</button>`, card => {
     card.querySelectorAll('[data-s]').forEach(b => b.onclick = () => {
       snap(); it.stem = b.dataset.s || null; const s = stemRec(it); if (s && Number.isFinite(s.collarMm) && isTumBody(f)) it.c = s.collarMm;
@@ -1188,7 +1195,7 @@ function tumRowsQ() {
       R.push(['Reconstruction', `${tumParts(z, L.c)} = ${fmm(L.sStack)} mm from ${isGtBody(f) ? 'its head centre level' : 'the joint line'}${d !== null ? ` (${d >= 0 ? '+' : ''}${fmm(d)} mm against the plan)` : ''}`, d !== null && Math.abs(d) > 5 ? 'warn' : '']);
       if (isGtBody(f) && L.sRef !== null) R.push(['Osteotomy of this stack', `${fmm(L.sStack - L.sRef)} mm below ${from}`]);
     }
-    const s = stemRec(it); R.push(['Stem', s ? `${stemWord(s)}: ${fmm(s.diameterMm)} mm, ${fmm((s.drawnLengthMm || 0) - (L.c || 0))} mm beyond its collar as drawn; check the canal with the ruler` : 'not chosen: choose the universal stem', s ? '' : 'warn']);
+    const s = stemRec(it); R.push(['Stem', s ? `${stemWord(s)}: ${fmm(s.diameterMm)} mm, ${fmm((s.drawnLengthMm || 0) - (L.c || 0))} mm beyond its collar as drawn; check the canal with the Length tool` : 'not chosen: choose the universal stem', s ? '' : 'warn']);
     if (f.humHeads) R.push(['Head', it.head ? `${it.head} mm humeral head (which fits the tumour upper end is not confirmed by Chunli)` : 'not chosen', 'warn']);
     if (Number.isFinite(z.junctionGapMm)) R.push(['Taper junctions', `${z.junctions} junction${z.junctions > 1 ? 's' : ''} taken as ${z.junctionGapMm} mm open each after impaction${f.tumour === 'phr' ? " (Chunli's Ø24 figure, taken for this Ø22 system: not confirmed)" : ' (Chunli)'}: the stack can sit up to about ${fmm(z.junctions * 0.25)} mm longer or shorter; check with the trial`, 'warn']);
     for (const a of f.assumptions || []) R.push(['Assumed (not confirmed by Chunli)', a, 'warn']);
@@ -1365,13 +1372,15 @@ function otherViews() {
 // zoom from the buttons and the keyboard: about the middle of the screen
 function zoomBy(k) { if (!Q.img) return; const r = cv.getBoundingClientRect(); zoomAt(G.P(r.width / 2, r.height / 2), k); }
 const SHORTCUTS = [
-  ['+  or  =', 'Zoom in (also the + button, two fingers, or the mouse wheel)'], ['−', 'Zoom out'], ['0  or  F', 'Fit the film to the screen'],
-  ['A', 'Add an implant (the whole set or one part)'], ['Tab', 'Pick the next implant'], ['R  /  L', 'Right / left side'],
-  ['.  or  Page Up', 'Next size up'], [',  or  Page Down', 'Next size down'], ['[  /  ]', 'Turn 1° (with Shift 5°)'],
-  ['Arrow keys', 'Move the picked implant 0.5 mm (with Shift 5 mm); nothing picked: move the film'],
-  ['C', 'Copy to the other side (on a lateral: Flip)'], ['M', 'Measure'], ['V', 'Valgus cut angle (long leg)'], ['S', 'Sizes card'],
-  ['1  /  2  /  3', 'Knee: AP / Lateral / other views'], ['Delete', 'Remove the picked implant'],
-  ['Ctrl+Z  or  ⌘Z  or  U', 'Undo'], ['Esc', 'Close a card, or stop the tap you started'], ['?', 'This list'],
+  ['L', 'Length (same key in the viewer)'], ['W  /  M  /  Z', 'Dragging on the film sets W/L / pans / zooms (same keys in the viewer)'],
+  ['0', "The film's own W/L"], ['F11', 'Invert'], ['F', 'Full screen'],
+  ['Ctrl+0  /  Ctrl+1', 'Fit the film / actual size (⌘ on a Mac)'], ['Ctrl and +  or  −', 'Zoom (also + and − alone, two fingers, or the mouse wheel)'], ['Ctrl+Shift+\\', 'Reset the view'], ['Ctrl+arrows', 'Move the film'],
+  ['I', 'Add an implant (the whole set or one part)'], ['N  or  Tab', 'Pick the next implant'], ['Shift+R  /  Shift+L', 'Right / left side'],
+  ['↑  or  Page Up', 'Next size up'], ['↓  or  Page Down', 'Next size down'], [',  /  .', 'Turn 0.5° (with Shift 2°)'],
+  ['Shift+arrows', 'Move the picked implant 0.5 mm (with Alt too, 2 mm)'],
+  ['C', 'Copy to the other side (on a lateral: Flip)'], ['V', 'Valgus cut angle (long leg)'], ['S', 'Sizes card'],
+  ['Alt+1  /  2  /  3', 'Knee: AP / Lateral / other views'], ['Delete', 'Remove the picked implant'],
+  ['Ctrl+Z  or  ⌘Z', 'Undo'], ['Esc', 'Close a card, or stop the tap you started'], ['?', 'This list'],
 ];
 function helpSheet() {
   sheet(`<h2>Shortcuts and help</h2>
@@ -1389,34 +1398,54 @@ document.addEventListener('keydown', e => {
     if (Q.tool && !Q.pendCopy) { Q.tool = null; Q.tmp = []; Q.placeKinds = null; msg('Stopped.'); syncUI(); draw(); }
     return;
   }
-  if (typing || e.altKey) return;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if ($('sheet').hidden) press('undoB'); return; }
-  if (e.ctrlKey || e.metaKey) return;
-  if (e.key === '?') { e.preventDefault(); if ($('sheet').hidden) helpSheet(); return; }   // never over an open card (the film card must be answered)
+  if (typing) return;
+  const mod = e.ctrlKey || e.metaKey, code = e.code || '';
+  if (mod && !e.altKey && e.key.toLowerCase() === 'z') { e.preventDefault(); if ($('sheet').hidden) press('undoB'); return; }
+  if (e.key === '?' && !mod) { e.preventDefault(); if ($('sheet').hidden) helpSheet(); return; }   // never over an open card (the film card must be answered)
   if (!$('sheet').hidden || !Q.img) return;
-  const k = e.key, it = Q.items[Q.sel], big = e.shiftKey;
-  const act = {
-    '+': () => zoomBy(1.4), '=': () => zoomBy(1.4), '-': () => zoomBy(1 / 1.4), '_': () => zoomBy(1 / 1.4), '0': fit, f: fit, F: fit,
-    a: () => press('placeB'), A: () => press('placeB'), c: () => press('mirrorB'), C: () => press('mirrorB'), m: () => press('measB'), M: () => press('measB'),
-    s: () => press('doneB'), S: () => press('doneB'), u: () => press('undoB'), U: () => press('undoB'),
-    r: () => press('sR'), R: () => press('sR'), l: () => press('sL'), L: () => press('sL'),
-    v: () => { if (!copyPending() && vgOk()) { Q.tool = 'vg'; Q.tmp = []; fit(); msg(`The ${SIDE[Q.side]} leg (the side button at the top). ${VG_STEPS[0]}`); syncUI(); } },
-    '.': () => press('plus'), '>': () => press('plus'), PageUp: () => press('plus'), ',': () => press('minus'), '<': () => press('minus'), PageDown: () => press('minus'),
-    '[': () => { if (it && !$('rotL').disabled) { if (!e.repeat) snap(); turn(big ? -5 : -1); } }, '{': () => { if (it && !$('rotL').disabled) { if (!e.repeat) snap(); turn(-5); } },
-    ']': () => { if (it && !$('rotR').disabled) { if (!e.repeat) snap(); turn(big ? 5 : 1); } }, '}': () => { if (it && !$('rotR').disabled) { if (!e.repeat) snap(); turn(5); } },
-    Delete: () => { if (it && !Q.pendCopy) removeSel(); }, Backspace: () => { if (it && !Q.pendCopy) removeSel(); },
-    Tab: () => { if (Q.items.length && !Q.tool) { e.preventDefault(); Q.sel = (Q.sel + (big ? Q.items.length - 1 : 1)) % Q.items.length; Q.side = Q.items[Q.sel].side; syncUI(); draw(); } },
-    1: () => { const b = document.querySelector('#tabs [data-v=ap]'); if (!$('tabs').hidden) b.click(); },
-    2: () => { const b = document.querySelector('#tabs [data-v=lat]'); if (!$('tabs').hidden) b.click(); },
-    3: () => { const b = document.querySelector('#tabs [data-v=other]'); if (!$('tabs').hidden) b.click(); },
-  }[k];
-  const arrow = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k];
-  if (arrow) {
-    e.preventDefault();
-    if (it && mmpp() && !Q.tool) { if (!e.repeat) snap(); nudge(arrow[0] * (big ? 10 : 1), arrow[1] * (big ? 10 : 1)); }
-    else { Q.view.tx -= arrow[0] * 40; Q.view.ty -= arrow[1] * 40; draw(); }
+  const k = e.key, it = Q.items[Q.sel], big = e.shiftKey, arrow = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[k];
+  // Sami, 6 Nov 2026: the same keys as the viewer and the full page (SHORTCUTS.md)
+  if (mod) {
+    if (e.altKey) return;
+    const f = F();
+    const act = code === 'Backslash' && big ? () => { Q.dragTool = null; if (f.win0) { f.win = { ...f.win0 }; f.inv = false; paintFilm(f); } fit(); draw(); }
+      : k === '0' || code === 'Numpad0' ? fit
+      : k === '1' || code === 'Numpad1' ? () => { const r = cv.getBoundingClientRect(); zoomAt(G.P(r.width / 2, r.height / 2), 1 / Q.view.s); }
+      : k === '+' || k === '=' || code === 'NumpadAdd' ? () => zoomBy(1.25)
+      : k === '-' || k === '_' || code === 'NumpadSubtract' ? () => zoomBy(0.8)
+      : arrow ? () => { Q.view.tx -= arrow[0] * 40; Q.view.ty -= arrow[1] * 40; draw(); } : null;
+    if (act) { e.preventDefault(); act(); }
     return;
   }
+  if (arrow && big) {
+    e.preventDefault();
+    if (it && mmpp() && !Q.tool) { if (!e.repeat) snap(); const n = e.altKey ? 4 : 1; nudge(arrow[0] * n, arrow[1] * n); }
+    return;
+  }
+  if (e.altKey) {
+    const v = { Digit1: 'ap', Digit2: 'lat', Digit3: 'other' }[code];
+    if (v && !$('tabs').hidden) { e.preventDefault(); document.querySelector(`#tabs [data-v=${v}]`).click(); }
+    return;
+  }
+  const tool = t => () => { Q.dragTool = t; msg({ wl: 'Dragging on the film now sets W/L (brightness and contrast). M goes back to pan.', pan: 'Dragging on the film now pans.', zoom: 'Dragging on the film now zooms. M goes back to pan.' }[t]); };
+  const low = k.length === 1 ? k.toLowerCase() : k;
+  const act = {
+    '+': () => zoomBy(1.4), '=': () => zoomBy(1.4), '-': () => zoomBy(1 / 1.4), '_': () => zoomBy(1 / 1.4),
+    f: () => { if (document.fullscreenElement) document.exitFullscreen(); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {}); },
+    w: tool('wl'), m: tool('pan'), z: tool('zoom'),
+    0: () => { const f = F(); if (f.win0) { f.win = { ...f.win0 }; paintFilm(f); draw(); } },
+    F11: () => { const f = F(); if (f.win) { f.inv = !f.inv; paintFilm(f); draw(); } },
+    l: () => { if (big) press('sL'); else if (mmpp() && !copyPending()) { Q.tool = 'ruler'; Q.tmp = []; msg('Tap one end.'); syncUI(); } },
+    r: () => { if (big) press('sR'); },
+    i: () => press('placeB'), c: () => press('mirrorB'), s: () => press('doneB'),
+    v: () => { if (!copyPending() && vgOk()) { Q.tool = 'vg'; Q.tmp = []; fit(); msg(`The ${SIDE[Q.side]} leg (the side button at the top). ${VG_STEPS[0]}`); syncUI(); } },
+    ArrowUp: () => press('plus'), PageUp: () => press('plus'), ArrowDown: () => press('minus'), PageDown: () => press('minus'),
+    ',': () => { if (it && !$('rotL').disabled) { if (!e.repeat) snap(); turn(-0.5); } }, '<': () => { if (it && !$('rotL').disabled) { if (!e.repeat) snap(); turn(-2); } },
+    '.': () => { if (it && !$('rotR').disabled) { if (!e.repeat) snap(); turn(0.5); } }, '>': () => { if (it && !$('rotR').disabled) { if (!e.repeat) snap(); turn(2); } },
+    Delete: () => { if (it && !Q.pendCopy) removeSel(); }, Backspace: () => { if (it && !Q.pendCopy) removeSel(); },
+    n: () => { if (Q.items.length && !Q.tool) { Q.sel = (Q.sel + 1) % Q.items.length; Q.side = Q.items[Q.sel].side; syncUI(); draw(); } },
+    Tab: () => { if (Q.items.length && !Q.tool) { e.preventDefault(); Q.sel = (Q.sel + (big ? Q.items.length - 1 : 1)) % Q.items.length; Q.side = Q.items[Q.sel].side; syncUI(); draw(); } },
+  }[low];
   if (act) { if (k !== 'Tab') e.preventDefault(); act(); }
 });
 function menu() {
@@ -1455,7 +1484,7 @@ function measMenu() {
   if (copyPending()) return;
   sheet(`<h2>Measure</h2><div class="menu">
     <button id="mVg"${vgOk() ? '' : ' disabled'}>Valgus cut angle (long leg): hip centre, knee centre, two points down the femoral canal</button>
-    <button id="mRul"${mmpp() ? '' : ' disabled'}>Ruler: tap two points</button>
+    <button id="mRul"${mmpp() ? '' : ' disabled'}>Length: tap two points</button>
     <button id="mLld"${Q.joint === 'hip' ? '' : ' disabled'}>Leg length: both teardrops, then both lesser trochanters</button>
     ${Q.joint === 'pfna' ? `<button id="mHead"${mmpp() ? '' : ' disabled'}>Femoral head: three points round its edge (tip-apex distance)</button>` : ''}
     </div><button class="go alt" id="mClose">Close</button>`, card => {
@@ -1517,7 +1546,7 @@ function resultGrid() {
 function measureRows() {
   const out = [];
   if (Q.lld.length === 4 && lldText()) out.push(['Leg length', lldText()]);
-  Q.rul.forEach((m, i) => out.push([`Ruler ${i + 1}`, `${(G.dist(m.a, m.b) * mmpp()).toFixed(0)} mm`]));
+  Q.rul.forEach((m, i) => out.push([`Length ${i + 1}`, `${(G.dist(m.a, m.b) * mmpp()).toFixed(0)} mm`]));
   return out;
 }
 function caseAngles() {

@@ -23,6 +23,7 @@ import java.util.List;
 import javax.swing.Icon;
 import org.weasis.core.Messages;
 import org.weasis.core.api.gui.util.GeomUtil;
+import org.weasis.core.api.gui.util.ShortcutManager;
 import org.weasis.core.api.util.ResourceUtil;
 import org.weasis.core.api.util.ResourceUtil.ActionIcon;
 import org.weasis.core.ui.model.utils.bean.AdvancedShape;
@@ -255,5 +256,15 @@ public class CobbAngleToolGraphic extends OpenAngleToolGraphic {
   protected void updateTool() {
     super.updateTool();
     ptO = getHandlePoint(4);
+  }
+
+  @Override
+  public int getKeyCode() {
+    return ShortcutManager.getInstance().getKeyCode(ShortcutManager.ID_GRAPHIC_COBB);
+  }
+
+  @Override
+  public int getModifier() {
+    return ShortcutManager.getInstance().getModifier(ShortcutManager.ID_GRAPHIC_COBB);
   }
 }

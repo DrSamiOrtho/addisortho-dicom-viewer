@@ -17,6 +17,7 @@ import javax.swing.SwingUtilities;
 import org.weasis.core.api.media.data.MediaSeries;
 import org.weasis.core.api.util.ResourceUtil;
 import org.weasis.core.ui.editor.image.ViewCanvas;
+import org.weasis.core.ui.util.ToolbarLabels;
 import org.weasis.core.ui.util.WtoolBar;
 import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.viewer2d.EventManager;
@@ -33,6 +34,8 @@ public class StitchToolBar extends WtoolBar {
                 .derive(ResourceUtil.TOOLBAR_ICON_SIZE, ResourceUtil.TOOLBAR_ICON_SIZE));
     button.setToolTipText(Messages.getString("StitchToolBar.tooltip"));
     button.getAccessibleContext().setAccessibleName(Messages.getString("StitchToolBar.stitch"));
+    button.putClientProperty(
+        ToolbarLabels.CLIENT_PROPERTY, Messages.getString("StitchToolBar.label"));
     button.addActionListener(e -> open(button));
     add(button);
   }

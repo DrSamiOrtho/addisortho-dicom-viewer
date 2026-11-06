@@ -286,3 +286,8 @@ automatic, semi-automatic or manual, and not reviewed.
   excluded from the match automatically (a brightness filter stands in for "on bone"); no seam-aware uncertainty in the
   templating page; no Lite memory and time benchmark on a real 4 GB PC yet; the VOI LUT curve is not reproduced. Not tested inside the running viewer yet:
   the window was driven from code with synthetic phantom pieces.
+
+## Shortcuts (6 Nov 2026)
+
+`SHORTCUTS.md` is the one list for the 2D viewer, the 3D view and both templating pages (RadiAnt's keys). Change a key there and in
+every place it names. The templating pages are release r44b (`dist/released-2026-11-06-keys` in the templating project): q7 plus these keys.

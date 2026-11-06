@@ -44,8 +44,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Runs the templating page offline: serves its viewer build on 127.0.0.1 and answers for the archive
- * for each X-ray handed over, under /t/&lt;token&gt;/:
+ * Runs the templating page offline: serves its viewer build on 127.0.0.1 and answers for the
+ * archive for each X-ray handed over, under /t/&lt;token&gt;/:
  *
  * <ul>
  *   <li>{@code templating/...}: the page's files;
@@ -56,9 +56,10 @@ import org.slf4j.LoggerFactory;
  * </ul>
  *
  * Every request must name the Host 127.0.0.1:&lt;port&gt;; a POST must carry the X-AOC-Templating
- * header (another site cannot add it without a CORS preflight, which is never granted) and, when the
- * browser sends an Origin, the page's own; an unknown or ended token is answered 404. The protocol and
- * its reference implementation are in the templating project's workflow/28o_templating_viewer.py.
+ * header (another site cannot add it without a CORS preflight, which is never granted) and, when
+ * the browser sends an Origin, the page's own; an unknown or ended token is answered 404. The
+ * protocol and its reference implementation are in the templating project's
+ * workflow/28o_templating_viewer.py.
  */
 public final class TemplatingServer implements Closeable {
 
@@ -124,8 +125,7 @@ public final class TemplatingServer implements Closeable {
     server.setExecutor(executor);
     server.createContext("/", this::handle);
     server.start();
-    LOGGER.info(
-        "Templating page {} (build {}) on {}", pages.release(), pages.build(), origin);
+    LOGGER.info("Templating page {} (build {}) on {}", pages.release(), pages.build(), origin);
   }
 
   private static HttpServer bind(int preferredPort) throws IOException {

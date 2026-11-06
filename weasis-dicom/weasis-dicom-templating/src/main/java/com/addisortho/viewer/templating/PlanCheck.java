@@ -18,14 +18,16 @@ import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.io.DicomInputStream.IncludeBulkData;
 
 /**
- * Whether a plan the page sends belongs to the X-ray it was handed: a DICOM Secondary Capture with a
- * picture, of the same patient and study, with its own new instance and series.
+ * Whether a plan the page sends belongs to the X-ray it was handed: a DICOM Secondary Capture with
+ * a picture, of the same patient and study, with its own new instance and series.
  */
 final class PlanCheck {
 
   static final Pattern UID_TEXT = Pattern.compile("[0-9]+(\\.[0-9]+)*");
 
-  /** The outcome: accepted with its UIDs, or refused with an HTTP status and the reason in words. */
+  /**
+   * The outcome: accepted with its UIDs, or refused with an HTTP status and the reason in words.
+   */
   record Result(int status, String error, String sop, String series) {
     boolean accepted() {
       return status == 200;
@@ -67,7 +69,9 @@ final class PlanCheck {
     }
     String sop = Handover.text(ds, Tag.SOPInstanceUID);
     String series = Handover.text(ds, Tag.SeriesInstanceUID);
-    if (!isUid(sop) || !isUid(series) || !sop.equals(fmi.getString(Tag.MediaStorageSOPInstanceUID))) {
+    if (!isUid(sop)
+        || !isUid(series)
+        || !sop.equals(fmi.getString(Tag.MediaStorageSOPInstanceUID))) {
       return Result.refuse(422, "the plan has no valid instance or series UID");
     }
     if (sop.equals(h.sop()) || series.equals(h.series())) {

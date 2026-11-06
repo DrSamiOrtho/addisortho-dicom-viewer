@@ -54,7 +54,8 @@ public class LutToolBar extends WtoolBar {
                   ((GroupRadioMenu<?>) getMenuModel()).getRadioMenuItemListCopy()) {
                 PresetWindowLevel preset = (PresetWindowLevel) item.getUserObject();
                 if (preset.getKeyCode() > 0) {
-                  item.setAccelerator(KeyStroke.getKeyStroke(preset.getKeyCode(), 0));
+                  item.setAccelerator(
+                      KeyStroke.getKeyStroke(EventManager.presetKey(preset.getKeyCode()), 0));
                 }
               }
             }

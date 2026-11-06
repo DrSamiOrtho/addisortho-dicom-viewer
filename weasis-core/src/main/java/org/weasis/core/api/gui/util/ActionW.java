@@ -54,7 +54,7 @@ public class ActionW {
       new SliderCineListenerValue(
           Messages.getString("ActionW.scroll"),
           "sequence", // NON-NLS
-          KeyEvent.VK_S,
+          KeyEvent.VK_B,
           0,
           Feature.getSvgCursor("sequence.svg", Messages.getString("ActionW.scroll"), 0.5f, 0.5f));
   public static final SliderChangeListenerValue ROTATION =
@@ -70,7 +70,7 @@ public class ActionW {
           Messages.getString("ActionW.speed"), "cinespeed", 0, 0, null); // NON-NLS
   public static final BasicActionStateValue CINESTART =
       new BasicActionStateValue(
-          Messages.getString("ActionW.start"), "cinestart", KeyEvent.VK_C, 0, null); // NON-NLS
+          Messages.getString("ActionW.start"), "cinestart", KeyEvent.VK_SPACE, 0, null); // NON-NLS
   public static final BasicActionStateValue CINESTOP =
       new BasicActionStateValue(
           Messages.getString("ActionW.stop"), "cinestop", 0, 0, null); // NON-NLS
@@ -121,7 +121,7 @@ public class ActionW {
       new PannerListenerValue(
           Messages.getString("ActionW.pan"),
           "pan", // NON-NLS
-          KeyEvent.VK_T,
+          KeyEvent.VK_M,
           0,
           Feature.getSvgCursor("pan.svg", Messages.getString("ActionW.pan"), 0.5f, 0.5f));
   public static final BasicActionStateValue DRAWINGS =
@@ -129,7 +129,7 @@ public class ActionW {
           Messages.getString("ActionW.draw"), "drawings", 0, 0, null); // NON-NLS
   public static final BasicActionStateValue MEASURE =
       new BasicActionStateValue(
-          Messages.getString("ActionW.measure"), "measure", KeyEvent.VK_M, 0, null) { // NON-NLS
+          Messages.getString("ActionW.measure"), "measure", 0, 0, null) { // NON-NLS
         @Override
         public boolean isDrawingAction() {
           return true;
@@ -137,7 +137,7 @@ public class ActionW {
       };
   public static final BasicActionStateValue DRAW =
       new BasicActionStateValue(
-          Messages.getString("ActionW.draws"), "draw", KeyEvent.VK_G, 0, null) { // NON-NLS
+          Messages.getString("ActionW.draws"), "draw", 0, 0, null) { // NON-NLS
         @Override
         public boolean isDrawingAction() {
           return true;

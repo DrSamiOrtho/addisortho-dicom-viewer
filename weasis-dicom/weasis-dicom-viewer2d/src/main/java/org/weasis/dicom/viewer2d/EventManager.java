@@ -12,7 +12,6 @@ package org.weasis.dicom.viewer2d;
 import java.awt.Component;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseWheelEvent;
 import java.awt.image.DataBuffer;
@@ -1043,14 +1042,23 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement>
     // Do nothing
   }
 
+  /**
+   * RadiAnt: 0 the default window, 1 full dynamic. The presets library has them the other way, so
+   * these two keys swap, both ways. Any other key is itself.
+   */
+  public static int presetKey(int key) {
+    return key == KeyEvent.VK_0 ? KeyEvent.VK_1 : key == KeyEvent.VK_1 ? KeyEvent.VK_0 : key;
+  }
+
   private void keyPreset(int keyEvent, int modifiers) {
     Optional<? extends ComboItemListener<?>> presetAction = getAction(ActionW.PRESET);
     if (modifiers == 0 && presetAction.isPresent() && presetAction.get().isActionEnabled()) {
       ComboItemListener<?> presetComboListener = presetAction.get();
       DefaultComboBoxModel<?> model = presetComboListener.getModel();
+      int key = presetKey(keyEvent);
       for (int i = 0; i < model.getSize(); i++) {
         PresetWindowLevel val = (PresetWindowLevel) model.getElementAt(i);
-        if (val.getKeyCode() == keyEvent) {
+        if (val.getKeyCode() == key) {
           presetComboListener.setSelectedItem(val);
           return;
         }
@@ -1587,7 +1595,8 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement>
         for (final ResetTools action : ResetTools.values()) {
           final JMenuItem item = new JMenuItem(action.toString());
           if (ResetTools.ALL.equals(action)) {
-            item.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0));
+            item.setAccelerator(
+                ShortcutManager.getInstance().getKeyStroke(ShortcutManager.ID_VIEWER_ESCAPE));
           }
           item.addActionListener(e -> reset(action));
           menu.add(item);
@@ -1612,7 +1621,7 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement>
           RadioMenuItem ritem = (RadioMenuItem) mitem;
           PresetWindowLevel preset = (PresetWindowLevel) ritem.getUserObject();
           if (preset.getKeyCode() > 0) {
-            ritem.setAccelerator(KeyStroke.getKeyStroke(preset.getKeyCode(), 0));
+            ritem.setAccelerator(KeyStroke.getKeyStroke(presetKey(preset.getKeyCode()), 0));
           }
         }
       }
@@ -1668,7 +1677,8 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement>
           menuItem = new JMenuItem(Messages.getString("View2dContainer.-90"));
           menuItem.setIcon(ResourceUtil.getIcon(ActionIcon.ROTATE_COUNTERCLOCKWISE));
           GuiUtils.applySelectedIconEffect(menuItem);
-          menuItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_L, InputEvent.ALT_DOWN_MASK));
+          menuItem.setAccelerator(
+              ShortcutManager.getInstance().getKeyStroke(ShortcutManager.ID_VIEWER_ROTATE_LEFT));
           menuItem.addActionListener(
               e ->
                   rotateAction
@@ -1678,7 +1688,8 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement>
           menuItem = new JMenuItem(Messages.getString("View2dContainer.+90"));
           menuItem.setIcon(ResourceUtil.getIcon(ActionIcon.ROTATE_CLOCKWISE));
           GuiUtils.applySelectedIconEffect(menuItem);
-          menuItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_R, InputEvent.ALT_DOWN_MASK));
+          menuItem.setAccelerator(
+              ShortcutManager.getInstance().getKeyStroke(ShortcutManager.ID_VIEWER_ROTATE_RIGHT));
           menuItem.addActionListener(
               e ->
                   rotateAction
@@ -1704,7 +1715,8 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement>
                         ResourceUtil.getIcon(ActionIcon.FLIP));
             GuiUtils.applySelectedIconEffect(menuItem);
             menuItem.setAccelerator(
-                KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.ALT_DOWN_MASK));
+                ShortcutManager.getInstance()
+                    .getKeyStroke(ShortcutManager.ID_VIEWER_FLIP_HORIZONTAL));
             menu.add(menuItem);
           }
         }
@@ -1727,7 +1739,9 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement>
           menuItem.setIcon(ResourceUtil.getIcon(ActionIcon.EXECUTE));
           GuiUtils.applySelectedIconEffect(menuItem);
           menuItem.setActionCommand(ActionW.CINESTART.cmd());
-          menuItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_C, 0));
+          menuItem.setAccelerator(
+              KeyStroke.getKeyStroke(
+                  ActionW.CINESTART.getKeyCode(), ActionW.CINESTART.getModifier()));
           menuItem.addActionListener(EventManager.getInstance());
           menu.add(menuItem);
 
@@ -1735,7 +1749,9 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement>
           menuItem.setIcon(ResourceUtil.getIcon(ActionIcon.SUSPEND));
           GuiUtils.applySelectedIconEffect(menuItem);
           menuItem.setActionCommand(ActionW.CINESTOP.cmd());
-          menuItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_C, 0));
+          menuItem.setAccelerator(
+              KeyStroke.getKeyStroke(
+                  ActionW.CINESTART.getKeyCode(), ActionW.CINESTART.getModifier()));
           menuItem.addActionListener(EventManager.getInstance());
           menu.add(menuItem);
 

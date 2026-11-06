@@ -21,6 +21,7 @@ import java.util.List;
 import javax.swing.Icon;
 import org.weasis.core.Messages;
 import org.weasis.core.api.gui.util.GeomUtil;
+import org.weasis.core.api.gui.util.ShortcutManager;
 import org.weasis.core.api.image.measure.MeasurementsAdapter;
 import org.weasis.core.api.image.util.MeasurableLayer;
 import org.weasis.core.api.image.util.Unit;
@@ -242,5 +243,15 @@ public class EllipseGraphic extends ObliqueRectangleGraphic {
       }
     }
     return pts;
+  }
+
+  @Override
+  public int getKeyCode() {
+    return ShortcutManager.getInstance().getKeyCode(ShortcutManager.ID_GRAPHIC_ELLIPSE);
+  }
+
+  @Override
+  public int getModifier() {
+    return ShortcutManager.getInstance().getModifier(ShortcutManager.ID_GRAPHIC_ELLIPSE);
   }
 }

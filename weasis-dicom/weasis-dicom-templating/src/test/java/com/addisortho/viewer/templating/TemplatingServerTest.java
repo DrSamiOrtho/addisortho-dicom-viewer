@@ -135,7 +135,8 @@ class TemplatingServerTest {
         "<!doctype html><html lang=\"en\" data-mode=\"viewer\" data-release=\"r1\"><title>t</title>\n",
         text(r));
     assertEquals("text/html; charset=utf-8", r.headers().firstValue("Content-Type").orElse(""));
-    assertEquals(TemplatingServer.CSP, r.headers().firstValue("Content-Security-Policy").orElse(""));
+    assertEquals(
+        TemplatingServer.CSP, r.headers().firstValue("Content-Security-Policy").orElse(""));
     assertEquals("no-store", r.headers().firstValue("Cache-Control").orElse(""));
     assertEquals("nosniff", r.headers().firstValue("X-Content-Type-Options").orElse(""));
     assertEquals(200, get(base + "templating/library.json").statusCode());
@@ -216,7 +217,8 @@ class TemplatingServerTest {
 
   @Test
   void anUnknownOrEndedTokenFindsNothing() throws Exception {
-    HttpResponse<byte[]> unknown = get(base.replaceAll("/t/[0-9a-f]{32}/", "/t/" + "0".repeat(32) + "/") + "templating/");
+    HttpResponse<byte[]> unknown =
+        get(base.replaceAll("/t/[0-9a-f]{32}/", "/t/" + "0".repeat(32) + "/") + "templating/");
     assertEquals(404, unknown.statusCode());
     assertTrue(text(unknown).contains("Press Template in the viewer again"));
     assertEquals(404, get("http://127.0.0.1:" + server.port() + "/").statusCode());
@@ -229,7 +231,9 @@ class TemplatingServerTest {
     try (Socket s = new Socket("127.0.0.1", server.port())) {
       OutputStream out = s.getOutputStream();
       out.write(
-          ("GET " + URI.create(base).getRawPath() + "templating/ HTTP/1.1\r\nHost: localhost:"
+          ("GET "
+                  + URI.create(base).getRawPath()
+                  + "templating/ HTTP/1.1\r\nHost: localhost:"
                   + server.port()
                   + "\r\nConnection: close\r\n\r\n")
               .getBytes(StandardCharsets.US_ASCII));

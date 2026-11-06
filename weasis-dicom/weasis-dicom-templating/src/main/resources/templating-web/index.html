@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-mode="viewer" data-release="r44a">
+<html lang="en" data-mode="viewer" data-release="r44b">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -434,7 +434,7 @@
   <span class="slot" id="projSlot"></span>
   <button id="undoBtn" class="icon" aria-label="Undo" title="Undo the last change (Ctrl/⌘+Z)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
   <button id="redoBtn" class="icon" aria-label="Redo" title="Redo what Undo took back (Ctrl/⌘+Shift+Z, Ctrl+Y)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
-  <button id="fitBtn" class="icon" aria-label="Fit to window" title="Fit the X-ray to the window (F)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+  <button id="fitBtn" class="icon" aria-label="Fit to window" title="Fit the X-ray to the window (Ctrl/⌘+0)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
   <button id="panelBtn" title="Show or hide the side panel" aria-controls="pcol">Panel</button>
   <input type="file" id="file2" accept=".dcm,.dicom,.aotp,application/dicom,application/zip,image/png,image/jpeg,image/webp,image/*" hidden>
   <input type="file" id="planFile" accept=".json,application/json" hidden>
@@ -442,7 +442,7 @@
 </header>
 <main>
   <div id="stage">
-    <canvas id="cv" tabindex="0" role="application" aria-roledescription="X-ray editor" aria-label="X-ray. Tap or click to place the landmark asked for; drag implants and points; keyboard shortcuts are listed under Implants, Moving implants by hand."></canvas>
+    <canvas id="cv" tabindex="0" role="application" aria-roledescription="X-ray editor" aria-label="X-ray. Tap or click to place the landmark asked for; drag implants and points; keyboard shortcuts are listed under Implants, Moving implants by hand; they are the viewer's."></canvas>
     <div id="prompt" aria-live="polite"></div>
     <div id="hud"></div>
     <div id="alerts"></div>

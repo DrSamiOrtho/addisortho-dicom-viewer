@@ -727,8 +727,7 @@ public abstract class ImageViewerEventManager<E extends ImageElement> implements
 
     if (sm.matches(ShortcutManager.ID_VIEWER_ESCAPE, keyEvent, modifiers)) {
       resetDisplay();
-    } else if (keyEvent == ActionW.CINESTART.getKeyCode()
-        && ActionW.CINESTART.getModifier() == modifiers) {
+    } else if (sm.matches(ActionW.CINESTART.cmd(), keyEvent, modifiers)) {
       Optional<SliderCineListener> cineAction = getAction(ActionW.SCROLL_SERIES);
       if (cineAction.isPresent() && cineAction.get().isActionEnabled()) {
         if (cineAction.get().isCining()) {
@@ -764,6 +763,11 @@ public abstract class ImageViewerEventManager<E extends ImageElement> implements
       getAction(ActionW.ZOOM).ifPresent(a -> a.setSliderValue(a.getSliderValue() - 1));
     } else if (sm.matches(ShortcutManager.ID_VIEWER_ZOOM_IN, keyEvent, modifiers)) {
       getAction(ActionW.ZOOM).ifPresent(a -> a.setSliderValue(a.getSliderValue() + 1));
+    } else if (sm.matches(ShortcutManager.ID_VIEWER_REAL_SIZE, keyEvent, modifiers)) {
+      firePropertyChange(
+          ActionW.SYNCH.cmd(),
+          null,
+          new SynchEvent(getSelectedViewPane(), ActionW.ZOOM.cmd(), -100.0));
     } else if (sm.matches(ShortcutManager.ID_VIEWER_BEST_FIT, keyEvent, modifiers)) {
       firePropertyChange(
           ActionW.SYNCH.cmd(),

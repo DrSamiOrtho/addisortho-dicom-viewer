@@ -46,7 +46,7 @@ public final class ToolbarLabels {
           Map.entry("vol.lut", "LUT"),
           Map.entry("measure", "Measure"),
           Map.entry("draw", "Draw"),
-          Map.entry("crosshair.cut.mode", "Cut"),
+          Map.entry("crosshair.cut.mode", "Cut mode"),
           Map.entry("left", "Left"),
           Map.entry("middle", "Middle"),
           Map.entry("right", "Right"),
@@ -59,23 +59,23 @@ public final class ToolbarLabels {
           Map.entry("view3D", "MPR"),
           Map.entry("veins", "MIP"),
           Map.entry("loadVolume", "Rebuild"),
-          Map.entry("orthographic", "Ortho"),
+          Map.entry("orthographic", "Parallel"),
           Map.entry("volumeCut", "Cut"),
-          Map.entry("volumeSettings", "3D set"),
+          Map.entry("volumeSettings", "Settings"),
           Map.entry("reset", "Reset"),
           Map.entry("rotation", "Rotate"),
           Map.entry("flip", "Flip"),
           Map.entry("inverseLut", "Invert"),
-          Map.entry("zoomPan", "Lens"),
-          Map.entry("metadata", "Info"),
-          Map.entry("exportImage", "Image"),
+          Map.entry("zoomPan", "Magnifier"),
+          Map.entry("metadata", "Tags"),
+          Map.entry("exportImage", "Capture"),
           Map.entry("exportDicom", "Export"),
           Map.entry("importDicom", "Import"),
           Map.entry("importCd", "CD"),
           Map.entry("importImage", "Import"),
           Map.entry("print", "Print"),
           Map.entry("volumeSlicing", "Slice"),
-          Map.entry("launch", "Launch"));
+          Map.entry("launch", "Launcher"));
 
   private static final List<WeakReference<AbstractButton>> DECORATED = new ArrayList<>();
   private static boolean enabled = true;

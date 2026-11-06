@@ -21,6 +21,7 @@ import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.media.data.MediaSeries;
 import org.weasis.core.api.util.ResourceUtil;
 import org.weasis.core.ui.editor.image.ViewCanvas;
+import org.weasis.core.ui.util.ToolbarLabels;
 import org.weasis.core.ui.util.WtoolBar;
 import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.viewer2d.EventManager;
@@ -39,7 +40,11 @@ public class TemplatingToolBar extends WtoolBar {
                         TemplatingToolBar.class.getResource("/icon/svg/templating.svg")))
                 .derive(ResourceUtil.TOOLBAR_ICON_SIZE, ResourceUtil.TOOLBAR_ICON_SIZE));
     button.setToolTipText(Messages.getString("TemplatingToolBar.tooltip"));
-    button.getAccessibleContext().setAccessibleName(Messages.getString("TemplatingToolBar.template"));
+    button
+        .getAccessibleContext()
+        .setAccessibleName(Messages.getString("TemplatingToolBar.template"));
+    button.putClientProperty(
+        ToolbarLabels.CLIENT_PROPERTY, Messages.getString("TemplatingToolBar.label"));
     button.addActionListener(e -> template(button));
     add(button);
   }
@@ -51,7 +56,10 @@ public class TemplatingToolBar extends WtoolBar {
     String why = TemplatingService.refusal(series, image);
     if (why != null) {
       JOptionPane.showMessageDialog(
-          parent, why, Messages.getString("TemplatingToolBar.title"), JOptionPane.INFORMATION_MESSAGE);
+          parent,
+          why,
+          Messages.getString("TemplatingToolBar.title"),
+          JOptionPane.INFORMATION_MESSAGE);
       return;
     }
     new SwingWorker<URI, Void>() {
@@ -64,7 +72,8 @@ public class TemplatingToolBar extends WtoolBar {
       protected void done() {
         try {
           URI page = get();
-          // the link in the log too, as local servers do: it reaches the page if the browser does not open
+          // the link in the log too, as local servers do: it reaches the page if the browser does
+          // not open
           LOGGER.info("Templating page for this X-ray: {}", page);
           GuiUtils.openInDefaultBrowser(parent, page);
         } catch (Exception e) {

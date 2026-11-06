@@ -302,7 +302,7 @@ async function boot() {
   const q = new URLSearchParams(location.search);
   // wording that stays true once projects are saved to the server (Astra, 13 Oct: "nothing is uploaded" would not be)
   if (STANDALONE) $('foot').textContent = 'Addis Ortho Trading PLC · X-ray templating for surgeons. A planning aid: the plan is a draft and the surgeon decides. The X-ray opens in this browser; a saved project is stored for your team.';
-  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r44a). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
+  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r44b). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
   pendingNote();
   for (const [text, fn] of kcOpenItems()) { const li = document.createElement('li'), a = document.createElement('a'); a.href = '#'; a.textContent = text; a.onclick = e => { e.preventDefault(); fn(); }; li.appendChild(a); $('openList').appendChild(li); }
   // the short part on top and the rest under the templated-patients list, so a phone sees the list without scrolling far
@@ -466,7 +466,7 @@ function setImage(img, src, opt = {}) {
 // The film's picture and plan put on the page: a new X-ray or case (setImage, fresh), or another film of the knee case on
 // screen (kcShowImg: the case, its patient list entry and its "unsaved" mark stay as they are)
 function loadFilm(img, src, opt, fresh) {
-  S.img = img; S.src = src; S.wl = { c: img.wc, w: img.ww }; S.wlFile = { ...S.wl }; S.wlAuto = false; S.wlPrev = null; S.invertView = false;
+  S.img = img; S.src = src; S.wl = { c: img.wc, w: img.ww }; S.wlFile = { ...S.wl }; S.wlAuto = false; S.wlPrev = null; S.invertView = false; S.dragTool = 'pan';
   if (img.ww >= 0.95 * (img.max - img.min)) { autoWindow(); S.wlAuto = true; }   // a window over the whole range shows a flat grey film
   const m = img.meta || {};
   // a plan belongs to one image: the archive's instance UID, or the file's own content (same name is not enough)
@@ -1238,7 +1238,7 @@ function phrRows(R, t) {
     R.push(['Reconstruction', `${z.label || z.size} + stem collar ${c}: ${tumParts(z, c)} = ${fmm(tot)} mm below its head centre level`]);
     if (Number.isFinite(P.sGT)) R.push(['Osteotomy of this stack', `${fmm(tot - P.sGT)} mm below the tuberosity tip${d !== null ? ` (${d >= 0 ? '+' : ''}${fmm(d)} mm against the planned resection)` : ''}`, d !== null && Math.abs(d) > 5 ? 'warn' : '']);
   }
-  R.push(['Stem', st ? `${st.s.label || st.s.size}: ${st.s.diameterMm} mm below its collar, ${f1(st.s.drawnLengthMm - (c || 0))} mm beyond its collar as drawn; check the canal width with the ruler` : 'not chosen yet: choose the universal stem; check its diameter against the canal with the ruler', st ? '' : 'warn']);
+  R.push(['Stem', st ? `${st.s.label || st.s.size}: ${st.s.diameterMm} mm below its collar, ${f1(st.s.drawnLengthMm - (c || 0))} mm beyond its collar as drawn; check the canal width with the Length tool` : 'not chosen yet: choose the universal stem; check its diameter against the canal with the Length tool', st ? '' : 'warn']);
   R.push(['Taper junctions', pfrGapNote(z, true), 'warn']);
   for (const a of f.assumptions || []) R.push(['Assumed (not confirmed by Chunli)', a, 'warn']);
   R.push(['Placement', 'placed, not sized: the head centre on the native head centre, the axis along the humeral shaft; drag and turn to fine-tune', 'warn']);
@@ -3428,7 +3428,7 @@ function results0() {   // [[label, value, cls]] with group headers as [label]
   else if (S.wf === 'kneeLong') kneeLongResults(R, k);
   else if (S.wf === 'kneeSky') kneeSkyResults(R);   // r33 (Fable P2 4): the skyline's rows only on the skyline film
   if (S.ll) llRows(R, k);   // r44: the long leg's own rows, in every zone
-  if (k) for (const [i, r] of S.rulers.entries()) if (r.length === 2) { if (i === 0) R.push(['Rulers']); R.push([`Ruler ${i + 1}`, `${f1(G.dist(r[0], r[1]) * k)} mm`]); }
+  if (k) for (const [i, r] of S.rulers.entries()) if (r.length === 2) { if (i === 0) R.push(['Lengths']); R.push([`Length ${i + 1}`, `${f1(G.dist(r[0], r[1]) * k)} mm`]); }
   for (const [i, a] of (S.angles || []).entries()) if (a.length === 3) { if (i === 0) R.push(['Angles']); R.push([`Angle ${i + 1}`, `${f1(angleAt(a))}°`]); }   // r36
   if (S.kc) kcSummaryRows(R);   // the whole knee case, every value with its film and its source
   return R;
@@ -3495,7 +3495,7 @@ function hipResults(R, k) {
       const offLine = G.lineDist(G.mid(tip, top), canal.a, canal.b) * k;
       R.push(['Stem vs canal axis', !(a2 >= 0.25) ? (offLine > 1 ? `parallel, ${f1(offLine)} mm off the canal line` : 'aligned') : `${f1(a2)}° ${varus ? 'varus' : 'valgus'}`, a2 > 3 || offLine > 2 ? 'warn' : '']);
       const tr = !isPfr(f) && canalTraceFor(o), fit = tr ? stemFit(stem, tr) : null, Ls = tr ? stemLen(stem, tr) : 0, ev = fitIsEvidence(fit, tr, Ls);   // r32: a PFR is not sized by canal fill
-      if (isPfr(f)) R.push(['Canal fill', 'not used: a tumour body is not sized by canal fill; check the stem against the canal with the ruler']);
+      if (isPfr(f)) R.push(['Canal fill', 'not used: a tumour body is not sized by canal fill; check the stem against the canal with the Length tool']);
       else if (fit) R.push(['Canal fill (distal third of the traced canal)', `${Math.round(fit.fillDistal * 100)} %; ${fit.maxIn > 0.5 ? `${f1(fit.maxIn)} mm past the inner cortex at the tightest level` : fit.maxIn >= -0.5 ? 'touching the inner cortex at the tightest level' : `${f1(-fit.maxIn)} mm clear of the inner cortex at the tightest level`}${ev ? '' : `; checked over only ${Math.round(fit.coveredMm)} of ${Math.round(Ls)} mm of stem (${Math.round(fit.maxGapMm)} mm unchecked in one stretch)`}`, fit.maxIn > 1 || !ev ? 'warn' : '']);
       else R.push(['Canal fill', 'not checked: the canal\'s inner cortex was not traced along this stem', 'warn']);
     }
@@ -3695,7 +3695,7 @@ function pfrRows(R, t, side) {
     R.push(['Reconstruction', `${z.label || z.size} + stem collar ${c}: ${tumParts(z, c)} = ${fmm(tot)} mm below its neck-0 head centre level`]);
     if (Number.isFinite(P.sGT)) R.push(['Osteotomy of this stack', `${fmm(tot - P.sGT)} mm below the GT tip${d !== null ? ` (${d >= 0 ? '+' : ''}${fmm(d)} mm against the planned resection)` : ''}`, d !== null && Math.abs(d) > 5 ? 'warn' : '']);
   }
-  R.push(['Stem', st ? `${st.s.label || st.s.size}: ${st.s.diameterMm} mm, ${f1(st.s.drawnLengthMm - (c || 0))} mm beyond its collar as drawn; check the canal width at the tip and mid-stem with the ruler` : 'not chosen yet: choose the universal stem; check its diameter against the canal with the ruler', st ? '' : 'warn']);
+  R.push(['Stem', st ? `${st.s.label || st.s.size}: ${st.s.diameterMm} mm, ${f1(st.s.drawnLengthMm - (c || 0))} mm beyond its collar as drawn; check the canal width at the tip and mid-stem with the Length tool` : 'not chosen yet: choose the universal stem; check its diameter against the canal with the Length tool', st ? '' : 'warn']);
   R.push(['Taper junctions', pfrGapNote(z), 'warn']);
   for (const a of f.assumptions || []) R.push(['Assumed (not confirmed by Chunli)', a, 'warn']);
   R.push(['Placement', bipOf(t) ? 'placed, not sized: the bipolar shell\'s outer centre on the native head centre, the axis along the canal; drag and turn to fine-tune. The bipolar shell on this body: Sami (29 Oct 2026) says the PFR takes the same Chunli shell; not confirmed by Chunli'
@@ -3726,7 +3726,7 @@ function tumRowsOf(R, k, slot) {
     R.push([bone, `${f1(rem)} mm to ${to} (projected)`]);
     if (st && c !== null) { const tip = rem - d - (st.s.drawnLengthMm - c); R.push([fem ? 'Stem in the remaining femur' : 'Stem in the remaining tibia', `${st.s.label || st.s.size}: ${f1(st.s.drawnLengthMm - c)} mm ${fem ? 'above' : 'below'} its collar; tip ${f1(tip)} mm ${fem ? 'below' : 'above'} ${to}`, tip < DIA_TIP_MM ? 'warn' : '']); }
   } else R.push([bone, S.wf === 'kneeAP' ? (fem ? 'not measured: mark the hip centre (a long-leg film, or the knee case\'s long film)' : 'not measured: mark the ankle centre (open a film that shows the ankle as the knee AP)') : 'measured on the knee AP', 'warn']);
-  if (!st) R.push(['Stem', 'not chosen yet: choose the universal stem; check its diameter against the canal with the ruler', 'warn']);
+  if (!st) R.push(['Stem', 'not chosen yet: choose the universal stem; check its diameter against the canal with the Length tool', 'warn']);
   R.push(['Scale', 'lengths use this film\'s ball, placed at the knee; the resection level lies further from it, where magnification may differ (not validated)', 'warn']);
 }
 // The placed components' cuts on this knee AP (one calculation for the results and the knee plan card): {fe, ti}, each null
@@ -4433,6 +4433,8 @@ function bindPointer() {
     const h = hit(sp);
     if (h && h.kind === 'tpl') { S.active = h.slot; const t = S.tpl[h.slot]; S.drag = { kind: 'tpl', slot: h.slot, off: G.sub(G.P(t.x, t.y), ip) }; panel(); }
     else if (h) S.drag = h;
+    else if (S.dragTool === 'wl') S.drag = { kind: 'wl', sp, wl: { ...S.wl } };
+    else if (S.dragTool === 'zoom') S.drag = { kind: 'zoomDrag', sp, k0: S.view.k, ip };
     else S.drag = { kind: 'pan', sp, v: { ...S.view } };
     draw();
   });
@@ -4449,6 +4451,7 @@ function bindPointer() {
     if (!d) { S.hover = ip; if (brushArm()) { setCursor('none'); draw(); return; } if (e.pointerType === 'touch') return; const h = hit(sp); setCursor(S.arm ? 'crosshair' : h ? (h.kind === 'rotate' ? 'alias' : 'move') : 'grab'); return; }
     if (d.kind === 'brush') { S.hover = ip; const q = d.stroke.pts[d.stroke.pts.length - 1]; if (G.dist(q, ip) >= d.stroke.r / 3) d.stroke.pts.push(ip); draw(); return; }
     if (d.kind === 'pan') { S.view.x = d.v.x + sp.x - d.sp.x; S.view.y = d.v.y + sp.y - d.sp.y; if (Math.abs(sp.x - d.sp.x) + Math.abs(sp.y - d.sp.y) > 2) S.fitted = false; }
+    else if (d.kind === 'zoomDrag') { S.view.k = Math.min(20, Math.max(0.02, d.k0 * Math.exp((d.sp.y - sp.y) / 150))); anchor(d.ip, d.sp); S.fitted = false; }
     else if (d.kind === 'wl') { setWL(d.wl.c - (sp.y - d.sp.y) * d.wl.w / 400, d.wl.w * Math.exp((sp.x - d.sp.x) / 200)); syncWL(); return; }
     else if (d.kind === 'lm') { S.lm[d.key][d.i] = ip; if (e.pointerType === 'touch') S.loupe = ip; }
     else if (d.kind === 'ruler') { S.rulers[d.ri][d.i] = ip; if (e.pointerType === 'touch') S.loupe = ip; }
@@ -4469,7 +4472,7 @@ function bindPointer() {
     if (S.drag && S.drag.kind === 'aim') { const ip = S.drag.ip; S.drag = null; if (e.type === 'pointerup' && S.arm) armedClick(ip); draw(); return; }
     if (S.drag && S.drag.kind === 'brush') { const dd = S.drag; S.drag = null; if (dd.ex) exAddStroke(dd.stroke, dd.ex === 'exclear' ? 'clear' : dd.cls); else addCleanStroke(dd.stroke); return; }
     if (S.drag && S.drag.kind === 'lm') { const key = S.drag.key; if (/^canal[RL]$/.test(key)) { S.notes[key] = 'Moved by hand.'; rvSetCanal(key.slice(-1), { how: 'hand', mrev: exRev() }); } panel(); }
-    if (S.drag && S.drag.kind !== 'pan') save();
+    if (S.drag && S.drag.kind !== 'pan' && S.drag.kind !== 'zoomDrag') save();
     if (S.drag && S.drag.kind === 'wl') panel();
     S.drag = null;
   };
@@ -4545,7 +4548,7 @@ function armedClick(ip) {
       else { let ang = -Math.atan2(v.y, v.x); if (ang > Math.PI / 2) ang -= Math.PI; if (ang < -Math.PI / 2) ang += Math.PI; const clipped = setRot(ang); prompt(clipped ? `Those points are ${f1(Math.abs(ang) * 180 / Math.PI)}° off level; turned the most allowed (${ROT_MAX}°). Check the points: a pelvis is rarely tilted that much.` : `Turned ${f1(Math.abs(ROT()) * 180 / Math.PI)}° so the two points are level (on screen and on the saved picture; measurements are not changed).`); }
     } else prompt('Level: click the second point that should be at the same height.');
   } else if (a.kind === 'ruler') {
-    a.pts.push(ip); if (a.pts.length === 2) { S.rulers.push(a.pts); S.arm = null; prompt(''); save(); } else prompt('Ruler: second end');
+    a.pts.push(ip); if (a.pts.length === 2) { S.rulers.push(a.pts); S.arm = null; prompt(''); save(); } else prompt('Length: second end');
   } else if (a.kind === 'angle') {   // r36
     a.pts.push(ip); if (a.pts.length === 3) { (S.angles || (S.angles = [])).push(a.pts); S.arm = null; prompt(''); save(); } else prompt(a.pts.length === 1 ? 'Angle: click the vertex (the corner).' : 'Angle: click the end of the second arm.');
   }
@@ -4739,6 +4742,7 @@ function bindKeys() {
     if (sc.act === 'undo') { e.preventDefault(); undo(); return; }
     if (sc.act === 'redo') { e.preventDefault(); redo(); return; }
     if (sc.act === 'fit') { e.preventDefault(); fit(); draw(); return; }   // before the selected-implant check: Fit needs none (Astra, 13 Oct)
+    if (keyView(sc)) { e.preventDefault(); return; }   // 6 Nov 2026: the viewer's keys for looking at the film; none needs an implant
     const t = S.active && S.tpl[S.active];
     if (!t || !mm()) { if (!S.arm && Object.keys(S.tpl).length) prompt('Select an implant first: tap it on the X-ray, or press "Next implant".'); return; }
     e.preventDefault();
@@ -4747,6 +4751,30 @@ function bindKeys() {
     else if (sc.act === 'turn') t.angle += G.rad(sc.deg);
     save(); panelSoon(); draw();   // a held key moves smoothly; the panel's notes follow when it stops
   });
+}
+// the window the film opened with: a file window over the whole range shows a flat grey film, so as on opening, the auto window then
+function keyOpenWindow() {
+  if (!S.wlFile) return;
+  if (S.img.ww >= 0.95 * (S.img.max - S.img.min)) { autoWindow(); S.wlAuto = true; } else { S.wl = { ...S.wlFile }; S.wlAuto = false; }
+  renderImage(); syncWL(); draw();
+}
+// Sami, 6 Nov 2026: the same keys as the viewer (uikit.shortcut). Display only, except length, angle, next and remove.
+function keyView(sc) {
+  const mid = () => G.P(cv.clientWidth / 2, cv.clientHeight / 2);
+  const zoomTo = k => { const sp = mid(), ip = toI(sp); S.view.k = Math.min(20, Math.max(0.02, k)); anchor(ip, sp); S.fitted = false; draw(); };
+  if (sc.act === 'zoom') { zoomTo(S.view.k * sc.k); return true; }
+  if (sc.act === 'actual') { zoomTo(1); return true; }
+  if (sc.act === 'fullscreen') { if (document.fullscreenElement) document.exitFullscreen(); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {}); return true; }
+  if (sc.act === 'invert') { S.invertView = !S.invertView; renderImage(); panel(); draw(); prompt(S.invertView ? 'Film inverted: saved with the plan and its picture. F11 again turns it back.' : 'Film no longer inverted.'); return true; }
+  if (sc.act === 'lines') { if (linesAuto()) { S.linesOn = !S.linesOn; syncLines(); } else S.cleanView = !S.cleanView; panel(); draw(); return true; }
+  if (sc.act === 'window') { keyOpenWindow(); return true; }
+  if (sc.act === 'resetView') { S.invertView = false; S.dragTool = 'pan'; keyOpenWindow(); fit(); panel(); draw(); return true; }
+  if (sc.act === 'tool') { S.dragTool = sc.tool; prompt({ wl: 'Dragging on the film now sets W/L (brightness and contrast). M goes back to pan.', pan: 'Dragging on the film now pans.', zoom: 'Dragging on the film now zooms. M goes back to pan.' }[sc.tool]); return true; }
+  if (sc.act === 'length') { S.arm = { kind: 'ruler', pts: [] }; prompt('Length: click the first end.'); return true; }
+  if (sc.act === 'angle') { S.arm = { kind: 'angle', pts: [] }; prompt('Angle: click the end of the first arm.'); return true; }
+  if (sc.act === 'next') { nextImplant(); return true; }
+  if (sc.act === 'remove') { const sl = S.active; if (!sl || !S.tpl[sl]) { prompt('Select an implant first: tap it on the X-ray, or press N.'); return true; } const nm = slotName(sl); delete S.tpl[sl]; S.active = null; save(); panel(); draw(); prompt(`Removed: ${nm}. Ctrl/⌘+Z brings it back.`); return true; }
+  return false;
 }
 // the panel rebuilt once changes stop coming (a held key), not on every one
 let panelT = 0;
@@ -5202,7 +5230,7 @@ function panelBody(P_) {
       if (hsd && hemiOn(hsd) && SLOT[slot].kind === 'stem') s3.appendChild(bipBox(hsd));
     }
   }
-  s3.appendChild(help('<p>Drag an implant to move it, the white handle to turn it; the bar above the panel works on the selected one. Keys, with the X-ray selected: <kbd>↑</kbd>/<kbd>↓</kbd> size, <kbd>Shift</kbd>+arrows move 0.5 mm (<kbd>Shift</kbd>+<kbd>Alt</kbd> 2 mm), <kbd>,</kbd> <kbd>.</kbd> turn 0.5°, <kbd>F</kbd> fit, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Z</kbd> undo; right-drag: brightness and contrast.</p>', 'Moving implants by hand'));
+  s3.appendChild(help('<p>Drag an implant to move it, the white handle to turn it; the bar above the panel works on the selected one. Keys, with the X-ray selected: <kbd>↑</kbd>/<kbd>↓</kbd> size, <kbd>Shift</kbd>+arrows move 0.5 mm (<kbd>Shift</kbd>+<kbd>Alt</kbd> 2 mm), <kbd>,</kbd> <kbd>.</kbd> turn 0.5°, <kbd>N</kbd> next implant, <kbd>Delete</kbd> remove, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Z</kbd> undo. As in the viewer: <kbd>L</kbd> length, <kbd>A</kbd> angle, <kbd>W</kbd> W/L, <kbd>M</kbd> pan, <kbd>Z</kbd> zoom, <kbd>0</kbd> the original W/L, <kbd>F11</kbd> invert, <kbd>F12</kbd> reference lines, <kbd>F</kbd> full screen, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>0</kbd> fit, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>1</kbd> actual size, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>+</kbd>/<kbd>−</kbd> zoom, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>\\</kbd> reset the view; right-drag: W/L.</p>', 'Moving implants by hand'));
   add(s3); }   // r39: the implant segment of every other plan
 
   // 5. measurements and save (the recommendation at its top)
@@ -5232,8 +5260,8 @@ function panelBody(P_) {
   rr.appendChild(btn(S.labels ? 'Hide labels' : 'Show labels', () => { S.labels = !S.labels; panel(); draw(); }));
   { const ph = linesAuto(), on = ph ? !S.linesOn : S.cleanView;   // a phone after the landmarks: the same switch as Lines on the film
     rr.appendChild(btn(on ? 'Clean view ✓' : 'Clean view', () => { if (ph) { S.linesOn = !S.linesOn; syncLines(); } else S.cleanView = !S.cleanView; panel(); draw(); }, on ? 'on' : '', false, ph ? 'Only the plan on the film (the Lines button on the film is the same switch)' : 'Only the implants, the neck cut and the teardrop line, as on the saved picture')); }
-  rr.appendChild(btn('Ruler', () => { S.arm = { kind: 'ruler', pts: [] }; prompt('Ruler: click the first end.'); }));
-  rr.appendChild(btn('Clear rulers', () => { S.rulers = []; save(); draw(); }, '', !S.rulers.length));
+  rr.appendChild(btn('Length', () => { S.arm = { kind: 'ruler', pts: [] }; prompt('Length: click the first end.'); }, '', false, 'Measure a length (L)'));
+  rr.appendChild(btn('Clear lengths', () => { S.rulers = []; save(); draw(); }, '', !S.rulers.length));
   rr.appendChild(btn('Angle', () => { S.arm = { kind: 'angle', pts: [] }; prompt('Angle: click the end of the first arm.'); }, '', false, 'Three clicks: an arm end, the vertex, the other arm end (r36)'));
   rr.appendChild(btn('Clear angles', () => { S.angles = []; save(); draw(); panel(); }, '', !(S.angles || []).length));
   s5.appendChild(rr);
@@ -5905,7 +5933,7 @@ function templateBox(slot) {
     sr.appendChild(sx); box.appendChild(sr);
     const why = extWhy(t); if (why) box.appendChild(el(`<p class="note warn">Stem not drawn: ${esc(why)}.</p>`));
     if (why && /outline has changed/.test(why)) sr.appendChild(btn('Use the new outline', () => { t.stem = stemPick(f, t.stem.size); const sh = S.kc && S.kc.shared.size[slot]; if (sh && sh.fam === t.fam) sh.stem = { ...t.stem }; save(); panel(); draw(); }));
-    else if (t.stem) { const st = stemOf(t); box.appendChild(el(`<p class="note">Stem ${esc(st.s.label || st.s.size)}: ${st.s.diameterMm} mm, ${st.s.drawnLengthMm} mm from the junction to the tip as drawn (catalogue name ${st.s.nominalLengthMm} mm). Check the canal width at the tip and mid-stem with the ruler.</p>`)); }
+    else if (t.stem) { const st = stemOf(t); box.appendChild(el(`<p class="note">Stem ${esc(st.s.label || st.s.size)}: ${st.s.diameterMm} mm, ${st.s.drawnLengthMm} mm from the junction to the tip as drawn (catalogue name ${st.s.nominalLengthMm} mm). Check the canal width at the tip and mid-stem with the Length tool.</p>`)); }
   }
   if (COARSE && S.active === slot && mm()) {   // on a phone: nudge and turn by buttons (no arrow keys)
     const nudge = (dx, dy, da) => ev => { ev.stopPropagation(); const v = G.rot(G.P(dx * pxOf(0.5), dy * pxOf(0.5)), -ROT()); t.x += v.x; t.y += v.y; t.angle += G.rad(da * 0.5); save(); draw(); };
@@ -5926,7 +5954,7 @@ function templateBox(slot) {
   ra.appendChild(btn('Remove', () => { delete S.tpl[slot]; if (S.active === slot) S.active = null; save(); panel(); draw(); }));
   box.appendChild(ra);
   const sz = sizeOf(t);
-  if (isPfr(f)) box.appendChild(el('<p class="note">Not sized by canal fill: a tumour body. Check the stem against the canal with the ruler.</p>'));   // r32
+  if (isPfr(f)) box.appendChild(el('<p class="note">Not sized by canal fill: a tumour body. Check the stem against the canal with the Length tool.</p>'));   // r32
   else if (f.kind === 'stem' && S.notes['fit' + side] && S.notes['fit' + side].none) box.appendChild(el(`<div class="warnbox">Size not chosen automatically: ${esc(S.notes['fit' + side].why)}. Choose it by eye against the canal.</div>`));
   else if (f.kind === 'stem' && S.notes['fit' + side] && S.notes['fit' + side].copied) box.appendChild(el(`<p class="note">Copied from the ${SIDE[other(side)]} plan; this film is not used for sizing.</p>`));
   else if (f.kind === 'stem' && canalOf(side)) {   // the fit as the stem sits now, never the numbers from when it was sized (Astra, 11 Oct)

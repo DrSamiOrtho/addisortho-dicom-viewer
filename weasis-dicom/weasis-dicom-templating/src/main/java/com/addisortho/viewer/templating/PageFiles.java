@@ -29,9 +29,8 @@ import java.util.regex.Pattern;
  * checked against its sha256 when loaded, kept in memory. Nothing else can be served.
  *
  * <p>Its RELEASE.txt (23 Oct 2026) names the release (e.g. r28), the libraryId and the implant
- * ranges. The build is refused unless library.json and index.html agree with it and every range
- * is an Addis Ortho one (ao-*): the installer is a public download, so no other maker's
- * templates.
+ * ranges. The build is refused unless library.json and index.html agree with it and every range is
+ * an Addis Ortho one (ao-*): the installer is a public download, so no other maker's templates.
  */
 public final class PageFiles {
 
@@ -42,9 +41,11 @@ public final class PageFiles {
           "release (r[0-9]{1,4}[a-z]?)\nlibraryId ([A-Za-z0-9-]{1,40})\n"
               + "ranges (ao-[a-z0-9]{2,12}(?: ao-[a-z0-9]{2,12})*)\n");
   // library.json as build_viewer.sh writes it: compact JSON, where "range" is a family's key only
-  // (heads and sizes have none). Pretty-printing it or adding a "range" field elsewhere breaks this.
+  // (heads and sizes have none). Pretty-printing it or adding a "range" field elsewhere breaks
+  // this.
   private static final Pattern FAMILY_RANGE = Pattern.compile("\"range\":\"([^\"]*)\"");
-  private static final Pattern LINE = Pattern.compile("([0-9a-f]{64})  ([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?)");
+  private static final Pattern LINE =
+      Pattern.compile("([0-9a-f]{64})  ([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?)");
   private static final Map<String, String> TYPES =
       Map.of(
           "html", "text/html; charset=utf-8",
@@ -99,10 +100,10 @@ public final class PageFiles {
   /** The release RELEASE.txt names, once library.json and index.html agree with it. */
   static String checkRelease(Map<String, byte[]> files) throws IOException {
     byte[] text = files.get(RELEASE);
-    var m =
-        text == null ? null : RELEASE_TEXT.matcher(new String(text, StandardCharsets.UTF_8));
+    var m = text == null ? null : RELEASE_TEXT.matcher(new String(text, StandardCharsets.UTF_8));
     if (m == null || !m.matches()) {
-      throw new IOException("Templating page: no " + RELEASE + " naming its release and Addis Ortho ranges");
+      throw new IOException(
+          "Templating page: no " + RELEASE + " naming its release and Addis Ortho ranges");
     }
     String library = new String(files.get("library.json"), StandardCharsets.UTF_8);
     if (!library.contains("\"libraryId\":\"" + m.group(2) + "\"")) {

@@ -50,7 +50,12 @@ class PageFilesTest {
   private PageFiles page(String html, String lib, String rel) throws IOException {
     return loadFrom(
         line("index.html", html) + line("library.json", lib) + line(PageFiles.RELEASE, rel),
-        "index.html", html, "library.json", lib, PageFiles.RELEASE, rel);
+        "index.html",
+        html,
+        "library.json",
+        lib,
+        PageFiles.RELEASE,
+        rel);
   }
 
   @Test
@@ -58,7 +63,14 @@ class PageFilesTest {
     PageFiles p =
         loadFrom(
             line("index.html", HTML) + line("library.json", LIB) + line(PageFiles.RELEASE, REL),
-            "index.html", HTML, "library.json", LIB, PageFiles.RELEASE, REL, "extra.js", "alert(1)");
+            "index.html",
+            HTML,
+            "library.json",
+            LIB,
+            PageFiles.RELEASE,
+            REL,
+            "extra.js",
+            "alert(1)");
     assertNotNull(p.get("index.html"));
     assertNull(p.get("extra.js"));
     assertNull(p.get(PageFiles.LIST));
@@ -74,7 +86,10 @@ class PageFilesTest {
             () ->
                 loadFrom(
                     line("index.html", "<p>") + line("library.json", "{}"),
-                    "index.html", "<p>changed", "library.json", "{}"));
+                    "index.html",
+                    "<p>changed",
+                    "library.json",
+                    "{}"));
     assertTrue(e.getMessage().contains("index.html does not match"), e.getMessage());
   }
 
@@ -86,7 +101,15 @@ class PageFilesTest {
         () -> loadFrom(ok + line("../secret.txt", "x"), "index.html", "<p>", "library.json", "{}"));
     assertThrows(
         IOException.class,
-        () -> loadFrom(ok + line("run.sh", "x"), "index.html", "<p>", "library.json", "{}", "run.sh", "x"));
+        () ->
+            loadFrom(
+                ok + line("run.sh", "x"),
+                "index.html",
+                "<p>",
+                "library.json",
+                "{}",
+                "run.sh",
+                "x"));
     assertThrows(IOException.class, () -> loadFrom(line("index.html", "<p>"), "index.html", "<p>"));
   }
 
@@ -96,10 +119,17 @@ class PageFilesTest {
     IOException none =
         assertThrows(
             IOException.class,
-            () -> loadFrom(line("index.html", HTML) + line("library.json", LIB), "index.html", HTML, "library.json", LIB));
+            () ->
+                loadFrom(
+                    line("index.html", HTML) + line("library.json", LIB),
+                    "index.html",
+                    HTML,
+                    "library.json",
+                    LIB));
     assertTrue(none.getMessage().contains("RELEASE.txt"), none.getMessage());
     // another maker's range, in RELEASE.txt or only in library.json
-    assertThrows(IOException.class, () -> page(HTML, LIB, "release r28\nlibraryId abc\nranges zb-g7\n"));
+    assertThrows(
+        IOException.class, () -> page(HTML, LIB, "release r28\nlibraryId abc\nranges zb-g7\n"));
     assertThrows(
         IOException.class,
         () ->
@@ -108,9 +138,12 @@ class PageFilesTest {
                 "{\"libraryId\":\"abc\",\"families\":[{\"range\":\"ao-cup\"},{\"range\":\"jnj-corail\"}]}",
                 REL));
     // a range RELEASE.txt names that the library does not have
-    assertThrows(IOException.class, () -> page(HTML, LIB, "release r28\nlibraryId abc\nranges ao-cup ao-160\n"));
+    assertThrows(
+        IOException.class,
+        () -> page(HTML, LIB, "release r28\nlibraryId abc\nranges ao-cup ao-160\n"));
     // another library, another release on the page, a release not like r28
-    assertThrows(IOException.class, () -> page(HTML, LIB, "release r28\nlibraryId xyz\nranges ao-cup\n"));
+    assertThrows(
+        IOException.class, () -> page(HTML, LIB, "release r28\nlibraryId xyz\nranges ao-cup\n"));
     assertThrows(IOException.class, () -> page(HTML.replace("r28", "r27"), LIB, REL));
     assertThrows(IOException.class, () -> page(HTML, LIB, REL.replace("r28", "28")));
   }
@@ -118,22 +151,28 @@ class PageFilesTest {
   @Test
   void theBundledPageIsComplete() throws IOException {
     PageFiles p = PageFiles.load(getClass().getClassLoader(), "templating-web/");
-    for (String f : new String[] {"index.html", "app.js", "library.json", "vendor/openjpegwasm_decode.wasm"}) {
+    for (String f :
+        new String[] {"index.html", "app.js", "library.json", "vendor/openjpegwasm_decode.wasm"}) {
       assertNotNull(p.get(f), f);
     }
     String html = new String(p.get("index.html"), StandardCharsets.UTF_8);
-    assertTrue(html.contains("<html lang=\"en\" data-mode=\"viewer\" data-release=\"" + p.release() + "\">"));
+    assertTrue(
+        html.contains(
+            "<html lang=\"en\" data-mode=\"viewer\" data-release=\"" + p.release() + "\">"));
     String lib = new String(p.get("library.json"), StandardCharsets.UTF_8);
     assertTrue(lib.contains("\"libraryId\":\"ac4667dfef91\""));
-    // the Addis Ortho ranges (23 Oct 2026, r28): the 160 stems with BB1, the CCK and tumour knees; no other maker
-    for (String id : new String[] {"chunli-160-150", "chunli-bb1-b", "chunli-cck-femur", "chunli-dfr-femur"}) {
+    // the Addis Ortho ranges (23 Oct 2026, r28): the 160 stems with BB1, the CCK and tumour knees;
+    // no other maker
+    for (String id :
+        new String[] {"chunli-160-150", "chunli-bb1-b", "chunli-cck-femur", "chunli-dfr-femur"}) {
       assertTrue(lib.contains("\"id\":\"" + id + "\""), id);
     }
     // r33 (26 Oct 2026): the proximal femoral and proximal humeral replacements
     for (String id : new String[] {"chunli-pfr", "chunli-phr"}) {
       assertTrue(lib.contains("\"id\":\"" + id + "\""), id);
     }
-    // r44 (31 Oct 2026): the live range files, with the bipolar and the sizes from Chunli's DWGs; Quick page since 3 Nov 2026 (r44a, q7); no PFNA range (Sami: not the Chunli PFNA)
+    // r44 (31 Oct 2026): the live range files, with the bipolar and the sizes from Chunli's DWGs;
+    // Quick page since 3 Nov 2026 (r44a, q7); no PFNA range (Sami: not the Chunli PFNA)
     assertTrue(lib.contains("\"id\":\"chunli-bipolar\""));
     assertTrue(html.contains("href=\"quick.html\""));
     assertTrue(p.get("quick.html") != null && p.get("quick.js") != null);
@@ -141,6 +180,6 @@ class PageFilesTest {
     for (String range : new String[] {"jnj-", "zb-", "ldk-"}) {
       assertTrue(!lib.contains("\"range\":\"" + range), range);
     }
-    assertEquals("r44a", p.release());
+    assertEquals("r44b", p.release());
   }
 }
