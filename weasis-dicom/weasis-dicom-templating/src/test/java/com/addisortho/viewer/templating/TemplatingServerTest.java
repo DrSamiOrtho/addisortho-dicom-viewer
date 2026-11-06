@@ -209,7 +209,11 @@ class TemplatingServerTest {
     assertEquals(422, post(Dicom.part10(other)).statusCode());
     assertEquals(415, post(Files.readAllBytes(xray)).statusCode());
     assertEquals(413, post(new byte[0]).statusCode());
-    assertEquals(413, post(new byte[TemplatingServer.MAX_PLAN + 1]).statusCode());
+    try {
+      assertEquals(413, post(new byte[TemplatingServer.MAX_PLAN + 1]).statusCode());
+    } catch (IOException e) {
+      // refused unread: the connection can close while the client is still sending the plan
+    }
     assertTrue(received.isEmpty());
   }
 
