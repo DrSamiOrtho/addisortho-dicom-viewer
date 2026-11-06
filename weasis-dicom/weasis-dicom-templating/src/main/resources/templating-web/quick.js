@@ -2008,4 +2008,15 @@ document.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTra
     if (!famsOf('cup').length && !famsOf('stem').length && !famsOf('nail').length && famsOf('tka-femur').length === 0 && famsOf('tka-tibia').length === 0) $('openErr').textContent = 'No hip or knee implant range is open to your account yet. Ask Addis Ortho to open one.';
   } catch (e) { $('openErr').textContent = 'The implant library did not load: ' + ((e && e.message) || e); }
   syncUI(); resize(); showDraftNote();
+  // viewer: the Quick button hands its X-ray over, and the Full planner link keeps it
+  const handed = new URLSearchParams(location.search), study = handed.get('study'), sop = handed.get('instance');
+  if (study && sop) {
+    const full = document.querySelector('#open a[href="./"]');
+    if (full) full.href = './' + location.search;
+    try {
+      const r = await fetch('../wado?' + new URLSearchParams({ requestType: 'WADO', studyUID: study, objectUID: sop, contentType: 'application/dicom' }), { credentials: 'same-origin' });
+      if (!r.ok) throw new Error('This X-ray is no longer open from the viewer. Press Quick template in the viewer again.');
+      await openFile(new File([await r.blob()], 'xray.dcm'));
+    } catch (e) { $('openErr').textContent = (e && e.message) || String(e); }
+  }
 })();

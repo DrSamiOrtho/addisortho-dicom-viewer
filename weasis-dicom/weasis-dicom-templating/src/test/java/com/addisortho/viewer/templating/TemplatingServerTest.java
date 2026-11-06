@@ -114,6 +114,12 @@ class TemplatingServerTest {
   }
 
   @Test
+  void theQuickAddressNamesTheSameXray() {
+    String quick = TemplatingServer.quickPage(page).toString();
+    assertEquals(page.toString().replace("/templating/?", "/templating/quick.html?"), quick);
+  }
+
+  @Test
   void thePageAddressNamesTheXrayUnderAOneTimeToken() {
     assertTrue(
         page.toString()

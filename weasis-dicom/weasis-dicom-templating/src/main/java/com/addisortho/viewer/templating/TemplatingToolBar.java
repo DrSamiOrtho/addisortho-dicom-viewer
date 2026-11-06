@@ -17,7 +17,6 @@ import javax.swing.JOptionPane;
 import javax.swing.SwingWorker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.media.data.MediaSeries;
 import org.weasis.core.api.util.ResourceUtil;
 import org.weasis.core.ui.editor.image.ViewCanvas;
@@ -26,30 +25,33 @@ import org.weasis.core.ui.util.WtoolBar;
 import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.viewer2d.EventManager;
 
-/** The Template button: opens the selected X-ray in the templating page, offline. */
+/** The Quick and Full template buttons: open the selected X-ray in a templating page, offline. */
 public class TemplatingToolBar extends WtoolBar {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(TemplatingToolBar.class);
 
   TemplatingToolBar() {
     super(Messages.getString("TemplatingToolBar.title"), 12);
+    add(button("quick", true));
+    add(button("full", false));
+  }
+
+  private static JButton button(String key, boolean quick) {
     JButton button =
         new JButton(
             new FlatSVGIcon(
                     Objects.requireNonNull(
                         TemplatingToolBar.class.getResource("/icon/svg/templating.svg")))
                 .derive(ResourceUtil.TOOLBAR_ICON_SIZE, ResourceUtil.TOOLBAR_ICON_SIZE));
-    button.setToolTipText(Messages.getString("TemplatingToolBar.tooltip"));
-    button
-        .getAccessibleContext()
-        .setAccessibleName(Messages.getString("TemplatingToolBar.template"));
-    button.putClientProperty(
-        ToolbarLabels.CLIENT_PROPERTY, Messages.getString("TemplatingToolBar.label"));
-    button.addActionListener(e -> template(button));
-    add(button);
+    String label = Messages.getString("TemplatingToolBar." + key);
+    button.setToolTipText(Messages.getString("TemplatingToolBar." + key + ".tooltip"));
+    button.getAccessibleContext().setAccessibleName(label);
+    button.putClientProperty(ToolbarLabels.CLIENT_PROPERTY, label);
+    button.addActionListener(e -> template(button, quick));
+    return button;
   }
 
-  private static void template(Component parent) {
+  private static void template(Component parent, boolean quick) {
     ViewCanvas<DicomImageElement> view = EventManager.getInstance().getSelectedViewPane();
     MediaSeries<DicomImageElement> series = view == null ? null : view.getSeries();
     DicomImageElement image = view == null ? null : view.getImage();
@@ -65,7 +67,7 @@ public class TemplatingToolBar extends WtoolBar {
     new SwingWorker<URI, Void>() {
       @Override
       protected URI doInBackground() throws Exception {
-        return TemplatingService.handOver(series, image);
+        return TemplatingService.handOver(series, image, quick);
       }
 
       @Override
@@ -75,7 +77,7 @@ public class TemplatingToolBar extends WtoolBar {
           // the link in the log too, as local servers do: it reaches the page if the browser does
           // not open
           LOGGER.info("Templating page for this X-ray: {}", page);
-          GuiUtils.openInDefaultBrowser(parent, page);
+          PageWindow.open(parent, page);
         } catch (Exception e) {
           Throwable cause = e.getCause() == null ? e : e.getCause();
           LOGGER.error("Cannot open the templating page", cause);

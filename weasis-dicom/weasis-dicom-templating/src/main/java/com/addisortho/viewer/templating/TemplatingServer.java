@@ -144,6 +144,11 @@ public final class TemplatingServer implements Closeable {
     return port;
   }
 
+  /** The Quick page's address for the X-ray of this full page's address. */
+  static URI quickPage(URI page) {
+    return URI.create(page.toString().replace("/templating/?", "/templating/quick.html?"));
+  }
+
   /**
    * Hands over one X-ray (a DICOM file with its file meta information, kept until the hand-over
    * ends) and returns the page's address for it.

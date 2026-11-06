@@ -75,9 +75,9 @@ final class TemplatingService {
 
   /**
    * Copies the image's DICOM file for the page (with file meta information, which a file from a CD
-   * may lack) and returns the page's address for it.
+   * may lack) and returns the address for it of the Quick or the full page.
    */
-  static URI handOver(MediaSeries<DicomImageElement> series, DicomImageElement image)
+  static URI handOver(MediaSeries<DicomImageElement> series, DicomImageElement image, boolean quick)
       throws IOException {
     TemplatingServer s = server();
     Path dir = AppProperties.buildAccessibleTempDirectory("templating", "xray");
@@ -88,6 +88,9 @@ final class TemplatingService {
     XrayFile.withFileMeta(copy);
     Object model = series.getTagValue(TagW.ExplorerModel);
     URI page = s.handOver(copy, model);
+    if (quick) {
+      page = TemplatingServer.quickPage(page);
+    }
     // the page draws the viewer's footer on its saved picture unless the preference turns it off
     return ViewTransferHandler.isFooterEnabled() ? page : URI.create(page + "&footer=0");
   }
