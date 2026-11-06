@@ -25,6 +25,7 @@
 // a nail (a long nail becomes the other side's nail of the same size); each side has its own femoral head; the Sizes card names
 // the fracture and the normal side.
 import { decodeAny, decodeBitmap, parseDicom } from './dicom.js';
+import { secondaryCapture, pdfOfJpeg } from './dicomwrite.js';
 import { decodePNG } from './imageio.js';
 import * as G from './geom.js';
 import { findBalls, findMarkers } from './auto.js';
@@ -171,7 +172,7 @@ function zoomAt(sp, k) {
 // the turn handle of the picked implant, on screen, just outside the outline along one of its own directions (up for a cup,
 // femur or tray; out to the side of the shoulder for a stem, whose "up" is the cup), so a drag on it turns the implant about
 // its pivot (Bonesetter-like); the ⟲ ⟳ buttons stay for 1-degree steps
-function handleDir(it) { const fx = it.flip ? -1 : 1; return kindOf(it) === 'stem' || kindOf(it) === 'nail' ? [-fx, 0] : [0, -1]; }   // local, after the flip
+function handleDir(it) { const fx = it.flip ? -1 : 1; return kindOf(it) === 'stem' || kindOf(it) === 'nail' || kindOf(it) === 'bipolar' ? [-fx, 0] : [0, -1]; }   // local, after the flip
 function handleOf(it) {
   const gm = geomOf(it); if (!gm || !gm.rings || !mmpp()) return null;
   const pv = pivotOf(it, gm), [ux, uy] = handleDir(it), fx = it.flip ? -1 : 1; let ext = 0;
@@ -189,9 +190,9 @@ function drawNow() {
   g.imageSmoothingEnabled = true; g.drawImage(Q.off, 0, 0);
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   scene(g, toS, 1, true);
-  const it = Q.items[Q.sel], H = it && !Q.tool && handleOf(it);
+  const it = Q.items[Q.sel], H = it && !Q.tool && !Q.peek && handleOf(it);
   if (H) {
-    g.strokeStyle = '#A8FF30'; g.lineWidth = 1.4; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(H.c.x, H.c.y); g.lineTo(H.h.x, H.h.y); g.stroke(); g.setLineDash([]);
+    g.strokeStyle = '#A8FF30'; g.lineWidth = 1.4; if (kindOf(it) !== 'bipolar') { g.setLineDash([4, 4]); g.beginPath(); g.moveTo(H.c.x, H.c.y); g.lineTo(H.h.x, H.h.y); g.stroke(); g.setLineDash([]); }   // a shell: nothing across the head
     g.beginPath(); g.arc(H.h.x, H.h.y, 13, 0, 7); g.fillStyle = '#034537'; g.fill(); g.lineWidth = 2; g.stroke();
     g.fillStyle = '#fff'; g.font = '600 15px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('⟳', H.h.x, H.h.y + 1);
   }
@@ -199,8 +200,8 @@ function drawNow() {
 function scene(c, T, k, live) {
   const line = (a, b) => { const p = T(a), q = T(b); c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(q.x, q.y); c.stroke(); };
   const dot = (p, r, col) => { const s = T(p); c.beginPath(); c.arc(s.x, s.y, r * k, 0, 7); c.fillStyle = col; c.fill(); };
-  const tag = (p, text, col, big) => {
-    const s = T(p); c.font = `${big ? 700 : 600} ${(big ? 15 : 13) * k}px system-ui, sans-serif`; const w = c.measureText(text).width + 8 * k, h = (big ? 21 : 18) * k;
+  const tag = (p, text, col, big, at) => {
+    const s = at || T(p); c.font = `${big ? 700 : 600} ${(big ? 15 : 13) * k}px system-ui, sans-serif`; const w = c.measureText(text).width + 8 * k, h = (big ? 21 : 18) * k;
     c.fillStyle = 'rgba(0,0,0,.78)'; c.fillRect(s.x - w / 2, s.y - h / 2, w, h); c.fillStyle = col; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(text, s.x, s.y);
   };
   // the ball
@@ -209,15 +210,15 @@ function scene(c, T, k, live) {
     c.lineWidth = 2 * k; c.strokeStyle = '#A8FF30'; c.setLineDash([]); c.beginPath(); c.arc(s.x, s.y, r, 0, 7); c.stroke();
   }
   // the implants
-  if (mmpp()) Q.items.forEach((it, i) => {
+  if (mmpp() && !(live && Q.peek)) Q.items.forEach((it, i) => {
     const gm = geomOf(it); if (!gm || !gm.rings) return;
     const X = xf(it), sel = live && i === Q.sel, col = it.recheck ? '#ffb84d' : sel ? '#A8FF30' : '#7fd4ff', f = Q.fam[it.fam];
     c.beginPath();
     for (const r of gm.rings) { r.forEach((p, j) => { const s = T(X(p)); j ? c.lineTo(s.x, s.y) : c.moveTo(s.x, s.y); }); c.closePath(); }
     const sr = stemRingsQ(it, gm) || bladeRingsQ(it);   // the stem extension at the part's junction; a nail's blade (q6)
     if (sr) for (const r of sr) { r.forEach((p, j) => { const s = T(X(p)); j ? c.lineTo(s.x, s.y) : c.moveTo(s.x, s.y); }); c.closePath(); }
-    if (sel) { c.fillStyle = 'rgba(168,255,48,.10)'; c.fill('evenodd'); }
-    c.lineWidth = (sel ? 2.4 : 1.8) * k; c.strokeStyle = col; c.setLineDash(it.recheck ? [7 * k, 4 * k] : []); c.stroke(); c.setLineDash([]);
+    if (sel && f.kind !== 'bipolar' && f.kind !== 'cup') { c.fillStyle = 'rgba(168,255,48,.10)'; c.fill('evenodd'); }   // Sami, 6 Nov 2026: a shell or cup is outline only: the head and socket must show through
+    c.lineWidth = (f.kind === 'bipolar' ? (sel ? 1.5 : 1.2) : sel ? 2.4 : 1.8) * k; c.strokeStyle = col; c.setLineDash(it.recheck ? [7 * k, 4 * k] : []); c.stroke(); c.setLineDash([]);
     if (f.kind === 'stem' && gm.headM) {   // the head drawn on the sheet's head, size as drawn
       const bpIt = Q.items.find(x => x.side === it.side && kindOf(x) === 'bipolar'), hd = bpIt ? bipInnerHead(Q.fam[bpIt.fam], sizeRec(bpIt)).diameter : parseFloat((f.sheetHead && f.sheetHead.diameter) || 32), h = T(X(gm.headM)), r = (hd / 2) / mmpp() * (T(G.P(1, 0)).x - T(G.P(0, 0)).x);
       c.beginPath(); c.arc(h.x, h.y, r, 0, 7); c.lineWidth = 1.4 * k; c.stroke();
@@ -229,7 +230,12 @@ function scene(c, T, k, live) {
     const lab = f.kind === 'nail' ? X([0, -12]) : f.kind === 'cup' ? X([0, -(sizeRec(it).outerDiameter || 50) / 2 - 7]) : f.kind === 'bipolar' ? X([0, -(sizeRec(it).headOffset || 0) + (sizeRec(it).outerDiameter || 46) / 2 + 7]) : f.kind === 'stem' ? X(gm.tip || gm.rings[0][0]) : X([0, f.kind === 'tka-femur' ? -30 : 40]);
     // the picked implant's label in larger type (Medstrat labels each placed part with its size; the range is on the Sizes card)
     const word = `${Q.joint === 'tumour' || isTumBody(f) ? partName(it) : KIND[f.kind]} ${it.side} ${sizeRec(it).size}${stemRec(it) ? ' + stem' : ''}${bladeRec(it) ? ` + blade ${bladeRec(it).lengthMm}` : ''}${f.kind === 'cup' ? ` · ${cupIncl(it).toFixed(0)}°` : ''}${f.kind === 'bipolar' ? ` · ${bipInnerHead(f, sizeRec(it)).diameter} mm head` : ''}${it.recheck ? ' · recheck fit' : ''}`;
-    tag(lab, word, col, sel);
+    if (f.kind === 'bipolar') {   // beside the shell, up and out, on a thin line: never over the head, and it does not swing with the shell
+      const o = T(X([0, -(sizeRec(it).headOffset || 0)])), R = ((sizeRec(it).outerDiameter || 46) / 2) / mmpp() * (T(G.P(1, 0)).x - T(G.P(0, 0)).x), out = o.x >= T(G.P(Q.img.cols / 2, 0)).x ? 1 : -1;
+      c.font = `600 ${13 * k}px system-ui, sans-serif`; const w = c.measureText(word).width + 8 * k, p = { x: o.x + out * (R * 0.75 + w / 2), y: o.y - R - 46 * k };
+      c.save(); c.globalAlpha = 0.6; c.lineWidth = 1 * k; c.strokeStyle = col; c.setLineDash([]); c.beginPath(); c.moveTo(o.x + out * R * 0.72, o.y - R * 0.72); c.lineTo(p.x - out * w / 2, p.y); c.stroke(); c.restore();
+      tag(null, word, col, false, p);
+    } else tag(lab, word, col, sel);
   });
   if (Q.joint === 'tumour') { tumScene(c, T, k, line, tag); const pp = q => { if (live) { dot(q, 7, 'rgba(0,0,0,.55)'); dot(q, 5, '#ff9de2'); } else dot(q, 3.5, '#ff9de2'); };
     Q.items.forEach(it => { if (it.gt) pp(it.gt); }); if (Q.dia) ['ref', 'a1', 'a2'].forEach(e => Q.dia[e] && pp(Q.dia[e])); }
@@ -1533,7 +1539,7 @@ const fingerprint = () => { const c = planContent(); return c ? JSON.stringify(c
 function isDirty() { const fp = fingerprint(); return fp !== '' && fp !== Q.savedFp; }   // an empty plan has nothing to lose
 function syncSaveUI() {
   const has = Q.films.some(hasContent), dirty = isDirty();
-  $('saveB').disabled = !has; $('saveB').classList.toggle('dirty', dirty);
+  $('saveB').disabled = !has; $('saveB').classList.toggle('dirty', dirty); $('resultB').disabled = !picReady();
   $('saveState').textContent = !has ? '' : dirty ? 'Not saved' : 'Saved'; $('saveState').classList.toggle('dirty', dirty);
   if (dirty && fingerprint() !== draftFp) draftSoon();
 }
@@ -1642,6 +1648,18 @@ function openPlanFile(file) {
   rd.readAsText(file);
 }
 $('saveB').onclick = () => savePlan();
+$('resultB').onclick = () => resultSheet();
+// the X-ray alone (Sami, 6 Nov 2026): hold H or the eye button; a quick tap on the button keeps them hidden until the next tap. Never on a saved picture.
+const setPeek = v => { Q.peek = v; $('zHide').setAttribute('aria-pressed', String(v)); draw(); };
+{ let t0 = 0, was = false;
+  $('zHide').addEventListener('pointerdown', e => { e.preventDefault(); t0 = performance.now(); was = !!Q.peek; setPeek(true); });
+  $('zHide').addEventListener('pointerup', () => { if (was || performance.now() - t0 >= 250) setPeek(false); });
+  $('zHide').addEventListener('pointercancel', () => setPeek(false));
+  const isH = e => e.key.toLowerCase() === 'h' && !e.ctrlKey && !e.metaKey && !e.altKey && !(e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName));
+  document.addEventListener('keydown', e => { if (isH(e) && !e.repeat && $('sheet').hidden) setPeek(true); });
+  document.addEventListener('keyup', e => { if (isH(e)) setPeek(false); });
+  window.addEventListener('blur', () => { if (Q.peek) setPeek(false); });
+}
 $('planFile').onchange = e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) openPlanFile(f); };
 $('helpB').onclick = () => { if ($('sheet').hidden) helpSheet(); };
 
@@ -1654,7 +1672,7 @@ const HELP = [
   ['Touch', [['Drag', 'Move an implant; drag the ⟳ handle to turn it; drag the film to pan'], ['Two fingers', 'Pinch zooms the film; twist turns the picked implant'], ['Double-tap', 'Fit the film, or zoom in there']]],
   ['View and image', [['W  /  M  /  Z', 'Dragging on the film sets W/L / pans / zooms (same keys in the viewer; right-drag or Shift-drag also sets W/L)'], ['0', "The film's own W/L"], ['F11', 'Invert'], ['F', 'Full screen'],
     ['Ctrl+0  /  Ctrl+1', 'Fit the film / actual size (⌘ on a Mac)'], ['Ctrl and +  or  −', 'Zoom (also + and − alone, two fingers, or the mouse wheel)'], ['Ctrl+Shift+\\', 'Reset the image and the view'],
-    ['/', 'Open the Image panel and type a command (below)']]],
+    ['Hold H', 'See the X-ray without the implants (or the eye button)'], ['/', 'Open the Image panel and type a command (below)']]],
   ['Plan', [['Ctrl+S  or  ⌘S', 'Save the plan to a file; until then an unsaved draft stays on this phone only'], ['Ctrl+Z  or  ⌘Z', 'Undo'], ['L   V   S', 'Length (same key in the viewer); valgus cut angle (long leg); Sizes card'], ['Alt+1  /  2  /  3', 'Knee: AP / Lateral / other views'], ['Esc   ?', 'Close a card or stop a tap; this list']]],
 ];
 const SHORTCUTS = HELP.flatMap(([, rows]) => rows);   // kept as one list for the tests
@@ -1896,10 +1914,10 @@ function tumDone() {
     <p class="note">Scale: ${esc(scaleOf(F()))}.</p><p class="stamp">${esc(STAMP)}</p>
     <label class="f">Label on the picture (optional)</label><input type="text" id="lab" maxlength="60" value="${esc(Q.label)}" placeholder="e.g. record number; leave empty to share outside the hospital">
     <p class="note">Text the X-ray machine burned into the film itself (often the patient's name at the top) stays on the picture: crop it off before sharing outside the hospital.</p>
-    ${pic ? `<button class="go" id="savePic">${share ? 'Share picture' : 'Save picture'}</button>${share ? '<button class="go alt" id="dlPic">Save picture</button>' : ''}` : ''}
+    ${pic ? resultBtns() : ''}
     <button class="go alt" id="copyTxt">Copy as text</button><button class="go alt" id="back">Back to the X-ray</button>`, card => {
     card.querySelector('#lab').oninput = e => { Q.label = e.target.value.trim(); };
-    if (pic) { card.querySelector('#savePic').onclick = () => (share ? sharePic() : savePic()); if (share) card.querySelector('#dlPic').onclick = savePic; }
+    if (pic) wireResult(card);
     card.querySelector('#copyTxt').onclick = async () => { try { await navigator.clipboard.writeText(textLines().join('\n')); card.querySelector('#copyTxt').textContent = 'Copied'; } catch (e) { card.querySelector('#copyTxt').textContent = 'Copy failed: select the table instead'; } };
     card.querySelector('#back').onclick = closeSheet;
   });
@@ -1923,11 +1941,11 @@ function done() {
     <p class="stamp">${esc(STAMP)}</p>
     <label class="f">Label on the picture (optional)</label><input type="text" id="lab" maxlength="60" value="${esc(Q.label)}" placeholder="e.g. record number; leave empty to share outside the hospital">
     <p class="note">Text the X-ray machine burned into the film itself (often the patient's name at the top) stays on the picture: crop it off before sharing outside the hospital.${Q.joint === 'knee' ? ' The picture is of the film on screen; the sizes under it are the whole case.' : ''}</p>
-    ${pic ? `<button class="go" id="savePic">${share ? 'Share picture' : 'Save picture'}</button>${share ? '<button class="go alt" id="dlPic">Save picture</button>' : ''}` : '<p class="note">Open the AP or lateral film to save a picture with the implants on it.</p>'}
+    ${pic ? resultBtns() : '<p class="note">Open the AP or lateral film to save a picture with the implants on it.</p>'}
     <button class="go alt" id="copyTxt">Copy the sizes as text</button>
     <button class="go alt" id="back">Back to the X-ray</button>`, card => {
     card.querySelector('#lab').oninput = e => { Q.label = e.target.value.trim(); };
-    if (pic) { card.querySelector('#savePic').onclick = () => (share ? sharePic() : savePic()); if (share) card.querySelector('#dlPic').onclick = savePic; }
+    if (pic) wireResult(card);
     card.querySelector('#copyTxt').onclick = async () => { try { await navigator.clipboard.writeText(textLines().join('\n')); card.querySelector('#copyTxt').textContent = 'Copied'; } catch (e) { card.querySelector('#copyTxt').textContent = 'Copy failed: select the table instead'; } };
     card.querySelector('#back').onclick = closeSheet;
   });
@@ -1943,7 +1961,43 @@ function picture() {
   lines.forEach((t, i) => { x.font = `${i <= 1 ? '700' : '400'} ${15 * k}px system-ui, sans-serif`; x.fillStyle = i === lines.length - 1 ? '#034537' : '#000'; x.fillText(t, pad, H + pad + i * lh, W - 2 * pad); });
   return c;
 }
-const picName = () => `quick-${Q.joint}${Q.joint === 'knee' ? '-' + F().fv : ''}-${[...new Set(caseItems().map(it => SIDE[it.side]))].join('-')}-${new Date().toISOString().slice(0, 10)}${Q.label ? '-' + Q.label.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 30) : ''}.jpg`;
+const picName = (ext = 'jpg') => `quick-${Q.joint}${Q.joint === 'knee' ? '-' + F().fv : ''}-${[...new Set(caseItems().map(it => SIDE[it.side]))].join('-')}-${new Date().toISOString().slice(0, 10)}${Q.label ? '-' + Q.label.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 30) : ''}.${ext}`;
+// ---- the result to keep or send (Sami, 6 Nov 2026): the X-ray with the implants and the sizes as a file others can open. Save at
+// the top stays the plan file, which only this page reopens. PNG: lossless, opens anywhere. PDF: one A4 page to print or attach.
+// DICOM: a Secondary Capture in the X-ray's own study, for PACS or another viewer; it carries the patient's details unless the
+// box is ticked, then a new study with none. Share (phones): a small JPEG through the phone's share sheet.
+const blobOf = (c, type, q) => new Promise(res => c.toBlob(res, type, q));
+function keepFile(blob, name) { const a = document.createElement('a'), u = URL.createObjectURL(blob); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); }
+const canSharePic = () => !!(navigator.canShare && navigator.share);
+const fromPatient = () => !!(Q.img && Q.img.meta && Q.img.meta.Modality !== 'picture');
+const resultBtns = () => `${canSharePic() ? '<button class="go" id="savePic">Share picture</button>' : ''}<div class="reso"><button class="go alt" id="dlPng" title="Lossless picture; opens anywhere">PNG</button><button class="go alt" id="dlPdf" title="One A4 page to print or attach">PDF</button><button class="go alt" id="dlDcm" title="For PACS or another DICOM viewer">DICOM</button></div>${fromPatient() ? `<label class="chk"><input type="checkbox" id="noName"> DICOM without the patient's name (to share outside the hospital)</label>` : ''}`;
+function wireResult(card) {
+  const on = (id, fn) => { const b = card.querySelector('#' + id); if (b) b.onclick = async () => { b.disabled = true; try { await fn(); } catch (e) { msg(`Not saved: ${(e && e.message) || e}`); } finally { b.disabled = false; } }; };
+  on('savePic', sharePic); on('dlPng', savePng); on('dlPdf', savePdf);
+  on('dlDcm', () => saveDicom(!!(card.querySelector('#noName') && card.querySelector('#noName').checked)));
+}
+async function savePng() { keepFile(await blobOf(picture(), 'image/png'), picName('png')); }
+async function savePdf() {
+  const c = picture(), jpeg = new Uint8Array(await (await blobOf(c, 'image/jpeg', 0.92)).arrayBuffer());
+  keepFile(new Blob([pdfOfJpeg({ jpeg, width: c.width, height: c.height, title: 'Quick templating plan (draft)' })], { type: 'application/pdf' }), picName('pdf'));
+}
+async function saveDicom(noName) {
+  const c = picture(), jpeg = new Uint8Array(await (await blobOf(c, 'image/jpeg', 0.92)).arrayBuffer()), sides = [...new Set(caseItems().map(it => SIDE[it.side]))].join(' and ');
+  const { bytes } = secondaryCapture({ jpeg, width: c.width, height: c.height, meta: noName ? {} : (Q.img.meta || {}), seriesDescription: `Templating plan ${sides} ${Q.joint} (draft)`, comments: textLines().join('\n').replace(/[^\x20-\x7E\n]/g, ' ').slice(0, 9000) });
+  keepFile(new Blob([bytes], { type: 'application/dicom' }), picName('dcm'));
+}
+const picReady = () => !!(Q.img && sizable() && Q.cal && (Q.items.length || (Q.joint === 'tumour' && F().dia)));
+function resultSheet() {
+  if (copyPending() || !picReady()) return;
+  sheet(`<h2>Save the result</h2><p class="note">The X-ray with the implants and the sizes, as a file others can open. Save at the top keeps the plan to reopen here.</p>
+    <label class="f">Label on the picture (optional)</label><input type="text" id="lab" maxlength="60" value="${esc(Q.label)}" placeholder="e.g. record number; leave empty to share outside the hospital">
+    ${resultBtns()}
+    <p class="note">Text burned into the film itself (often the name at the top) stays on the picture: crop it off before sharing outside the hospital.</p>
+    <button class="go alt" id="back">Back to the X-ray</button>`, card => {
+    card.querySelector('#lab').oninput = e => { Q.label = e.target.value.trim(); };
+    wireResult(card); card.querySelector('#back').onclick = closeSheet;
+  });
+}
 function savePic() {
   picture().toBlob(b => { const a = document.createElement('a'), u = URL.createObjectURL(b); a.href = u; a.download = picName(); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); }, 'image/jpeg', 0.9);
 }

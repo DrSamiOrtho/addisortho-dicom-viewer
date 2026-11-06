@@ -11,7 +11,7 @@ import { decodePNG } from './imageio.js';
 import * as G from './geom.js';
 import { findBalls, findMarkers, traceCanal, canalFit, fitIsEvidence, stemRegion, findOpaque, exclusionRaster, rasterHas, contactInZone, existFits, isExclusion, isUnresolved } from './auto.js';
 import { GUIDE } from './guide.js';
-import { secondaryCapture } from './dicomwrite.js';
+import { secondaryCapture, pdfOfJpeg } from './dicomwrite.js';
 import { reduceFilm, REDUCE_OVER } from './reduce.js';
 import { cleanCopy, addStroke } from './clean.js';
 import { focusKind, shortcut, keepPanel, restorePanel, makeSheet } from './uikit.js';
@@ -302,7 +302,7 @@ async function boot() {
   const q = new URLSearchParams(location.search);
   // wording that stays true once projects are saved to the server (Astra, 13 Oct: "nothing is uploaded" would not be)
   if (STANDALONE) $('foot').textContent = 'Addis Ortho Trading PLC · X-ray templating for surgeons. A planning aid: the plan is a draft and the surgeon decides. The X-ray opens in this browser; a saved project is stored for your team.';
-  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r44d). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
+  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r44e). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
   pendingNote();
   for (const [text, fn] of kcOpenItems()) { const li = document.createElement('li'), a = document.createElement('a'); a.href = '#'; a.textContent = text; a.onclick = e => { e.preventDefault(); fn(); }; li.appendChild(a); $('openList').appendChild(li); }
   // the short part on top and the rest under the templated-patients list, so a phone sees the list without scrolling far
@@ -4116,8 +4116,7 @@ function warnBadge(R) {
 // combined offset over 5 mm, a head off the cup centre) and opens it in one tap; the red ones are in #warns above it.
 function warnSummary(R) {
   const w = R.filter(r => r.length > 1 && r[2] === 'warn'); if (!w.length) return '';
-  const short = t => { const x = String(t); return x.length > 70 ? x.slice(0, 68).replace(/\s+\S*$/, '') + '…' : x; };
-  return `<span class="wsn"><b>${w.length} to check:</b> ${w.slice(0, 2).map(r => `${esc(r[0])}: ${esc(short(r[1]))}`).join('; ')}${w.length > 2 ? `; and ${w.length - 2} more` : ''}</span><button type="button" class="wsbtn" aria-label="Show all ${w.length} results to check">Show all</button>`;
+  return `<span class="wsn"><b>${w.length} to check</b></span><button type="button" class="wsbtn" aria-label="Show all ${w.length} results to check">Show all</button>`;
 }
 // "Show all": the Measurements and save segment opened (with every result), the phone's panel made taller, and it in view
 function showChecks() {
@@ -4309,7 +4308,7 @@ function overlay1(g, T, lw, ui, clean = false, zo = null) {   // clean: no const
       const bpd = bipOf(t);
       if (bpd) {   // r38: the bipolar shell on the head, its axis along the neck axis; its outer centre (the centre of rotation) crossed
         const rr = bipRings(t), so = () => { for (const r of rr) { r.forEach((p, i) => { const s2 = T(p); i ? g.lineTo(s2.x, s2.y) : g.moveTo(s2.x, s2.y); }); g.closePath(); } };
-        g.beginPath(); so(); g.fillStyle = fill; g.fill('evenodd'); stroke(so, col, act ? 2.2 : 1.7);
+        stroke(so, col, act ? 1.5 : 1.2);   // Sami, 6 Nov 2026: outline only, the femoral head must show through
         const oc = corAt(t); cross(oc, col, clean ? 6 : 8);
         if (showLabels) label(G.add(oc, G.mul(bipAxis(t), pxOf(bpd.z.outerDiameter / 2 + 3))), `bipolar ${bpd.z.size}`, col);
       }
@@ -5277,6 +5276,7 @@ function panelBody(P_) {
   s5.appendChild(el(`<p class="note"><b>Project</b> (.aotp${STANDALONE ? ', and the patient list' : ''}): the original X-ray and the whole plan, to reopen and adjust. Confidential: it keeps the patient's details from the X-ray, also in sharing mode, so it stays inside the team. <b>Picture</b> (PNG): the flattened copy for sharing.</p>`));
   const rx = el('<div class="row"></div>');
   rx.appendChild(btn('Save picture (PNG)', exportPNG, 'primary', false, 'A flattened picture of the plan, for sharing (in sharing mode without the name, record number and dates)'));
+  rx.appendChild(btn('Save PDF', exportPDF, '', false, 'The same picture on one A4 page, to print or attach'));
   rx.appendChild(btn('Save DICOM', exportDICOM, '', !!S.set.share, S.set.share ? 'Not in sharing mode: a DICOM carries the patient\'s details' : 'The same picture as a DICOM file, to keep or import elsewhere'));
   const fromArchive = !!((S.img.meta || {}).StudyInstanceUID && (S.img.meta || {}).SOPInstanceUID);
   if (!STANDALONE) rx.appendChild(btn(SEND, sendToPACS, 'primary', !fromArchive || !!S.set.share, S.set.share ? 'Not in sharing mode' : !fromArchive ? `Only for an X-ray from ${VIEWER ? 'the viewer' : 'the archive'} or a DICOM file` : VIEWER ? 'Put the plan picture into the viewer, in this X-ray\'s study (you confirm the patient first); the viewer can then send it to PACS' : 'Store the plan picture in this X-ray\'s study in the archive (you confirm the patient first)'));
@@ -7087,6 +7087,15 @@ function exportPNG() {
   if (S.set.share) return preview(c, () => c.toBlob(bl => { if (!privacyChanged(k0, 'Picture')) download(bl, baseName() + '.png'); }, 'image/png'));   // Astra, 11 Oct: look before sharing
   c.toBlob(bl => { if (!privacyChanged(k0, 'Picture')) download(bl, baseName() + '.png'); }, 'image/png');
 }
+// One A4 page around the same picture (6 Nov 2026); sharing mode looks first, like the PNG.
+function exportPDF() {
+  if (S.filling) return prompt('Wait a moment: a stroke is still being filled.');
+  const nr = notReady(); if (nr) return prompt(nr); const rf = refused(); if (rf.length && !confirm(`These landmarks are marked red: ${rf.join('; ')}. Save the PDF anyway (the red marks are on it)?`)) return;
+  const c = exportCanvas(), k0 = privacyKey();
+  const go = () => c.toBlob(async bl => { const jpeg = new Uint8Array(await bl.arrayBuffer()); if (!privacyChanged(k0, 'PDF')) download(new Blob([pdfOfJpeg({ jpeg, width: c.width, height: c.height })], { type: 'application/pdf' }), baseName() + '.pdf'); }, 'image/jpeg', 0.92);
+  if (S.set.share) return preview(c, go);
+  go();
+}
 // The picture as it will be saved, to check for a name or number burned into the X-ray before it leaves the hospital.
 function preview(c, ok) {
   const d = el(`<div class="pv"><div class="pvbox"><p><b>Look at the whole picture before saving it for sharing.</b> Names, record numbers or dates burned into the X-ray itself are not removed automatically: if you see any, cancel and cover them with "Black out" (2 · Prepare).</p><div class="pvimg"></div><div class="row"></div></div></div>`);
@@ -7203,3 +7212,32 @@ window.aocTemplating = { S, toS, toI, results, plan, lmGeom, goBack, backTarget,
 Object.assign(window.aocTemplating, { ll: () => (S.ll ? { ...S.ll } : null), llStart: () => llStart(), llZone: z => llZone(z), llWhy: () => llImplWhy(), llTotalFemur: () => llTotalFemur(), llTF: () => llTF(),
   pictureSlots: () => { drawnSlots = []; try { exportCanvas(1200); return [...drawnSlots]; } finally { drawnSlots = null; } }, implants: () => implantsNow() });
 boot();
+
+// ---------- quiet notes (Kidus and Sami, 6 Nov 2026: "too much information and orange notes") ----------
+// In the panel a long note or amber box shows one line and an i button; the button opens it and it stays open for that text while
+// the panel redraws. Done here once, by watching the panel, so the many places that write notes do not change. Never folded: a
+// red refusal (.badbox), anything short enough to read whole, and any note holding a control (a button, a field or a link).
+{ const P = document.getElementById('panel'), foot = document.getElementById('foot'), open = new Set(), QMAX = 64;
+  const quiet = () => {
+    if (!P) return;
+    for (const n of [...P.querySelectorAll('.note, .warnbox, .okbox'), ...(foot ? [foot] : [])]) {
+      if (n.querySelector(':scope > .qi') || n.closest('.pv') || n.closest('.qkeep')) continue;
+      if (n.querySelector('button, input, select, textarea, a, label')) continue;
+      const t = n.textContent.trim(); if (t.length <= QMAX) continue;
+      n.classList.add('qn'); n.classList.toggle('qo', open.has(t)); n.dataset.qt = t;
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'qi'; b.textContent = 'i'; b.setAttribute('aria-label', 'Read this note'); b.setAttribute('aria-expanded', String(open.has(t))); n.appendChild(b);
+    }
+  };
+  if (P) {
+    const onI = e => {
+      const b = e.target.closest && e.target.closest('.qi'); if (!b) return;
+      e.preventDefault(); e.stopPropagation();
+      const n = b.parentElement, t = n.dataset.qt, on = !open.has(t);
+      if (on) open.add(t); else open.delete(t);
+      n.classList.toggle('qo', on); b.setAttribute('aria-expanded', String(on));
+    };
+    P.addEventListener('click', onI); if (foot) foot.addEventListener('click', onI);
+    const mo = new MutationObserver(quiet); mo.observe(P, { childList: true, subtree: true }); if (foot) mo.observe(foot, { childList: true });
+    quiet();
+  }
+}

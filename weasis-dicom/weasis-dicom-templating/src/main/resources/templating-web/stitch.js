@@ -158,7 +158,26 @@ const pyr = (g, from, to) => (to / from >= 2 ? boxReduce(g.data, g.cols, g.rows,
 // One join. A above B, both grids at outMm. opt.carried: B has no scale of its own (its size is searched, ±STITCH.carryScale).
 // Returns {status, why, ncc, margin, uxMm, uyMm, texture, rot, s, dSize, flip, inverted, dx, dy (B px (0,0) in A px, before
 // rot/s about cB), cA, cB} where the placement is: p_A = cA + R(rot) * s * (p_B - cB).
-export function matchPair(A, B, { outMm = STITCH.outMm, carried = false } = {}) {
+// Blank rows at a film's edge (collimation, a label burned on black): rows far emptier than the film's typical row. Measured against
+// the film itself, so a narrow limb in a lot of air (an ankle film) is not called blank. Scans from the edge and stops at the first
+// lasting content; at most a quarter of the film. Returns the number of rows.
+export function blankRows(g, fromBottom) {
+  const occ = new Float32Array(g.rows);
+  for (let y = 0; y < g.rows; y++) { let n = 0; const o = y * g.cols; for (let x = 0; x < g.cols; x++) { const v = g.data[o + x]; if (v > 0.03 && v < 1.1) n++; } occ[y] = n / g.cols; }
+  const med = Float32Array.from(occ).sort()[g.rows >> 1], lim = Math.min(0.5, 0.35 * med), cap = g.rows >> 2;
+  let last = 0, run = 0;
+  for (let k = 0; k < cap; k++) { if (occ[fromBottom ? g.rows - 1 - k : k] < lim) { last = k + 1; run = 0; } else if (++run >= 8) break; }
+  return last;
+}
+export function matchPair(A, B, opt = {}) {
+  const outMm = opt.outMm || STITCH.outMm, minTrim = Math.round(2 / outMm), ta = blankRows(A, true), tb = blankRows(B, false), trimA = ta >= minTrim ? ta : 0, trimB = tb >= minTrim ? tb : 0;
+  const A1 = trimA ? { cols: A.cols, rows: A.rows - trimA, data: A.data.subarray(0, A.cols * (A.rows - trimA)) } : A;
+  const B1 = trimB ? { cols: B.cols, rows: B.rows - trimB, data: B.data.subarray(B.cols * trimB) } : B;
+  const r = matchCore(A1, B1, opt);
+  if (r.cB) r.cB = { x: r.cB.x, y: r.cB.y + trimB };   // back in B's own pixels; A was cut at its foot, so its pixels are unchanged
+  return { ...r, trimA, trimB };
+}
+function matchCore(A, B, { outMm = STITCH.outMm, carried = false } = {}) {
   const lv = { c: STITCH.coarseMm, f: STITCH.fineMm };
   const Ac = features(pyr(A, outMm, lv.c), lv.c), Af = features(pyr(A, outMm, lv.f), lv.f);
   const hyp = { up: B, mirror: flipX(B), turned: flipXY(B), both: flipX(flipXY(B)) };
@@ -168,7 +187,7 @@ export function matchPair(A, B, { outMm = STITCH.outMm, carried = false } = {}) 
   const out = { ncc: up.best ? up.best.ncc : NaN, flip: flipBest, inverted: false };
   if (!up.best) return { ...out, status: 'failed', why: 'the films do not overlap enough to compare' };
   if (-up.worst > Math.max(STITCH.nccOk, up.best.ncc + STITCH.flipMargin)) return { ...out, status: 'inverted', inverted: true, why: 'one film looks inverted (bone dark) against the other: check its grey' };
-  if (flipBest.ncc > up.best.ncc + STITCH.flipMargin && flipBest.ncc >= STITCH.nccWeak) return { ...out, status: 'flipped', why: `the lower film fits better ${flipBest.hyp === 'mirror' ? 'mirrored' : flipBest.hyp === 'turned' ? 'turned upside down' : 'mirrored and turned'}: it may be exported the wrong way; check its R/L marker` };
+  if (flipBest.ncc > up.best.ncc + STITCH.flipMargin && flipBest.ncc >= 0.6) return { ...out, status: 'flipped', why: `the lower film fits better ${flipBest.hyp === 'mirror' ? 'mirrored' : flipBest.hyp === 'turned' ? 'turned upside down' : 'mirrored and turned'}: it may be exported the wrong way, or the films may be in the wrong order; check the order and its R/L marker` };
   // fine level (1 mm): every overlap height again, sideways near the coarse answer, ranked by a lower confidence bound
   // (a short overlap correlates well by chance; a bare shaft correlates at every height: Fable F7)
   const Bf = features(pyr(B, outMm, lv.f), lv.f), k = lv.c / lv.f;
@@ -209,10 +228,13 @@ export function matchPair(A, B, { outMm = STITCH.outMm, carried = false } = {}) 
   const cur = descend(Af, Bf, cA0, cB, 0, 1, [{ t: 0.5, s: 0.01, m: 1 }, { t: 0.25, s: 0.005, m: 0.5 }, { t: 0.1, s: 0.0025, m: 0.25 }], { rot: true, s: true }, 1);
   const plain = nccAffine(Af, Bf, cur.cA, cB, 0, carried ? cur.s : 1);
   const withTurn = nccAffine(Af, Bf, cur.cA, cB, cur.rot, carried ? cur.s : 1);
-  const keepRot = withTurn - plain >= STITCH.turnGain ? cur.rot : 0;
+  const rot1 = withTurn - plain >= STITCH.turnGain ? cur.rot : 0;
   // the joined film's own pixel: placement (turn kept or 0; size free only for a carried film), and the size the overlap
   // would like, measured separately (for a film with its own scale it is reported as the disagreement, never applied)
   const A0 = features(A, outMm), B0 = features(B, outMm), kf = lv.f / outMm, cB0 = { x: cB.x * kf, y: cB.y * kf }, c0 = { x: cur.cA.x * kf, y: cur.cA.y * kf };
+  // a turn noise alone would suggest is not kept: it must also gain at the film's own pixel (Fable, 6 Nov 2026)
+  const s0 = carried ? cur.s : 1, keepRot = rot1 && nccAffine(A0, B0, c0, cB0, rot1, s0, 2) - nccAffine(A0, B0, c0, cB0, 0, s0, 2) >= STITCH.turnGain / 2 ? rot1 : 0;
+  const judged = keepRot ? withTurn : plain;   // the score the status is judged on: 1 mm, the placement actually kept. At 0.25 mm mottle dominates (best, below, is for information)
   const fineSteps = [{ t: 0.05, s: 0.002, m: 2 }, { t: 0.05, s: 0.001, m: 1 }, { t: 0.05, s: 0.0005, m: 0.5 }, { t: 0.05, s: 0.00025, m: 0.25 }];
   const fin = descend(A0, B0, c0, cB0, keepRot, carried ? cur.s : 1, fineSteps, { rot: false, s: carried }, 2);
   const meas = carried ? fin : descend(A0, B0, fin.cA, cB0, keepRot, cur.s, fineSteps, { rot: false, s: true }, 2);
@@ -226,12 +248,12 @@ export function matchPair(A, B, { outMm = STITCH.outMm, carried = false } = {}) 
   dif.sort((a, b) => a - b);
   const noise = Math.max(1e-3, (dif.length ? dif[Math.floor(dif.length / 2)] : 0) / (0.6745 * Math.SQRT2));
   const texture = sds.length ? sds[Math.floor(sds.length * 0.95)] / noise : 0;
-  const res = { ...out, ncc: best, margin, uxMm, uyMm, texture, rot: keepRot, s: keepS, dSize: carried ? null : dSize, wanted: { rot: cur.rot, s: meas.s }, cA, cB: cB0, overlapMm: (A.rows - (cA.y - cB0.y * keepS)) * outMm };
-  if (carried && Math.abs(fin.s - 1) > sLim - 0.002) return { ...res, status: 'failed', why: `the film's size differs from its neighbour's by ${Math.round(Math.abs(fin.s - 1) * 1000) / 10} % or more: give it its own ball or a known length` };
+  const res = { ...out, ncc: judged, nccFine: best, margin, uxMm, uyMm, texture, rot: keepRot, s: keepS, dSize: carried ? null : dSize, wanted: { rot: cur.rot, s: meas.s }, cA, cB: cB0, overlapMm: (A.rows - (cA.y - cB0.y * keepS)) * outMm };
+  if (carried && Math.abs(fin.s - 1) > sLim - 0.002) return { ...res, status: 'failed', sizeOff: true, why: `the film's size differs from its neighbour's by ${Math.round(Math.abs(fin.s - 1) * 1000) / 10} % or more: give it its own ball or a known length` };
   if (texture < STITCH.minTexture) return { ...res, status: 'failed', why: 'the overlap shows no bone detail to match' };
-  if (!(best >= STITCH.nccWeak)) return { ...res, status: 'failed', why: 'no convincing match in the overlap' };
+  if (!(judged >= STITCH.nccWeak)) return { ...res, status: 'failed', why: 'no convincing match in the overlap' };
   const weak = [];
-  if (best < STITCH.nccOk) weak.push('the match score is low');
+  if (judged < STITCH.nccOk) weak.push('the match score is low');
   if (margin < STITCH.marginMin) weak.push('another position fits almost as well');
   if (uyMm > STITCH.ridgeMm) weak.push(`the match could slide ${uyMm} mm along the bone (no feature across it in the overlap)`);
   if (uxMm > STITCH.ridgeMm) weak.push(`the match could slide ${uxMm} mm sideways`);
@@ -259,12 +281,12 @@ export function compose(grids, joins, { outMm = STITCH.outMm, label = '' } = {})
   T = T.map(A => [A[0], A[1], A[2] - x0, A[3], A[4], A[5] - y0 + band]);
   const inv = T.map(affInv);
   // seams: halfway through each overlap, measured down the middle of the film
-  const seams = joins.map((j, i) => { const mid = grids[i].cols / 2, bot = apply(T[i], mid, grids[i].rows).y, top = apply(T[i + 1], grids[i + 1].cols / 2, 0).y; return (bot + top) / 2; });
+  const seams = joins.map((j, i) => { const mid = grids[i].cols / 2, bot = apply(T[i], mid, grids[i].rows - (j.trimA || 0)).y, top = apply(T[i + 1], grids[i + 1].cols / 2, j.trimB || 0).y; return (bot + top) / 2; });
   // grey: each film matched to the one above it on their overlap (gain and offset), chained from the top film
   const gain = [{ g: 1, o: 0 }];
   for (let i = 0; i < joins.length; i++) {
     let n = 0, sa = 0, sb = 0, sab = 0, sbb = 0;
-    const yA = Math.max(0, Math.floor(apply(T[i + 1], 0, 0).y)), yB = Math.min(rows, Math.ceil(apply(T[i], 0, grids[i].rows).y));
+    const yA = Math.max(0, Math.floor(apply(T[i + 1], 0, joins[i].trimB || 0).y)), yB = Math.min(rows, Math.ceil(apply(T[i], 0, grids[i].rows - (joins[i].trimA || 0)).y));
     for (let y = yA; y < yB; y += 2) for (let x = 0; x < cols; x += 2) {
       const pa = apply(inv[i], x, y), pb = apply(inv[i + 1], x, y), a = bil(grids[i], pa.x, pa.y), b = bil(grids[i + 1], pb.x, pb.y);
       if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
@@ -306,7 +328,7 @@ function burnBand(u16, cols, band, outMm, text) {
     });
   });
 }
-export const bandText = r => `Stitched from ${r.n} films. Joins at ${r.joins.map(j => Math.round((j.seamY - (r.band || 0)) * r.outMm)).join(', ')} mm from the top. Alignment and lengths across a join are not validated. Addis Ortho templating, draft.`;
+export const bandText = r => `${r.segs.map((g, i) => (g.how === 'assumed' ? `Film ${i + 1} scale assumed from film ${g.from + 1}, not measured. ` : '')).join('')}Stitched from ${r.n} films. Joins at ${r.joins.map(j => Math.round((j.seamY - (r.band || 0)) * r.outMm)).join(', ')} mm from the top. Alignment and lengths across a join are not validated. Addis Ortho templating, draft.`;
 
 // ---------- refusals before joining (Fable F5, F14, F22) ----------
 // list: [{meta, sha, kind}] in order. Returns {refuse: [reasons], warn: [], compared: [field names]}.
@@ -439,7 +461,7 @@ const orient = (A, B, outMm, carried) => matchPair(A, B, { outMm, carried });
 
 // Returns {grids, joins, mm (per original px, per film), from, errors}. joins[i]: matchPair's result for films i and i+1.
 export async function joinAll(segs, { outMm = STITCH.outMm, onStep = () => {} } = {}) {
-  const n = segs.length, mm = segs.map(scaleOf), from = segs.map(() => null), errors = [];
+  const n = segs.length, mm = segs.map(scaleOf), from = segs.map(() => null), assumed = segs.map(() => null), errors = [], warnings = [];
   if (!mm.some(Boolean)) return { errors: ['no film has a ball or a known length: at least one must, to give the joined film a scale'] };
   const grid = i => toGrid(segs[i].keep, mm[i] * segs[i].keep.f, outMm, !!segs[i].turned);
   // carried films, nearest to a measured one first: first guess from the neighbour (same original pixel, or the detector pitches' ratio)
@@ -452,7 +474,14 @@ export async function joinAll(segs, { outMm = STITCH.outMm, onStep = () => {} } 
     mm[c] = mm[nb] * (ipsC && ipsN ? ipsC / ipsN : 1);
     onStep(`film ${c + 1}: carrying the scale from film ${nb + 1}`); await tick();
     const up = Math.min(c, nb), lo = Math.max(c, nb), r = orient(grid(up), grid(lo), outMm, true);
-    if (r.status !== 'matched' && r.status !== 'weak') { errors.push(`film ${c + 1} has no scale of its own and its join with film ${nb + 1} did not match (${r.why}): give it a ball or a known length`); mm[c] = null; continue; }
+    if (r.status !== 'matched' && r.status !== 'weak') {
+      // Fable, 6 Nov 2026: no dead end. Its neighbour's scale is defensible only on the same detector pitch or with files of the same pixel size (checkSet has already held them to one study);
+      // a film whose size clearly differs is refused as before. Marked red in the recipe, the band and the status; never the anchor.
+      const same = (ipsC && ipsN) || (segs[c].keep.srcCols === segs[nb].keep.srcCols && segs[c].keep.srcRows === segs[nb].keep.srcRows);
+      if (r.sizeOff || !same) { errors.push(`film ${c + 1} has no scale of its own and its join with film ${nb + 1} did not match (${r.why}): give it a ball or a known length`); mm[c] = null; continue; }
+      assumed[c] = nb; warnings.push(`Film ${c + 1} has no ball or known length and its join with film ${nb + 1} did not match by itself (${r.why}). Its scale is assumed from film ${nb + 1}, not measured: place the join by hand and check a known length, or give it a ball.`);
+      continue;
+    }
     mm[c] = c > nb ? mm[c] * r.s : mm[c] / r.s;   // p_upper = ... s * p_lower: the lower film's pixel is s upper pixels
     from[c] = nb;
   }
@@ -464,7 +493,7 @@ export async function joinAll(segs, { outMm = STITCH.outMm, onStep = () => {} } 
     if (from[i] !== null || from[i + 1] !== null) r.dSize = null;   // a carried scale agrees by construction: no reassurance from it
     joins.push(r);
   }
-  return { grids, joins, mm, from, errors };
+  return { grids, joins, mm, from, assumed, warnings, errors };
 }
 // original file pixel -> grid pixel, exactly as keepCopy (box by f), resample (box by F, then bilinear) and the turn place it
 function origToGrid(keep, mmKeep, outMm, grid, turned) {
@@ -487,16 +516,18 @@ export function finish(segs, J, { outMm = STITCH.outMm, anchor = defaultAnchor(s
     segs: segs.map((s, i) => {
       const P = origToGrid(s.keep, J.mm[i] * s.keep.f, outMm, J.grids[i], !!s.turned);
       const A = affMul(film.T[i], P).map(v => Math.round(v * 1e6) / 1e6);
-      const o = { how: J.from[i] !== null ? 'carried' : s.how, mm: Math.round(J.mm[i] * 1e7) / 1e7, w: s.keep.srcCols, h: s.keep.srcRows, A, turned: !!s.turned };
+      const asm = J.assumed && J.assumed[i] !== null && J.assumed[i] !== undefined;
+      const o = { how: asm ? 'assumed' : J.from[i] !== null ? 'carried' : s.how, mm: Math.round(J.mm[i] * 1e7) / 1e7, w: s.keep.srcCols, h: s.keep.srcRows, A, turned: !!s.turned };
       if (s.sha) o.sha = s.sha;
       if (o.how === 'carried') o.from = J.from[i];
+      if (asm) { o.from = J.assumed[i]; o.checked = false; }
       if (o.how === 'ball') { o.d = s.d || 25; o.ball = { x: s.ball.x, y: s.ball.y, r: s.ball.r }; }
       if (o.how === 'line') { o.line = s.line; o.len = s.len; }
       return o;
     }),
     joins: joins.map((j, i) => ({ st: joinStatus(j), ncc: Math.round(j.ncc * 1000) / 1000, margin: Number.isFinite(j.margin) ? Math.round(j.margin * 1000) / 1000 : null, uxMm: j.uxMm ?? null, uyMm: j.uyMm ?? null,
       rot: Math.round((j.rot || 0) * 1000) / 1000, s: j.s || 1, dSize: Number.isFinite(j.dSize) ? Math.round(j.dSize * 1e4) / 1e4 : null, seamY: Math.round(film.seams[i] * 10) / 10,
-      cA: { x: Math.round(j.cA.x * 1000) / 1000, y: Math.round(j.cA.y * 1000) / 1000 }, cB: { x: j.cB.x, y: j.cB.y }, why: String(j.why || '').slice(0, 160) })),
+      cA: { x: Math.round(j.cA.x * 1000) / 1000, y: Math.round(j.cA.y * 1000) / 1000 }, cB: { x: j.cB.x, y: j.cB.y }, trimA: j.trimA || 0, trimB: j.trimB || 0, why: String(j.why || '').slice(0, 160) })),
   };
   burnBand(film.u16, film.cols, film.band, outMm, bandText(recipe));
   return { film, recipe };
@@ -505,8 +536,8 @@ export function finish(segs, J, { outMm = STITCH.outMm, anchor = defaultAnchor(s
 // a saved join applied again (a film set reopened): the same grids from the recorded scales and the recorded placements, so the
 // joined film is the same, pixel for pixel; nothing is matched again
 export function applySaved(segs, recipe) {
-  const outMm = recipe.outMm, mm = recipe.segs.map(s => s.mm), from = recipe.segs.map(s => (s.how === 'carried' ? s.from : null));
+  const outMm = recipe.outMm, mm = recipe.segs.map(s => s.mm), from = recipe.segs.map(s => (s.how === 'carried' ? s.from : null)), assumed = recipe.segs.map(s => (s.how === 'assumed' ? s.from : null));
   const grids = segs.map((s, i) => toGrid(s.keep, mm[i] * s.keep.f, outMm, !!recipe.segs[i].turned));
-  const joins = recipe.joins.map(j => ({ status: j.st === 'matched' ? 'matched' : 'weak', how: j.st === 'hand' ? 'hand' : undefined, accepted: false, /* a weak join is looked at again */ cA: { ...j.cA }, cB: { ...j.cB }, rot: j.rot, s: j.s, ncc: j.ncc, margin: j.margin, uxMm: j.uxMm, uyMm: j.uyMm, dSize: j.dSize, why: j.why }));
-  return { grids, joins, mm, from, errors: [] };
+  const joins = recipe.joins.map(j => ({ trimA: j.trimA || 0, trimB: j.trimB || 0, status: j.st === 'matched' ? 'matched' : 'weak', how: j.st === 'hand' ? 'hand' : undefined, accepted: false, /* a weak join is looked at again */ cA: { ...j.cA }, cB: { ...j.cB }, rot: j.rot, s: j.s, ncc: j.ncc, margin: j.margin, uxMm: j.uxMm, uyMm: j.uyMm, dSize: j.dSize, why: j.why }));
+  return { grids, joins, mm, from, assumed, warnings: [], errors: [] };
 }

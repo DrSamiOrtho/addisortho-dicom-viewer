@@ -36,6 +36,10 @@
   #tabs button[aria-pressed="true"] { background: #fff; color: var(--green); font-weight: 700; border-color: #fff; }
   #zoom { position: absolute; right: 8px; top: 38%; display: grid; gap: 6px; }
   #zoom[hidden] { display: none; }
+  #zoom button[aria-pressed="true"] { background: #fff; color: var(--green); }
+  .card .reso { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .card .reso .go { min-height: 44px; font-size: 15px; }
+  .card .chk { display: block; margin-top: 8px; font-size: 13px; color: #456; }
   #zoom button { width: 42px; height: 42px; border-radius: 10px; border: 1px solid #3b4d48; background: rgba(29, 42, 39, .88); color: #fff; font-size: 20px; }
   table.keys td { font-size: 14px; padding: 5px 6px; }
   /* 4 Nov 2026: the strip under the header (Image, Save, keys) and the Image panel */
@@ -143,6 +147,7 @@
 <div id="strip">
   <button class="sb" id="imgB" aria-pressed="false" aria-label="Image: brightness, contrast, invert, window, reset" title="Image (/ for a command)">Image</button>
   <button class="sb" id="saveB" disabled aria-label="Save the plan to a file (Ctrl+S)" title="Save the plan (Ctrl+S). Until you save, an unsaved draft is kept on this phone only.">Save</button>
+  <button class="sb" id="resultB" disabled aria-label="Save the result as PNG, PDF or DICOM" title="The X-ray with the implants and the sizes, as PNG, PDF or DICOM">Result</button>
   <span id="saveState" aria-live="polite"></span>
   <span class="grow"></span>
   <button class="sb" id="helpB" aria-label="Keys, gestures and image commands" title="Keys and gestures (?)">? Keys</button>
@@ -163,7 +168,7 @@
     <form id="cmdF" autocomplete="off"><input id="cmd" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="b60 c70 i   (? lists them)" aria-label="Image command"><button type="submit">Go</button></form>
     <div id="cmdMsg" role="status"></div>
   </div>
-  <div id="zoom" hidden><button id="zIn" aria-label="Zoom in" title="Zoom in (+)">+</button><button id="zOut" aria-label="Zoom out" title="Zoom out (−)">−</button><button id="zFit" aria-label="Fit the film" title="Fit the film (Ctrl+0)">⤢</button></div>
+  <div id="zoom" hidden><button id="zHide" aria-pressed="false" aria-label="Hold to see the X-ray without the implants" title="Hold to see the X-ray without the implants (H)"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button><button id="zIn" aria-label="Zoom in" title="Zoom in (+)">+</button><button id="zOut" aria-label="Zoom out" title="Zoom out (−)">−</button><button id="zFit" aria-label="Fit the film" title="Fit the film (Ctrl+0)">⤢</button></div>
   <div id="pad" hidden aria-label="Fine move, half a millimetre a tap">
     <span></span><button data-d="0,-1" aria-label="Up">↑</button><span>0.5 mm<br>a tap</span>
     <button data-d="-1,0" aria-label="Left">←</button><button id="padX" aria-label="Close fine move">✕</button><button data-d="1,0" aria-label="Right">→</button>

@@ -181,7 +181,7 @@ export const STITCH = Object.freeze({
 export const STITCH_TAG = 'AOC-STITCH v1 ';   // Image Comments of a joined film start with this, then the recipe as JSON
 const r1 = x => Math.round(x * 10) / 10, r2 = x => Math.round(x * 100) / 100;
 const JOIN_HOW = { matched: 'matched on the overlap', weak: 'weak match, accepted by eye', hand: 'placed by hand' };
-const SCALE_HOW = { ball: 'its own ball', line: 'a known length on it', carried: 'carried through the join' };
+const SCALE_HOW = { ball: 'its own ball', line: 'a known length on it', carried: 'carried through the join', assumed: 'assumed' };
 // {level: 'amber' | 'red', reasons: [...], lenErrMm}: amber at best (a stitched film is never trusted like one exposure)
 export function stitchStatus(r) {
   const reasons = []; let red = false, len = 0;
@@ -194,7 +194,7 @@ export function stitchStatus(r) {
     if (d > STITCH.sizeRed || le > STITCH.lenRedMm) { red = true; reasons.push(`join ${n}: lengths across it may be ${r1(le)} mm off`); }
     else if (d > STITCH.sizeAmber || le > STITCH.lenAmberMm) reasons.push(`join ${n}: lengths across it may be ${r1(le)} mm off`);
   });
-  (r.segs || []).forEach((s, i) => { if (s.how === 'carried') reasons.push(`film ${i + 1}'s scale carried through a join, not measured on it`); });
+  (r.segs || []).forEach((s, i) => { if (s.how === 'carried') reasons.push(`film ${i + 1}'s scale carried through a join, not measured on it`); if (s.how === 'assumed') { red = true; reasons.push(`film ${i + 1}'s scale assumed equal to film ${s.from + 1}'s, not measured and not checked by the join`); } });
   return { level: red ? 'red' : 'amber', reasons, lenErrMm: r1(len) };
 }
 // the one warning both pages show on a joined film, built from the recipe (never fixed text: Fable F23)
@@ -205,7 +205,7 @@ export function stitchWarning(r) {
 }
 export function stitchScaleLine(r) {
   const segs = r.segs || [], a = segs[r.anchor] || {};
-  const who = segs.map((s, i) => `film ${i + 1} by ${s.how === 'ball' ? `its ${s.d || 25} mm ball` : SCALE_HOW[s.how] || s.how}${s.how === 'carried' && Number.isInteger(s.from) ? ` from film ${s.from + 1}` : ''}`).join(', ');
+  const who = segs.map((s, i) => `film ${i + 1} by ${s.how === 'ball' ? `its ${s.d || 25} mm ball` : SCALE_HOW[s.how] || s.how}${(s.how === 'carried' || s.how === 'assumed') && Number.isInteger(s.from) ? ` from film ${s.from + 1}` : ''}`).join(', ');
   const dis = (r.joins || []).map((j, i) => (Number.isFinite(j.dSize) ? `${r2(Math.abs(j.dSize) * 100)} % (${r1(Math.abs(j.dSize) * STITCH.boneMm)} mm over ${STITCH.boneMm} mm) at join ${i + 1}` : null)).filter(Boolean);
   return `Scale ${r.outMm} mm per pixel, shown for film ${r.anchor + 1} (${a.how === 'ball' ? `${a.d || 25} mm ball` : 'known length'}); ${who}.${dis.length ? ` Films disagree by ${dis.join(', ')}.` : ''} Good at the depth of each ball, not for the whole limb.`;
 }
@@ -223,8 +223,8 @@ export function validateStitch(r) {   // null when usable, else the reason in wo
   if (!fin(r.outMm, 0.05, 2) || !Number.isInteger(r.cols) || !Number.isInteger(r.rows) || r.cols < 1 || r.rows < 1 || r.cols * r.rows > 60e6) return 'the stitch record\'s size or scale is not usable';
   if (!Number.isInteger(r.anchor) || !r.segs[r.anchor] || !['ball', 'line'].includes(r.segs[r.anchor].how)) return 'the stitch record has no film measured with a ball or a known length';
   for (const [i, s] of r.segs.entries()) {
-    if (!s || !['ball', 'line', 'carried'].includes(s.how) || !fin(s.mm, 0.005, 5)) return `film ${i + 1} in the stitch record has no usable scale`;
-    if (s.how === 'carried' && !(Number.isInteger(s.from) && Math.abs(s.from - i) === 1 && r.segs[s.from])) return `film ${i + 1}'s scale is carried from no neighbour`;
+    if (!s || !['ball', 'line', 'carried', 'assumed'].includes(s.how) || !fin(s.mm, 0.005, 5)) return `film ${i + 1} in the stitch record has no usable scale`;
+    if ((s.how === 'carried' || s.how === 'assumed') && !(Number.isInteger(s.from) && Math.abs(s.from - i) === 1 && r.segs[s.from])) return `film ${i + 1}'s scale is carried from no neighbour`;
     if (!Array.isArray(s.A) || s.A.length !== 6 || !s.A.every(v => fin(v, -1e7, 1e7))) return `film ${i + 1}'s placement is not valid`;
     if (s.sha !== undefined && !/^[0-9a-f]{64}$/.test(String(s.sha))) return `film ${i + 1}'s fingerprint is not valid`;
     if (!(Number.isInteger(s.w) && Number.isInteger(s.h) && s.w > 0 && s.h > 0)) return `film ${i + 1}'s size is not valid`;

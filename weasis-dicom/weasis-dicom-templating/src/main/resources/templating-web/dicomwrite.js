@@ -80,3 +80,25 @@ export function secondaryCapture({ rgba, jpeg, width, height, meta = {}, seriesD
   const group = concat(metaEls);
   return { bytes: concat([new Uint8Array(128), bytesOf('DICM'), el('00020000', 'UL', group.length), group, ...ds]), sop, series, study };
 }
+
+// The saved picture as a one-page A4 PDF (6 Nov 2026): the JPEG is stored as it is, so nothing is lost twice and no library is
+// needed. For a report to print or attach; the picture carries the sizes. Title: words only, never a patient's details.
+export function pdfOfJpeg({ jpeg, width, height, title = 'Templating plan (draft)', now = new Date() }) {
+  const A4W = 595.28, A4H = 841.89, M = 18, f = Math.min((A4W - 2 * M) / width, (A4H - 2 * M) / height), w = width * f, h = height * f, x = (A4W - w) / 2, y = A4H - M - h;
+  const bytes = s => Uint8Array.from(String(s), c => c.charCodeAt(0) & 0xFF), n = v => v.toFixed(2);
+  const content = `q ${n(w)} 0 0 ${n(h)} ${n(x)} ${n(y)} cm /Im0 Do Q\n`, safe = String(title).replace(/[^\x20-\x7E]/g, ' ').replace(/([\\()])/g, '\\$1');
+  const stamp = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}${String(now.getUTCDate()).padStart(2, '0')}${String(now.getUTCHours()).padStart(2, '0')}${String(now.getUTCMinutes()).padStart(2, '0')}${String(now.getUTCSeconds()).padStart(2, '0')}Z`;
+  const objs = [
+    [bytes('<< /Type /Catalog /Pages 2 0 R >>')],
+    [bytes('<< /Type /Pages /Kids [3 0 R] /Count 1 >>')],
+    [bytes(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${A4W} ${A4H}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`)],
+    [bytes(`<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`), jpeg, bytes('\nendstream')],
+    [bytes(`<< /Length ${content.length} >>\nstream\n${content}endstream`)],
+    [bytes(`<< /Title (${safe}) /Producer (Addis Ortho templating) /CreationDate (D:${stamp}) >>`)],
+  ];
+  const parts = [bytes('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n')], off = []; let pos = parts[0].length;
+  objs.forEach((o, i) => { const seq = [bytes(`${i + 1} 0 obj\n`), ...o, bytes('\nendobj\n')]; off.push(pos); for (const b of seq) { parts.push(b); pos += b.length; } });
+  const xref = `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${off.map(v => `${String(v).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info 6 0 R >>\nstartxref\n${pos}\n%%EOF\n`;
+  parts.push(bytes(xref));
+  return concat(parts);
+}

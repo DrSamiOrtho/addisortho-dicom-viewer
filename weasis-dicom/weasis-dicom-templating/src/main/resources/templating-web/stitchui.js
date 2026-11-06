@@ -113,6 +113,8 @@ export function openStitchSheet(host) {
     S.busy = 'Joining…'; S.err = ''; render();
     try {
       const J = await ST.joinAll(segs(), { outMm: outMm(), onStep: t => { S.busy = 'Joining: ' + t + '…'; render(); } });
+      const unc = S.films.map((f, i) => (f.how === 'ball' && f.ball && !f.ballOk ? i + 1 : 0)).filter(Boolean), uncNote = unc.length ? `Film ${unc.join(' and film ')}: a ball was found but not confirmed, so it was not used. Answer "Yes, that is the ball" above to use its own scale. ` : '';
+      S.note = uncNote + ((J.warnings || []).join(' '));
       if (J.errors && J.errors.length) { S.err = J.errors.join(' '); S.J = null; }
       else { S.J = J; if (!(S.anchor >= 0) || !ownScale(S.films[S.anchor])) S.anchor = ST.defaultAnchor(segs()); recompose(); }
     } catch (e) { S.err = e.message || String(e); }
@@ -239,13 +241,13 @@ export function openStitchSheet(host) {
     const jl = root.querySelector('#joins');
     if (joined) J.joins.forEach((j, i) => {
       const stn = j.how === 'hand' ? 'hand' : j.status, d = document.createElement('div'); d.className = 'join';
-      const usable = ST.joinUsable(j), fixable = j.status === 'failed' || j.status === 'weak' || j.how === 'hand';
+      const usable = ST.joinUsable(j), fixable = j.status === 'failed' || j.status === 'weak' || j.how === 'hand';   // a refused flip reaches this only through the button below, which makes it 'hand'
       d.innerHTML = `<b>Join ${i + 1}</b> (films ${i + 1} and ${i + 2})<span class="chip ${stn}">${{ matched: 'matched', weak: 'weak', failed: 'not matched', flipped: 'refused: flipped?', inverted: 'refused: inverted grey?', hand: 'placed by hand' }[stn] || stn}</span>
         <p>${esc(j.why || (j.status === 'matched' ? 'Matched on the overlap.' : ''))}${Number.isFinite(j.ncc) ? ` <small>score ${j.ncc.toFixed(2)}${Number.isFinite(j.uyMm) ? `, could slide ${j.uyMm} mm along the bone, ${j.uxMm} mm sideways` : ''}${Number.isFinite(j.dSize) ? `, size disagreement ${(Math.abs(j.dSize) * 100).toFixed(1)} % (${(Math.abs(j.dSize) * STITCH.boneMm).toFixed(1)} mm over ${STITCH.boneMm} mm)` : ''}${j.rot ? `, turned ${j.rot.toFixed(2)}°` : ''}</small>` : ''}</p>
         ${j.status === 'weak' && j.how !== 'hand' ? `<label><input type="checkbox" data-j="${i}" data-a="accept"${j.accepted ? ' checked' : ''}> I have looked at this join below and it is right</label>` : ''}
         ${j.status === 'failed' && j.how !== 'hand' ? `<button data-j="${i}" data-a="hand">Place it by hand</button>` : ''}
         ${(j.status === 'matched' || j.status === 'weak') && j.how !== 'hand' ? `<button class="alt" data-j="${i}" data-a="hand">Not right: place it by hand</button>` : ''}
-        ${(j.status === 'flipped' || j.status === 'inverted') ? '<p><small>Not joined: correct the film (turn it, remove a mirrored export, or use the original DICOM) and match again.</small></p>' : ''}
+        ${(j.status === 'flipped' || j.status === 'inverted') && j.how !== 'hand' ? '<p><small>Not joined: correct the film (turn it, remove a mirrored export, or use the original DICOM) and match again.</small></p>' : ''}${j.status === 'flipped' && j.how !== 'hand' ? `<button class="alt" data-j="${i}" data-a="hand">The film is right: place it by hand</button>` : ''}
         ${fixable && j.cA ? `<p class="nudge">Move the lower film: <button class="alt" data-j="${i}" data-a="n" data-v="0,-1,0">↑ 1 mm</button><button class="alt" data-j="${i}" data-a="n" data-v="0,1,0">↓ 1 mm</button><button class="alt" data-j="${i}" data-a="n" data-v="-1,0,0">← 1 mm</button><button class="alt" data-j="${i}" data-a="n" data-v="1,0,0">→ 1 mm</button><button class="alt" data-j="${i}" data-a="n" data-v="0,-0.25,0">↑ ¼</button><button class="alt" data-j="${i}" data-a="n" data-v="0,0.25,0">↓ ¼</button><button class="alt" data-j="${i}" data-a="n" data-v="0,0,-0.1">⟲ 0.1°</button><button class="alt" data-j="${i}" data-a="n" data-v="0,0,0.1">⟳ 0.1°</button></p>` : ''}
         ${S.film && j.cA ? `<canvas class="pv" data-seam="${i}"></canvas>` : ''}${usable ? '' : '<p><small>This join is not usable yet.</small></p>'}`;
       jl.appendChild(d);

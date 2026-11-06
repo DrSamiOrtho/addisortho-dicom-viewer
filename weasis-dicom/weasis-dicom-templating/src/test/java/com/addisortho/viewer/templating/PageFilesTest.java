@@ -180,6 +180,6 @@ class PageFilesTest {
     for (String range : new String[] {"jnj-", "zb-", "ldk-"}) {
       assertTrue(!lib.contains("\"range\":\"" + range), range);
     }
-    assertEquals("r44d", p.release());
+    assertEquals("r44e", p.release());
   }
 }
