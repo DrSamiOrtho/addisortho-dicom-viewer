@@ -186,9 +186,10 @@ public class MeasureToolBar extends WtoolBar {
     MeasureTool.updateMeasureProperties();
 
     Optional<ComboItemListener<Graphic>> measure = eventManager.getAction(ActionW.DRAW_MEASURE);
-    measure.ifPresent(comboItemListener -> add(buildButton(comboItemListener)));
+    measure.ifPresent(
+        comboItemListener -> add(labelled(buildButton(comboItemListener), "measure")));
     Optional<ComboItemListener<Graphic>> draw = eventManager.getAction(ActionW.DRAW_GRAPHICS);
-    draw.ifPresent(comboItemListener -> add(buildButton(comboItemListener)));
+    draw.ifPresent(comboItemListener -> add(labelled(buildButton(comboItemListener), "draw")));
 
     if (measure.isPresent() || draw.isPresent()) {
       deleteButton.setToolTipText(Messages.getString("MeasureToolBar.del"));
@@ -205,8 +206,16 @@ public class MeasureToolBar extends WtoolBar {
         measure.get().registerActionState(deleteButton);
       } else
         draw.ifPresent(comboItemListener -> comboItemListener.registerActionState(deleteButton));
-      add(deleteButton);
+      add(labelled(deleteButton, "delete"));
     }
+  }
+
+  /** The small word under the icon, as on the other tool bars. */
+  private static <B extends javax.swing.AbstractButton> B labelled(B button, String word) {
+    button.putClientProperty(
+        org.weasis.core.ui.util.ToolbarLabels.CLIENT_PROPERTY,
+        Messages.getString("MeasureToolBar.label." + word));
+    return button;
   }
 
   public static List<Graphic> getDrawGraphicList() {
