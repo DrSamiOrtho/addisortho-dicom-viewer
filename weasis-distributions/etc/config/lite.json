@@ -20,7 +20,7 @@
     {
       "code": "felix.auto.start.110",
       "value": "",
-      "description": "REMOVE - DICOM send, Q/R and ISO writer"
+      "description": "REMOVE - DICOM send, Q/R, receive and ISO writer"
     },
     {
       "code": "felix.auto.start.115",

@@ -27,7 +27,7 @@ LITE_NAME="Addis Ortho Viewer Lite"
 removed=(
   weasis-dicom-viewer3d jogamp
   weasis-dicom-rt weasis-dicom-sr weasis-dicom-au weasis-dicom-wave
-  weasis-dicom-send weasis-dicom-qr weasis-dicom-isowriter
+  weasis-dicom-send weasis-dicom-qr weasis-dicom-receive weasis-dicom-isowriter
   weasis-base-viewer2d weasis-base-explorer weasis-acquire-explorer weasis-acquire-editor
   org.apache.felix.gogo.shell
 )

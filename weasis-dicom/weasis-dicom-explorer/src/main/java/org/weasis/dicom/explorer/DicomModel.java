@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer;
 
 import com.formdev.flatlaf.util.SystemInfo;
@@ -558,7 +559,7 @@ public class DicomModel implements TreeModel, DataExplorerModel {
       }
       SegVisibilityPolicy.forgetPatient((String) patientGroup.getTagValue(TagW.PatientPseudoUID));
       removeHierarchyNode(MediaSeriesGroupNode.rootNode, patientGroup);
-      LOGGER.info("Remove Patient: {}", patientGroup);
+      LOGGER.info("Remove a patient");
     }
   }
 
@@ -784,7 +785,7 @@ public class DicomModel implements TreeModel, DataExplorerModel {
                 TagW.PatientPseudoUID, patientPseudoUID, DicomModel.patient.tagView());
         dicomReader.writeMetaData(pt);
         addHierarchyNode(MediaSeriesGroupNode.rootNode, pt);
-        LOGGER.info("Adding patient: {}", pt);
+        LOGGER.info("Adding a patient");
       } else {
         pt = getParent(st, DicomModel.patient);
         LOGGER.warn(

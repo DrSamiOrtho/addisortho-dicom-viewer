@@ -72,8 +72,8 @@ and `WEASIS_PWD` (an app-specific password for notarisation).
 Addis Ortho Viewer Lite is a second, smaller installer built from the same source for viewing X-ray
 and CT images in 2D: thumbnails, stack scrolling, window/level, zoom, rotation, measurements and
 annotations, DICOM CD (DICOMDIR) loading and image export. It leaves out the 3D viewer and JOGL, the
-MPR/MIP toolbar, RT, SR, ECG and audio, DICOM send and query/retrieve, CD burning, the non-DICOM
-image viewer, the Dicomizer and the translations (English only).
+MPR/MIP toolbar, RT, SR, ECG and audio, DICOM send, query/retrieve and receive, CD burning, the
+non-DICOM image viewer, the Dicomizer and the translations (English only).
 
 - `weasis-distributions/etc/config/lite.json` is a profile, like `dicomizer.json`, read through
   `-Dfelix.extended.config.properties=file:conf/lite.json`: it stops those bundles, hides the
@@ -101,6 +101,81 @@ instead of 39; the runtime is 91 MB of it. MPR code still lives inside `weasis-d
 | Windows upgrade codes | x64 `0cad2ecd-35e6-4aa7-9647-16f80dcc7a31`, arm64 `ef84b678-2032-4f0a-b9c4-b5807f045b9a` |
 | Preference profile | `addisortho-lite` |
 | URL scheme | none |
+
+## Receive from modality
+
+The full viewer can receive images pushed by an X-ray machine or another modality over the hospital
+LAN, as a DICOM Storage SCP (`weasis-dicom/weasis-dicom-receive`). It answers C-STORE and C-ECHO, so
+the machine's "test connection" works. It is **off by default**. There is no encryption: use it only
+on the hospital LAN (TLS, forwarding to a PACS, worklist, storage commitment and auto-delete are not
+built). The 2D Lite leaves the bundle out (`lite.json`, `prepare-lite.sh`).
+
+Set up in **File, Preferences, Receive from modality**:
+
+| Setting | Default | Note |
+|---|---|---|
+| Receive images | off | |
+| AE title | `AOVIEWER` | 1 to 16 plain characters |
+| Port | `11112` | |
+| Listen address | empty (all network cards) | or one IP address of this computer |
+| Allowed senders | empty, so **every device is refused** | AE title and IP address, both exact |
+| Storage folder | `AddisOrthoReceived` in the home folder | deliberately not Documents, which is often synchronised to a cloud service |
+| Maximum connections | 4 | more are refused for now, and the machine can retry |
+| Maximum size of one image | 1024 MB | a larger one is refused |
+| Patient name in names | on | turn off if the folders may leave the hospital |
+
+On the X-ray machine, in its DICOM Send or PACS destination settings, enter the **AE title** and
+**port** above and the **IP address of this computer**. Add the machine to Allowed senders with its
+own (calling) AE title and IP address, and give it a fixed IP address: a changed address is refused.
+Then press the machine's test connection (C-ECHO). A refused device shows a notice with the AE title
+and address it used, which is the quickest way to find what to enter.
+
+**Windows firewall:** Windows blocks incoming connections until they are allowed. The first time the
+receiver listens Windows may ask: allow it on private or domain networks only. Without that prompt,
+add an inbound rule as an administrator (change the port if you changed it):
+
+    netsh advfirewall firewall add rule name="Addis Ortho Viewer DICOM" dir=in action=allow protocol=TCP localport=11112 profile=private,domain
+
+**macOS** may ask once to allow incoming connections for the app.
+
+What happens to an image: it is written to `<storage folder>/.incoming`, checked to be DICOM with a
+SOP Instance UID that matches the request and with study and series UIDs, then moved to the folder of
+its study. It is added to the explorer, whose study title counts "N images received". A notice with a
+**Show** button offers to open it in a new tab. A new arrival never opens, closes or replaces a viewer,
+and never changes the selected patient.
+
+Names (`ReceiveNaming`), with the arrival date of the file on this computer. The DICOM study date stays
+inside the file and is used for the age:
+
+    ABEBE KEBEDE_45Y_MRN77_2026-11-06_<first 12 hex digits of SHA-256 of the Study Instance UID>/
+        ABEBE KEBEDE_45Y_MRN77_2026-11-06_<SOP Instance UID>.dcm
+
+- Age is from the birth date to the study date (`45Y`, or `18M`, `12D` under 2 years). Without a birth
+  date it comes from the Patient's Age element. Without either it is left out.
+- A missing name or MRN is left out, and the folder then also holds the Study Instance UID.
+- Every part is sanitized: path separators, `..`, control and invisible characters, characters reserved
+  on Windows, reserved device names and trailing dots or spaces. Amharic stays. A long name is shortened
+  to keep the path within 250 characters.
+- A later image of the same study, even on another day, goes to the folder made on the first day. Its
+  own file name has its own arrival date.
+- An image with a SOP Instance UID already stored is answered with success, and the first copy is kept.
+
+Answers to the machine: `0xA700` (out of resources, the machine can resend) when less than 200 MB is
+free, the folder cannot be written or the image is above the limit; `0xC000` (cannot understand) for
+anything that is not valid DICOM. The user sees a plain notice for each, at most once a minute per
+kind, and the status line of the Preferences page shows why it is not listening (port in use, folder
+missing or not writable, wrong address).
+
+Retention: studies stay until the user deletes them. The Preferences page shows the folder size and
+the studies, and has Show (loads a kept study, for example after a restart), Open folder and Delete.
+Nothing is deleted automatically, so watch the disk.
+
+Patient names and MRNs are allowed in these file names by the owner's rule for clinical software, and
+must never reach the application log: the receiver logs UIDs, counts, AE titles and IP addresses only,
+never a storage path. Upstream's "Adding patient" lines in `LoadDicom` and `DicomModel`, which wrote the
+name, were changed for this.
+
+Not tested against a real X-ray machine.
 
 ## Identity
 
