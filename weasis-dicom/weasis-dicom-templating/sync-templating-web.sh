@@ -1,6 +1,7 @@
 #!/bin/sh
 # Addis Ortho Trading PLC, 2026. Copies the templating page's viewer build into this bundle (14 Oct 2026).
-# The page's source is the templating project (CENTER/EMR-POC/pacs-trial/templating). Its build_viewer.sh builds
+# The page's source is the templating repository (DrSamiOrtho/t-addisortho, t-addisortho-com on this Mac; until 6 Nov 2026 the Drive
+# folder CENTER/EMR-POC/pacs-trial/templating). Its build_viewer.sh builds
 # the viewer copy (the Addis Ortho ranges only since 23 Oct 2026, data-mode="viewer", the release in RELEASE.txt) into a
 # new folder; this script then makes src/main/resources/templating-web/ exactly that build (the folder is tracked by git,
 # so a change shows in git diff). The viewer checks every file against BUILD.txt, and library.json and index.html against
@@ -14,7 +15,7 @@ CHECK=
 if [ "$1" = "--check" ]; then CHECK=1; shift; fi
 REL="$1"
 [ -n "$REL" ] || { echo "usage: sh sync-templating-web.sh [--check] <release, e.g. r28> [templating project folder]" >&2; exit 2; }
-SRC="${2:-$HOME/Library/CloudStorage/GoogleDrive-samuel.hailu@aau.edu.et/My Drive/Documents/Addis Ortho Trading/CENTER/EMR-POC/pacs-trial/templating}"
+SRC="${2:-$HOME/Documents/Claude/Projects/t-addisortho-com}"
 [ -f "$SRC/build_viewer.sh" ] || { echo "FAIL: no build_viewer.sh in $SRC" >&2; exit 1; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

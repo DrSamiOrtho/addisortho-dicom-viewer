@@ -323,8 +323,8 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
   X-ray in the X-ray templating page, offline: a local server on 127.0.0.1 (port 47210 when free) with a one-time
   token per X-ray serves the page's viewer build (Addis Ortho BE2, BE, cementless cup and total knee only) and takes
   back the plan picture, which loads into the X-ray's study. The page lives in the templating project
-  (CENTER/EMR-POC/pacs-trial/templating, `build_viewer.sh`); copy it in with `sync-templating-web.sh`, which checks every
-  file against `BUILD.txt`. The protocol and its browser test: the templating project's `workflow/28o_templating_viewer.py`.
+  (the t-addisortho repository, `build_viewer.sh`); copy it in with `sync-templating-web.sh`, which checks every
+  file against `BUILD.txt`. The protocol and its browser test: the t-addisortho repository's `tests/workflow/28o_templating_viewer.py`.
   Needs `jdk.httpserver` in the installer runtime (`launch-options.sh`) and `com.sun.net.httpserver` in both `base.json`.
 - `weasis-dicom/weasis-dicom-bones` (3D view tool panels):
   - **Bone STL**: one segment of a shown SEG as a binary STL, mm, DICOM LPS.
