@@ -75,8 +75,12 @@ final class SeamMatcher {
   // 300, not 120: the 1 mm grid with a 4 mm step offers many more candidates, and on a real knee
   // the strongest 120 lay on one condyle (7 Nov 2026 case)
   private static final int MAX_PATCHES = 300;
-  // every tenth patch by strength is held back from the fit and checks it
+  // every tenth patch by strength is held back from the fit and checks it; fitted patches within
+  // this many patches of a held one leave the fit
   private static final int HOLD_EVERY = 10;
+  private static final double HELD_EXCLUDE = 0.5;
+  // Refine from a hand-set position: rough peaks this far around it are refined too, as rivals
+  static final double LOCAL_MM = 25;
   // unchanged (Kimi review); the ridge test in matchPatch rejects a patch that could slide
   private static final double MIN_PATCH_NCC = 0.6;
   private static final double MIN_PATCH_ISOTROPY = 0.15;
@@ -201,18 +205,37 @@ final class SeamMatcher {
    * seam placed by hand can become "check" with a measured residual and uncertainty, or fail.
    */
   static Seam refine(MatchImage upper, MatchImage lower, Band band, Rigid start) {
+    List<String> fail = new ArrayList<>();
     List<String> check = new ArrayList<>();
     check.add("refined by the automatic match from a position set by hand");
+    Fine chosen = fine(upper, lower, band, start);
+    // the hand-set position limits the search; it does not say which repeated structure the user
+    // chose, so the rough peaks around it are refined too and a rival fails the seam (Kimi, second
+    // review)
+    int rivalPoints = 0;
+    boolean rival = false;
+    for (Coarse c : coarsePeaks(upper, lower, band, CANDIDATES, start, LOCAL_MM)) {
+      Fine f = fine(upper, lower, band, Rigid.shift(c.dx, c.dy));
+      if (f.inliers.size() < 2 || differs(chosen.fit, f.fit, upper, lower) <= RIVAL_MM) {
+        continue;
+      }
+      rivalPoints = Math.max(rivalPoints, f.inliers.size());
+      rival |=
+          f.inliers.size() >= Math.max(MIN_INLIERS, Math.ceil(RIVAL_SHARE * chosen.inliers.size()));
+    }
+    if (rival) {
+      fail.add(
+          String.format(
+              Locale.ROOT,
+              "another position within %.0f mm of the one set by hand matches almost as well (%d"
+                  + " agreeing points there against %d here): a repeating pattern, or two layers"
+                  + " at different depths; check which structure is lined up",
+              LOCAL_MM,
+              rivalPoints,
+              chosen.inliers.size()));
+    }
     return judge(
-        upper,
-        lower,
-        band,
-        fine(upper, lower, band, start),
-        start,
-        Double.NaN,
-        new ArrayList<>(),
-        check,
-        Seam.Method.SEMI_AUTOMATIC);
+        upper, lower, band, chosen, start, Double.NaN, fail, check, Seam.Method.SEMI_AUTOMATIC);
   }
 
   /**
@@ -273,6 +296,7 @@ final class SeamMatcher {
     double scale = Rigid.similarityScale(inliers);
     double[] heldRes = heldPairs.stream().mapToDouble(fit::residual).sorted().toArray();
     double holdout = heldRes.length == 0 ? Double.NaN : heldRes[heldRes.length / 2];
+    double quarterHeld = heldRes.length == 0 ? Double.NaN : heldRes[3 * heldRes.length / 4];
     double worstHeld = heldRes.length == 0 ? Double.NaN : heldRes[heldRes.length - 1];
     // spread is judged against where matches were found (the bone, side to side), not the film's
     // width: one leg on a 427 mm plate can never span 40 % of the plate (7 Nov 2026 case). Noise
@@ -321,21 +345,29 @@ final class SeamMatcher {
       fail.add(
           "only %d held-back points could be matched (at least %d needed to check the fit)"
               .formatted(heldPairs.size(), MIN_HELD));
-    } else if (holdout > MAX_HOLDOUT_MM) {
+    } else if (holdout > MAX_HOLDOUT_MM || quarterHeld > 2 * MAX_HOLDOUT_MM) {
+      // the median, and the upper quarter at twice the limit: a region that is systematically
+      // wrong (the other layer of a knee) shows in the quarter when the median hides it
       fail.add(
           String.format(
               Locale.ROOT,
-              "the %d held-back points disagree with the fit by %.1f mm (median; worst %.1f mm)",
+              "the %d held-back points disagree with the fit (median %.1f mm, upper quarter %.1f"
+                  + " mm, worst %.1f mm; at most %.0f and %.0f mm)",
               heldPairs.size(),
               holdout,
-              worstHeld));
+              quarterHeld,
+              worstHeld,
+              MAX_HOLDOUT_MM,
+              2 * MAX_HOLDOUT_MM));
     } else {
       check.add(
           String.format(
               Locale.ROOT,
-              "%d held-back points agree with the fit within %.1f mm (median; worst %.1f mm)",
+              "%d held-back points agree with the fit (median %.1f mm, upper quarter %.1f mm,"
+                  + " worst %.1f mm)",
               heldPairs.size(),
               holdout,
+              quarterHeld,
               worstHeld));
     }
     if (Math.abs(scale - 1) > SCALE_TOLERANCE) {
@@ -384,12 +416,17 @@ final class SeamMatcher {
     Seam whole = match(upper, lower, Band.WHOLE);
     Seam left = match(upper, lower, Band.LEFT_HALF);
     Seam right = match(upper, lower, Band.RIGHT_HALF);
+    // Both needs both legs matched on their own, agreeing, and the whole-width match passing;
+    // a failure of any of these fails the seam (Kimi, second review: a passing whole-width seam
+    // must not stand in for a leg that failed, and two halves must not erase a whole-width failure)
     if (left.status() == Seam.Status.FAILED || right.status() == Seam.Status.FAILED) {
       return withReason(
           whole,
-          whole.status(),
-          "the legs could not be matched one at a time to check that they agree: %s leg failed"
-              .formatted(left.status() == Seam.Status.FAILED ? "the left" : "the right"));
+          Seam.Status.FAILED,
+          "the legs could not be matched one at a time to check that they agree: %s leg failed;"
+                  .formatted(left.status() == Seam.Status.FAILED ? "the left" : "the right")
+              + " choose one target leg and match on its half of the image, or line the seam up"
+              + " by hand");
     }
     Rigid base = whole.status() == Seam.Status.CHECK ? whole.transform() : left.transform();
     double[] box = overlap(upper.widthMm(), upper.heightMm(), base, lower);
@@ -415,12 +452,12 @@ final class SeamMatcher {
     if (whole.status() == Seam.Status.CHECK) {
       return withReason(whole, Seam.Status.CHECK, words + ", within the limits");
     }
-    Seam better = left.rotationSigmaDeg() <= right.rotationSigmaDeg() ? left : right;
     return withReason(
-        better,
-        Seam.Status.CHECK,
-        "matched on the %s leg only; %s, within the limits"
-            .formatted(better == left ? "left" : "right", words));
+        whole,
+        Seam.Status.FAILED,
+        words
+            + ", within the limits, but the match on the whole width failed; choose one target"
+            + " leg and match on its half of the image, or line the seam up by hand");
   }
 
   private static Seam withReason(Seam s, Seam.Status status, String reason) {
@@ -456,12 +493,16 @@ final class SeamMatcher {
     double spread =
         pairs.stream().mapToDouble(Rigid.Pair::tx).max().orElse(0)
             - pairs.stream().mapToDouble(Rigid.Pair::tx).min().orElse(0);
+    // two pairs fit exactly whatever they are, and clustered pairs do not fix the rotation: such a
+    // seam is unconfirmed and stays failed, it cannot be saved (Kimi, second review)
     if (pairs.size() < 3) {
+      status = Seam.Status.FAILED;
       reasons.add(
-          "manual seam with %d point pairs: three or more agreeing pairs on bone, spread across the"
+          "manual seam with %d point pairs, unconfirmed: three or more agreeing pairs on bone,"
                   .formatted(pairs.size())
-              + " overlap, are needed for a left-out check");
+              + " spread across the overlap, are needed for a left-out check");
     } else if (spread < MIN_MANUAL_SPREAD_MM) {
+      status = Seam.Status.FAILED;
       reasons.add(
           String.format(
               Locale.ROOT,
@@ -576,6 +617,12 @@ final class SeamMatcher {
    * overlap.
    */
   static List<Coarse> coarsePeaks(MatchImage upper, MatchImage lower, Band band, int k) {
+    return coarsePeaks(upper, lower, band, k, null, 0);
+  }
+
+  /** As above, limited to positions within {@code radiusMm} of {@code near} when it is given. */
+  static List<Coarse> coarsePeaks(
+      MatchImage upper, MatchImage lower, Band band, int k, Rigid near, double radiusMm) {
     List<Coarse> out = new ArrayList<>();
     Gray u = upper.coarseGrad();
     Gray l = lower.coarseGrad();
@@ -593,6 +640,11 @@ final class SeamMatcher {
     Arrays.fill(map, Double.NEGATIVE_INFINITY);
     for (int j = 0; j < ny; j++) {
       for (int i = 0; i < nx; i++) {
+        if (near != null
+            && (Math.abs((i - oxMax) * g - near.tx()) > radiusMm
+                || Math.abs((j + oyMin) * g - near.ty()) > radiusMm)) {
+          continue;
+        }
         map[j * nx + i] = ncc(u, l, i - oxMax, j + oyMin, band);
       }
     }
@@ -848,9 +900,15 @@ final class SeamMatcher {
   }
 
   // every tenth patch by strength is kept out of the fit and checks it, so the held patches lie
-  // wherever the evidence lies; a fitted patch sharing more than a quarter of its pixels with a
-  // held one leaves the fit, so the check is independent of the fitted pixels (was one patch per
-  // region, of which on a real film usually one matched, so the check mostly could not run)
+  // wherever the evidence lies; a fitted patch within half a patch of a held one leaves the fit.
+  // A fitted patch two steps away (8 mm) may still share up to half its width with a held one,
+  // so the check is largely, not wholly, independent of the fitted pixels (Kimi, second review).
+  // Measured on the 7 Nov 2026 case and the phantoms, a wider exclusion costs too much: removing
+  // those neighbours too took the 343 mm seam from 59 to 24 pairs and the single-leg phantom's
+  // position error from 0.3 to 0.57 mm; excluding every patch that shares a pixel starved the fit
+  // (8 pairs) and failed the two-leg phantoms; a few strongest-first held patches on a narrow leg
+  // took the fit's evidence, and on the knee were too few to refuse the wrong layer. Earlier
+  // still: one patch per region, of which on a real film usually one matched.
   private static List<Patch> holdOut(List<Patch> patches) {
     List<Patch> held = new ArrayList<>();
     for (int i = HOLD_EVERY / 2; i < patches.size(); i += HOLD_EVERY) {
@@ -860,7 +918,9 @@ final class SeamMatcher {
         p ->
             held.stream()
                 .anyMatch(
-                    h -> Math.abs(h.x - p.x) < PATCH / 2.0 && Math.abs(h.y - p.y) < PATCH / 2.0));
+                    h ->
+                        Math.abs(h.x - p.x) < HELD_EXCLUDE * PATCH
+                            && Math.abs(h.y - p.y) < HELD_EXCLUDE * PATCH));
     return held;
   }
 

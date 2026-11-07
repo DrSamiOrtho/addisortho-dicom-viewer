@@ -192,8 +192,9 @@ class SeamMatcherTest {
   @Test
   void manualSeamNeedsThreeAgreeingPairs() {
     Rigid truth = new Rigid(Math.toRadians(0.8), 3, 310);
+    // two pairs fit exactly whatever they are: unconfirmed, failed, cannot be saved (Kimi, 7 Nov)
     Seam two = SeamMatcher.manual(clicks(truth, 40, 20, 220, 30));
-    assertEquals(Seam.Status.CHECK, two.status());
+    assertEquals(Seam.Status.FAILED, two.status());
     assertEquals(Seam.Method.MANUAL, two.method());
     assertTrue(two.reasons().get(0).contains("three or more"), two.reasons().toString());
 

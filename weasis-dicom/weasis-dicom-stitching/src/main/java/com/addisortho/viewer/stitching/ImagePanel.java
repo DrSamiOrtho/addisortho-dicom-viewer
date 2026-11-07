@@ -66,9 +66,10 @@ final class ImagePanel extends JPanel {
             lastY = e.getY();
           }
 
+          // only with Shift held: an unmodified wheel is too easy to turn by accident
           @Override
           public void mouseWheelMoved(MouseWheelEvent e) {
-            if (image != null && onWheel != null && e.getWheelRotation() != 0) {
+            if (image != null && onWheel != null && e.getWheelRotation() != 0 && e.isShiftDown()) {
               onWheel.accept(e.getWheelRotation());
             }
           }
@@ -83,7 +84,7 @@ final class ImagePanel extends JPanel {
     this.onDrag = onDrag;
   }
 
-  /** Called for each wheel notch, with the notches turned (negative towards the user). */
+  /** Called for each wheel notch turned with Shift held (negative towards the user). */
   void setOnWheel(IntConsumer onWheel) {
     this.onWheel = onWheel;
   }

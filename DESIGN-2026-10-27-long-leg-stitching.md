@@ -445,7 +445,8 @@ What was wrong, in order of weight:
   position, which was 4 mm from the truth on seams 1 and 2, so the hand line-up starts there.
 
 Result on the case: seam 3 passes as "check" (shift (3.6, 83.8), 0.34 degrees, 59 points, residual 0.86 mm, 16 held
-points within 1.0 mm). Seam 2 fails and should: inside the knee the patella and the condyles sit at different depths,
+points within 1.0 mm; the machine's reference is (1.9, 83.7) over the whole overlap and (2.9, 84) on the leg, so
+within 2 mm of it). Seam 2 fails and should: inside the knee the patella and the condyles sit at different depths,
 and between two tube positions they project 10 mm apart; the fine match finds 30 points on one layer and 21 on the
 other, and the whole-width fit is rejected by the held points (median 3.2 mm). Seam 1 fails: the overlap is two
 straight femoral shafts and soft tissue, 3 to 5 points. Refined from the true position, seams 1 and 2 still fail the
@@ -460,3 +461,31 @@ measured residual and uncertainty, or fail with the reasons. Point pairs and "Fi
 the stitch window is now "Line up by hand / inspect seam...".
 
 Memory: the 0.5 mm fine copy and its gradient were 300 MB per 3072 x 3072 piece; the 1 mm copy is 37 MB.
+
+### 15.1 Kimi's second review (7 Nov 2026) and what was done with it
+
+`~/Documents/kimi/workspace/REVIEW-KIMI-2026-11-07-stitch-real-case.md`. Verdict: the 1 mm intensity signal and the
+open overlap are right; seam 2 is genuine parallax between layers of the knee and seam 1 lacks along-shaft structure,
+and neither should be passed by loosening a gate. Built the same day:
+
+- Refine from a hand-set position now refines the rough peaks within 25 mm of it as well, and a rival with 70 % of the
+  points fails the seam (`SeamMatcher.refine`).
+- A manual seam with fewer than three pairs, or pairs within 30 mm of each other, is failed (unconfirmed), not "check":
+  it cannot be saved (`SeamMatcher.manual`).
+- Target leg Both needs both legs matched on their own, agreeing, and the whole-width match passing; otherwise failed
+  (`SeamMatcher.matchBothLegs`).
+- Held-back check: still every tenth patch by strength with fitted patches within half a patch excluded, and now the
+  gate is the median at 2 mm and the upper quarter at 4 mm, the worst reported (`holdOut`, `judge`). Kimi's stricter
+  independence was measured and not taken: excluding the fitted patches two steps away as well (which can share up to
+  half their width with a held one) took the 343 mm seam from 59 to 24 pairs and the single-leg phantom's position
+  error from 0.3 to 0.57 mm; excluding every patch that shares a pixel starved the fit (8 pairs) and failed the two-leg
+  phantoms; a few strongest-first held patches let the knee pass on the wrong layer with 5 held points where 16 had
+  refused it. So the check is largely, not wholly, independent; regional limits remain a follow-up.
+- The wheel turns the piece only with Shift held; a Flicker view alternates the two pieces twice a second; the points
+  that drove the fit are drawn on the aligned view.
+
+Not built, kept as follow-ups: an anatomical target region (condyles and plateau, excluding patella, skin and ruler)
+with ruler and annotation exclusion; a signed-gradient or local-contrast check at the matched displacement; an
+anatomy-aware or movable cut in a large overlap (`Stitch.seamY`); flicker at full resolution with a signed edge
+overlay and zoom; a separate unverified visual export without PixelSpacing for a seam that cannot be confirmed; the
+templating page reading the seam metadata before any cross-seam measurement. The gates were not loosened.

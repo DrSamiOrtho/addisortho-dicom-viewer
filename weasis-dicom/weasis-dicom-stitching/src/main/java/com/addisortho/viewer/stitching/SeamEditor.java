@@ -37,6 +37,7 @@ import javax.swing.JTextArea;
 import javax.swing.JToggleButton;
 import javax.swing.KeyStroke;
 import javax.swing.SwingWorker;
+import javax.swing.Timer;
 
 /**
  * Inspects one seam and lets the user correct it (design sections 4 and 5.4): a checkerboard or
@@ -64,6 +65,16 @@ final class SeamEditor extends JDialog {
   private final ImagePanel lowerView = new ImagePanel(this::clickLower);
   private final JRadioButton checker =
       new JRadioButton(Messages.getString("SeamEditor.checker"), true);
+  private final JRadioButton flicker = new JRadioButton(Messages.getString("SeamEditor.flicker"));
+  // flicker: the aligned view alternates between the two pieces twice a second
+  private boolean flickerUpper;
+  private final Timer flickerTimer =
+      new Timer(
+          500,
+          e -> {
+            flickerUpper = !flickerUpper;
+            renderAligned();
+          });
   private final JToggleButton pick = new JToggleButton(Messages.getString("SeamEditor.pick"));
   private final JTextArea status = new JTextArea(4, 60);
   private final JLabel pairCount = new JLabel();
@@ -89,8 +100,10 @@ final class SeamEditor extends JDialog {
     ButtonGroup mode = new ButtonGroup();
     mode.add(checker);
     mode.add(diff);
+    mode.add(flicker);
     checker.addActionListener(e -> renderAligned());
     diff.addActionListener(e -> renderAligned());
+    flicker.addActionListener(e -> renderAligned());
 
     JButton clear = new JButton(Messages.getString("SeamEditor.clear"));
     clear.addActionListener(
@@ -165,6 +178,7 @@ final class SeamEditor extends JDialog {
     JPanel tools = new JPanel(new FlowLayout(FlowLayout.LEFT));
     tools.add(checker);
     tools.add(diff);
+    tools.add(flicker);
     tools.add(pick);
     tools.add(clear);
     tools.add(fit);
@@ -209,6 +223,12 @@ final class SeamEditor extends JDialog {
     setLocationRelativeTo(owner);
   }
 
+  @Override
+  public void dispose() {
+    flickerTimer.stop();
+    super.dispose();
+  }
+
   /** The seam the user chose, empty when cancelled. */
   Optional<Seam> result() {
     return Optional.ofNullable(result);
@@ -244,6 +264,14 @@ final class SeamEditor extends JDialog {
     h = Math.max(1, h);
     float[] v = new float[w * h];
     boolean check = checker.isSelected();
+    boolean flick = flicker.isSelected();
+    if (flick != flickerTimer.isRunning()) {
+      if (flick) {
+        flickerTimer.start();
+      } else {
+        flickerTimer.stop();
+      }
+    }
     int cell = (int) Math.round(CHECK_MM / GRID);
     for (int y = 0; y < h; y++) {
       double py = upperBox[1] + (y + 0.5) * GRID;
@@ -252,8 +280,8 @@ final class SeamEditor extends JDialog {
         float a = u.sample(px, py);
         double[] q = toLower.apply(px, py);
         float b = l.sample(q[0], q[1]);
-        if (check) {
-          boolean useUpper = ((x / cell + y / cell) & 1) == 0;
+        if (check || flick) {
+          boolean useUpper = flick ? flickerUpper : ((x / cell + y / cell) & 1) == 0;
           float pickV = useUpper ? a : b;
           v[y * w + x] = Float.isNaN(pickV) ? (useUpper ? b : a) : pickV;
         } else {
@@ -262,7 +290,22 @@ final class SeamEditor extends JDialog {
         }
       }
     }
-    aligned.setImage(ImagePanel.grayMarked(v, w, h), null);
+    // the points that drove the fit are drawn where they lie, so the user sees which structure
+    // the match used (Kimi, second review: "these pixels drove the match")
+    List<Rigid.Pair> drove = seam.pairs();
+    aligned.setImage(
+        ImagePanel.grayMarked(v, w, h),
+        drove.isEmpty()
+            ? null
+            : (g, s) -> {
+              g.setColor(UPPER);
+              g.setStroke(new BasicStroke(1.5f));
+              for (Rigid.Pair p : drove) {
+                double x = (p.tx() - upperBox[0]) / GRID * s;
+                double y = (p.ty() - upperBox[1]) / GRID * s;
+                g.draw(new Ellipse2D.Double(x - 4, y - 4, 8, 8));
+              }
+            });
   }
 
   private void renderPairs() {
