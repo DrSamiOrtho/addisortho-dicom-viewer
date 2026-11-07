@@ -25,6 +25,7 @@
 // a nail (a long nail becomes the other side's nail of the same size); each side has its own femoral head; the Sizes card names
 // the fracture and the normal side.
 import { decodeAny, decodeBitmap, parseDicom } from './dicom.js';
+import { patientFromMeta, patientLine, parseAge, dicomIdentity, resultBase, pngWithText, cleanText, casesOk, newCaseId, putCase, getCase, takeHandoff, openCasesWindow } from './cases.js';   // r44g
 import { secondaryCapture, pdfOfJpeg } from './dicomwrite.js';
 import { decodePNG } from './imageio.js';
 import * as G from './geom.js';
@@ -65,7 +66,7 @@ const STAMP = 'Quick estimate made on a phone (Quick templating). The surgeon co
 // one film: its picture, its own scale, zoom and implants. Q.img, Q.items ... are the film on screen (accessors below).
 let filmSeq = 0, ballDef = ballSaved();   // ballDef: the size a new film starts with (the last one typed on this phone)   // each film's identity: Undo restores a snapshot only onto the film it was taken from (Astra q2 P1)
 const blankFilm = () => ({ id: ++filmSeq, ballD: ballDef, img: null, off: null, name: '', cal: null, items: [], rul: [], lld: [], hd: { R: [], L: [] }, vg: [], vgSide: '', view: { s: 1, tx: 0, ty: 0 }, mirrored: false, orient: '', orientHint: false, fv: 'hip', src: '', scout: false, wl: null, wl0: null, wlFile: null, ref: null, invertView: false });
-const Q = { hemi: false, lib: null, fam: {}, joint: 'hip', side: 'R', sel: -1, tool: null, tmp: [], choice: {}, hist: [], label: '', films: [blankFilm()], cur: 0, pend: null, savedFp: '', levelsMode: false };
+const Q = { hemi: false, lib: null, fam: {}, joint: 'hip', side: 'R', sel: -1, tool: null, tmp: [], choice: {}, hist: [], films: [blankFilm()], cur: 0, pend: null, savedFp: '', levelsMode: false, pt: null, ptNext: null, leaveOut: false, caseId: null, raw: null, loading: false };
 // Q.ballD is the film's own ball size: the field, the ball finder and every recalibration of that film use it (Astra q2 recheck P1)
 for (const k of ['ballD', 'img', 'off', 'name', 'cal', 'items', 'rul', 'lld', 'hd', 'vg', 'vgSide', 'tp', 'dia', 'view', 'mirrored', 'orient', 'orientHint'])
   Object.defineProperty(Q, k, { get: () => Q.films[Q.cur][k], set: v => { Q.films[Q.cur][k] = v; } });
@@ -275,6 +276,17 @@ function sniff(u, name) {
   return null;
 }
 // Q.pend: the knee view the user asked for (a tab), or null (the open card, the menu)
+// the film from a file; its bytes wait in Q.raw for the film they become (My cases keeps the X-ray itself, r44g)
+async function decodeFilm(file) {
+  const buf = await file.arrayBuffer(), u = new Uint8Array(buf), kind = sniff(u, file.name);
+  if (!kind) throw new Error('Not a DICOM, JPEG, PNG or WebP picture.');
+  const raw = { bytes: u.slice(), name: cleanText(file.name, 200) || 'xray', mime: kind === 'dicom' ? 'application/dicom' : 'image/' + kind };
+  const bitmap = async () => decodeBitmap(await createImageBitmap(new Blob([u], { type: 'image/' + kind })));
+  const img = kind === 'dicom' ? await decodeAny(buf) : kind === 'png' ? (await decodePNG(buf)) || await bitmap() : await bitmap();
+  if (img.cols * img.rows > PIXELS_MAX) throw new Error('This picture is larger than 60 megapixels; save a smaller copy.');
+  Q.raw = raw;
+  return { img, kind };
+}
 async function openFile(file) {
   $('openErr').textContent = '';
   if (copyPending()) { Q.pend = null; return; }
@@ -282,11 +294,7 @@ async function openFile(file) {
   try {
     if (file.size > IMAGE_MAX) throw new Error(`This file is ${(file.size / 1048576).toFixed(0)} MB; the page opens X-rays up to 80 MB.`);
     msg('Opening the film…');
-    const buf = await file.arrayBuffer(), u = new Uint8Array(buf), kind = sniff(u, file.name);
-    if (!kind) throw new Error('Not a DICOM, JPEG, PNG or WebP picture.');
-    const bitmap = async () => decodeBitmap(await createImageBitmap(new Blob([u], { type: 'image/' + kind })));
-    const img = kind === 'dicom' ? await decodeAny(buf) : kind === 'png' ? (await decodePNG(buf)) || await bitmap() : await bitmap();
-    if (img.cols * img.rows > PIXELS_MAX) throw new Error('This picture is larger than 60 megapixels; save a smaller copy.');
+    const { img, kind } = await decodeFilm(file);
     filmCard(img, file.name, kind === 'dicom');
   } catch (e) { showErr((e && e.message) || String(e)); }
 }
@@ -359,7 +367,8 @@ function commitFilm(img, name, fv, src, scout, wb = false, ball = null) {
   let i = Q.joint === 'knee' ? Q.films.findIndex(f => f.img && f.fv === fv) : 0;
   if (Q.joint === 'knee' && i >= 0 && Q.films[i].items.length && !confirm(`Replace the ${VIEW[fv]} film? Its implants are removed.`)) { msg(refText()); return; }
   if (Q.joint !== 'knee' && F().img && isDirty() && !confirm('The plan on this film has not been saved and will be lost. Open this film anyway? (Cancel, then Save, keeps it.)')) { msg(refText()); return; }
-  const f = blankFilm(); Object.assign(f, { img, fid: filmId(img), name, fv, src, scout: !!scout, wb: !!wb, ballD: ball || ballFor(fv) });
+  const f = blankFilm(); Object.assign(f, { img, fid: filmId(img), name, fv, src, scout: !!scout, wb: !!wb, ballD: ball || ballFor(fv), raw: Q.raw }); Q.raw = null;
+  if (!Q.loading && Q.joint !== 'knee') { Q.pt = Q.ptNext; Q.ptNext = null; Q.leaveOut = false; Q.caseId = null; }   // a new film is a new case: the patient comes from its own header (r44g)
   if (Q.joint !== 'knee') { Q.films = [f]; Q.cur = 0; Q.hist = []; }   // a new hip or tumour film is a new case
   else {
     if (i < 0) i = Q.films.findIndex(x => !x.img || x.fv === 'pending');
@@ -374,6 +383,7 @@ function commitFilm(img, name, fv, src, scout, wb = false, ball = null) {
   if (Q.joint !== 'knee') Q.savedFp = fingerprint();   // a new hip, tumour or PFNA film is a new case: nothing on it is unsaved
   $('open').hidden = true; resize(); fit(); syncUI();
   if (sizable()) { f.stitch = stitchFromMeta(img.meta); if (f.stitch) f.wb = true; }   // from the header only: set before a draft restore returns early (Fable, PR 7)
+  if (Q.loading) return;   // a case from My cases: its plan brings the scale (r44g)
   if (offerDraft()) return;   // the scale comes back with the draft: no ball search
   if (!sizable()) { msg(refText()); return; }
   // a joined film (stitch.js, 4 Nov 2026): recognised from its own header by any path it came; its scale is its anchor film's own
@@ -1427,7 +1437,7 @@ function setJoint(j) {
 }
 function newCase() {
   if (isDirty() && !confirm('The plan on screen has not been saved and will be lost. Start a new case anyway? (Cancel, then Save, keeps it.)')) return;
-  Q.hemi = false; Q.films = [blankFilm()]; Q.cur = 0; Q.hist = []; Q.sel = -1; Q.tool = null; Q.tmp = []; Q.label = ''; Q.pendCopy = null; Q.savedFp = ''; Q.levelsMode = false; hidePad(); dropDraft();
+  Q.hemi = false; Q.films = [blankFilm()]; Q.cur = 0; Q.hist = []; Q.sel = -1; Q.tool = null; Q.tmp = []; Q.pt = null; Q.ptNext = null; Q.leaveOut = false; Q.caseId = null; Q.pendCopy = null; Q.savedFp = ''; Q.levelsMode = false; hidePad(); dropDraft();
   $('open').hidden = false; msg(''); syncUI(); draw();
 }
 // "Join films" (4 Nov 2026): the shared sheet (stitchui.js, loaded only now) hands back the joined film as a DICOM file, opened as any film
@@ -1549,6 +1559,48 @@ function planFileOf(c) {   // the plan file's object: the content, each film's v
   return { format: PLAN_FORMAT, v: PLAN_VERSION, shared: SHARED_REV, savedAt: new Date().toISOString(), ...c,
     films: c.films.map((fd, i) => ({ ...fd, view: live[i].view, lv: live[i].wl ? { c: live[i].wl.c, w: live[i].wl.w, inv: !!live[i].invertView } : null })) };
 }
+// My cases (r44g; Sami, 7 Nov 2026: "saving the case as data base locally in the surgeons computer for his cases"): Save keeps the
+// patient, the plan and the X-ray in this browser's database (cases.js), so a case opens with one click and nothing to find on
+// disk. The plan file below stays as an export, and as the way out when this browser keeps nothing.
+const caseSummary = () => caseItems().map(it => { const z = sizeRec(it), b = bladeRec(it); return `${KIND[kindOf(it)]} ${z ? z.label || z.size : it.size}${b ? `, blade ${b.lengthMm} mm` : ''} ${it.side}`; }).join('; ').slice(0, 300);
+async function saveCase() {
+  const c = planContent(); if (!c) { msg('Nothing to save yet: place an implant or take a measurement first.'); return false; }
+  const films = Q.films.filter(f => f.img && f.raw);
+  if (!casesOk() || Q.films.some(f => f.img && !f.raw)) { msg('This browser cannot keep the case: saving it as a file instead.'); return savePlan(); }
+  const plan = planFileOf(c), id = Q.caseId || newCaseId(), sides = [...new Set(caseItems().map(it => SIDE[it.side]))].join(' and ') || SIDE[Q.side];
+  if (JSON.stringify(plan).length > PLAN_MAX_BYTES) { msg('This plan is too large to save.'); return false; }
+  const rec = { id, page: 'quick', savedAt: new Date().toISOString(), patient: ptNow(), joint: JOINT_WORD[Q.joint], side: sides, summary: caseSummary(), plan,
+    films: films.map(f => ({ name: f.raw.name, mime: f.raw.mime, fv: f.fv, src: f.src, scout: !!f.scout, wb: !!f.wb, ballD: f.ballD })) };
+  const fp = JSON.stringify(c);
+  try { await putCase(rec, films.map(f => f.raw.bytes)); }
+  catch (e) { msg(`Not kept on this computer (${(e && e.message) || e}): saving it as a file instead.`); return savePlan(); }
+  Q.caseId = id; Q.savedFp = fp; dropDraft(true); syncSaveUI();
+  msg(`Saved in My cases on this computer${patientLine(rec.patient) ? `: ${patientLine(rec.patient)}` : ''}. Menu, My cases opens it again.`);
+  return true;
+}
+// a case back on the page: its films from their own bytes, then its plan
+async function openCase(id) {
+  if (copyPending()) return;
+  if (isDirty() && !confirm('The plan on screen has not been saved and will be lost. Open this case anyway? (Cancel, then Save, keeps it.)')) return;
+  let g; try { g = await getCase(id); } catch (e) { msg(`The case could not be read: ${(e && e.message) || e}`); return; }
+  if (!g) { $('openErr').textContent = 'That case is no longer on this computer.'; msg('That case is no longer on this computer.'); return; }
+  if (g.rec.page === 'full') { location.assign('./?case=' + encodeURIComponent(id)); return; }
+  const bad = validatePlanFile(g.rec.plan); if (bad) { msg(`The case could not be opened: ${bad}`); return; }
+  msg('Opening the case…'); Q.loading = true;
+  try {
+    Q.films = [blankFilm()]; Q.cur = 0; Q.hist = []; Q.sel = -1; Q.tool = null; Q.tmp = []; Q.pendCopy = null; Q.hemi = false; Q.savedFp = ''; dropDraft();
+    Q.joint = g.rec.plan.joint;
+    for (let i = 0; i < g.rec.films.length; i++) {
+      const fm = g.rec.films[i], { img } = await decodeFilm(new File([g.bytes[i]], fm.name || 'xray', { type: fm.mime || '' }));
+      commitFilm(img, fm.name || 'xray', fm.fv, fm.src, fm.scout, fm.wb, fm.ballD);
+    }
+    const ok = applyPlan(g.rec.plan, false);
+    Q.pt = { ...(g.rec.patient || {}) }; Q.leaveOut = false; Q.caseId = id;
+    if (ok) msg(`Case opened${patientLine(Q.pt) ? `: ${patientLine(Q.pt)}` : ''}.`);
+  } catch (e) { $('open').hidden = !!Q.img; msg(`The case could not be opened: ${(e && e.message) || e}`); $('openErr').textContent = `The case could not be opened: ${(e && e.message) || e}`; }
+  finally { Q.loading = false; syncUI(); draw(); }
+}
+const myCases = () => openCasesWindow({ onOpen: c => openCase(c.id) });
 function savePlan() {
   const c = planContent(); if (!c) { msg('Nothing to save yet: place an implant or take a measurement first.'); return false; }
   const text = JSON.stringify(planFileOf(c));
@@ -1558,7 +1610,7 @@ function savePlan() {
   // the page cannot tell whether the browser kept the file (a cancelled iPhone sheet, a blocked download: Fable, 5 Nov 2026), so
   // the same content also stays on this phone as the draft until New case or Discard, and the marker says to check
   Q.savedFp = JSON.stringify(c); keepDraft(true); showDraftNote(); syncSaveUI();
-  msg(`Plan saved as ${name}: check it is in your Downloads (or Files). It holds no picture and no patient details: to continue later open the same X-ray, then Menu, Open a saved plan. A copy also stays on this phone until you start another plan.`);
+  msg(`Plan saved as ${name}: check it is in your Downloads (or Files). It holds no picture and no patient details: to continue from this file, open the same X-ray, then Menu, Open a plan file. A copy also stays on this computer until you start another plan.`);
   return true;
 }
 // a plan (from a file, or the phone's draft) onto the open films of the same view and size. draft: only films with nothing on
@@ -1648,7 +1700,7 @@ function openPlanFile(file) {
   };
   rd.readAsText(file);
 }
-$('saveB').onclick = () => savePlan();
+$('saveB').onclick = () => saveCase();
 $('resultB').onclick = () => resultSheet();
 // the X-ray alone (Sami, 6 Nov 2026): hold H or the eye button; a quick tap on the button keeps them hidden until the next tap. Never on a saved picture.
 const setPeek = v => { Q.peek = v; $('zHide').setAttribute('aria-pressed', String(v)); draw(); };
@@ -1674,7 +1726,7 @@ const HELP = [
   ['View and image', [['W  /  M  /  Z', 'Dragging on the film sets W/L / pans / zooms (same keys in the viewer; right-drag or Shift-drag also sets W/L)'], ['0', "The film's own W/L"], ['F11', 'Invert'], ['F', 'Full screen'],
     ['Ctrl+0  /  Ctrl+1', 'Fit the film / actual size (⌘ on a Mac)'], ['Ctrl and +  or  −', 'Zoom (also + and − alone, two fingers, or the mouse wheel)'], ['Ctrl+Shift+\\', 'Reset the image and the view'],
     ['Hold H', 'See the X-ray without the implants (or the eye button)'], ['/', 'Open the Image panel and type a command (below)']]],
-  ['Plan', [['Ctrl+S  or  ⌘S', 'Save the plan to a file; until then an unsaved draft stays on this phone only'], ['Ctrl+Z  or  ⌘Z', 'Undo'], ['L   V   S', 'Length (same key in the viewer); valgus cut angle (long leg); Sizes card'], ['Alt+1  /  2  /  3', 'Knee: AP / Lateral / other views'], ['Esc   ?', 'Close a card or stop a tap; this list']]],
+  ['Plan', [['Ctrl+S  or  ⌘S', 'Save the case to My cases on this computer'], ['Ctrl+Z  or  ⌘Z', 'Undo'], ['L   V   S', 'Length (same key in the viewer); valgus cut angle (long leg); Sizes card'], ['Alt+1  /  2  /  3', 'Knee: AP / Lateral / other views'], ['Esc   ?', 'Close a card or stop a tap; this list']]],
 ];
 const SHORTCUTS = HELP.flatMap(([, rows]) => rows);   // kept as one list for the tests
 function helpSheet() {
@@ -1689,7 +1741,7 @@ function helpSheet() {
 const press = id => { const b = $(id); if (b && !b.disabled && !b.hidden) b.click(); };
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') {   // never the browser's "save page"
-    e.preventDefault(); if (!$('sheet').dataset.modal || $('sheet').hidden) savePlan(); return;
+    e.preventDefault(); if (!$('sheet').dataset.modal || $('sheet').hidden) saveCase(); return;
   }
   const t = e.target, typing = t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA');
   if (e.key === 'Escape') {
@@ -1761,8 +1813,10 @@ function menu() {
   sheet(`<h2>Menu</h2><div class="menu">
     ${knee ? `<button id="mAdd"${Q.img ? '' : ' disabled'}>Add a knee view (AP, lateral, skyline, long leg)</button>` : '<button id="mOpen">Open another X-ray</button>'}
     <button id="mJoin">Join 2 to 4 films into one long leg</button>
-    <button id="mSave"${Q.films.some(hasContent) ? '' : ' disabled'}>Save the plan (Ctrl+S)</button>
-    <button id="mOpenPlan"${Q.img ? '' : ' disabled'}>Open a saved plan…</button>
+    <button id="mSave"${Q.films.some(hasContent) ? '' : ' disabled'}>Save to My cases (Ctrl+S)</button>
+    <button id="mCases"${casesOk() ? '' : ' disabled'}>My cases…</button>
+    <button id="mExport"${Q.films.some(hasContent) ? '' : ' disabled'}>Save the plan as a file (.json)</button>
+    <button id="mOpenPlan"${Q.img ? '' : ' disabled'}>Open a plan file on this X-ray…</button>
     <button id="mNew">New case (clears every film)</button>
     <button id="mSys"${sizable() && Q.cal ? '' : ' disabled'}>Implant system and side</button>
     <button id="mBall"${sizable() ? '' : ' disabled'}>Tap the ball again</button>
@@ -1779,7 +1833,9 @@ function menu() {
     on('#mOpen', () => { closeSheet(); pickFile(null); });
     on('#mJoin', () => { closeSheet(); openJoin(); });
     on('#mAdd', () => { closeSheet(); pickFile(null); });
-    on('#mSave', () => { closeSheet(); savePlan(); });
+    on('#mSave', () => { closeSheet(); saveCase(); });
+    on('#mCases', () => { closeSheet(); myCases(); });
+    on('#mExport', () => { closeSheet(); savePlan(); });
     on('#mOpenPlan', () => { closeSheet(); $('planFile').click(); });
     on('#mNew', () => { closeSheet(); newCase(); });
     on('#mSys', () => startSheet());
@@ -1898,8 +1954,9 @@ const longWord = f => (f.src === 'ct' ? 'supine CT scout, not weight-bearing' : 
 const filmName = f => `${VIEW[f.fv]}${f.src === 'ct' ? ' (CT scout)' : f.fv === 'long' ? (f.wb ? ' (standing X-ray)' : ' (X-ray, standing not confirmed)') : ''}`;
 const scaleText = () => (!caseItems().length && caseAngles().length ? 'none needed for an angle' : Q.joint === 'knee' ? tplFilms().map(f => `${filmName(f)} ${scaleOf(f)}`).join('; ') || scaleOf(F()) : scaleOf(F()));
 function textLines() {
-  if (Q.joint === 'tumour') return [`Quick templating, tumour ${new Date().toISOString().slice(0, 10)}${Q.label ? ' · ' + Q.label : ''}`, ...tumRowsQ().map(([k, v, w]) => (v === undefined ? k : `${w ? '! ' : ''}${k}: ${v}`)), `Scale: ${scaleOf(F())}`, STAMP];
-  const r = resultGrid(), L = [`Quick templating, ${JOINT_WORD[Q.joint]} ${new Date().toISOString().slice(0, 10)}${Q.label ? ' · ' + Q.label : ''}${Q.joint === 'knee' ? ` · picture: ${VIEW[F().fv]} film` : ''}`];
+  const who = Q.leaveOut ? '' : patientLine(ptNow());
+  if (Q.joint === 'tumour') return [`Quick templating, tumour ${new Date().toISOString().slice(0, 10)}`, ...(who ? [who] : []), ...tumRowsQ().map(([k, v, w]) => (v === undefined ? k : `${w ? '! ' : ''}${k}: ${v}`)), `Scale: ${scaleOf(F())}`, STAMP];
+  const r = resultGrid(), L = [`Quick templating, ${JOINT_WORD[Q.joint]} ${new Date().toISOString().slice(0, 10)}${Q.joint === 'knee' ? ` · picture: ${VIEW[F().fv]} film` : ''}`, ...(who ? [who] : [])];
   if (r.sides.length) L.push(r.sides.map(s => SIDE[s].toUpperCase() + (fracWord(s) ? ` (${fracWord(s)})` : '')).join(' | ') + (r.sides.length > 1 ? '' : ' side'));
   for (const [k, v] of r.rows) L.push(`${k}: ${v.join(' | ')}`);
   if (r.ready.length) L.push(`Have ready: ${r.ready.join('; ')}`);
@@ -1913,11 +1970,11 @@ function tumDone() {
   const rows = tumRowsQ(), share = !!(navigator.canShare && navigator.share), pic = !!(sizable() && Q.cal && (Q.items.length || F().dia));
   sheet(`<h2>Tumour plan</h2><table class="res">${rows.map(([k, v, w]) => v === undefined ? `<tr><th colspan="2">${esc(k)}</th></tr>` : `<tr${w ? ' class="w"' : ''}><td class="k">${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>
     <p class="note">Scale: ${esc(scaleOf(F()))}.</p><p class="stamp">${esc(STAMP)}</p>
-    <label class="f">Label on the picture (optional)</label><input type="text" id="lab" maxlength="60" value="${esc(Q.label)}" placeholder="e.g. record number; leave empty to share outside the hospital">
+    ${ptFields()}
     <p class="note">Text the X-ray machine burned into the film itself (often the patient's name at the top) stays on the picture: crop it off before sharing outside the hospital.</p>
     ${pic ? resultBtns() : ''}
     <button class="go alt" id="copyTxt">Copy as text</button><button class="go alt" id="back">Back to the X-ray</button>`, card => {
-    card.querySelector('#lab').oninput = e => { Q.label = e.target.value.trim(); };
+    wirePt(card);
     if (pic) wireResult(card);
     card.querySelector('#copyTxt').onclick = async () => { try { await navigator.clipboard.writeText(textLines().join('\n')); card.querySelector('#copyTxt').textContent = 'Copied'; } catch (e) { card.querySelector('#copyTxt').textContent = 'Copy failed: select the table instead'; } };
     card.querySelector('#back').onclick = closeSheet;
@@ -1940,12 +1997,12 @@ function done() {
     ${tplFilms().some(f => f.cal.method === 'length') ? '<p class="warn">No ball on a film: its scale is a length tapped by hand. Check the sizes against the surgeon\'s plan.</p>' : ''}
     <p class="note">Scale: ${esc(scaleText())}.</p>
     <p class="stamp">${esc(STAMP)}</p>
-    <label class="f">Label on the picture (optional)</label><input type="text" id="lab" maxlength="60" value="${esc(Q.label)}" placeholder="e.g. record number; leave empty to share outside the hospital">
+    ${ptFields()}
     <p class="note">Text the X-ray machine burned into the film itself (often the patient's name at the top) stays on the picture: crop it off before sharing outside the hospital.${Q.joint === 'knee' ? ' The picture is of the film on screen; the sizes under it are the whole case.' : ''}</p>
     ${pic ? resultBtns() : '<p class="note">Open the AP or lateral film to save a picture with the implants on it.</p>'}
     <button class="go alt" id="copyTxt">Copy the sizes as text</button>
     <button class="go alt" id="back">Back to the X-ray</button>`, card => {
-    card.querySelector('#lab').oninput = e => { Q.label = e.target.value.trim(); };
+    wirePt(card);
     if (pic) wireResult(card);
     card.querySelector('#copyTxt').onclick = async () => { try { await navigator.clipboard.writeText(textLines().join('\n')); card.querySelector('#copyTxt').textContent = 'Copied'; } catch (e) { card.querySelector('#copyTxt').textContent = 'Copy failed: select the table instead'; } };
     card.querySelector('#back').onclick = closeSheet;
@@ -1962,7 +2019,28 @@ function picture() {
   lines.forEach((t, i) => { x.font = `${i <= 1 ? '700' : '400'} ${15 * k}px system-ui, sans-serif`; x.fillStyle = i === lines.length - 1 ? '#034537' : '#000'; x.fillText(t, pad, H + pad + i * lh, W - 2 * pad); });
   return c;
 }
-const picName = (ext = 'jpg') => `quick-${Q.joint}${Q.joint === 'knee' ? '-' + F().fv : ''}-${[...new Set(caseItems().map(it => SIDE[it.side]))].join('-')}-${new Date().toISOString().slice(0, 10)}${Q.label ? '-' + Q.label.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 30) : ''}.${ext}`;
+// the patient (r44g; Sami, 7 Nov 2026: "populate the metadata of patient name age and mrn as name as well as file name on all png, pdf,
+// dicom"): what the film's header says, unless changed on the card; on the file name, the report and the metadata. The box leaves them out.
+function ptNow() {
+  const m = (Q.img && Q.img.meta) || (Q.films.find(f => f.img && f.img.meta) || { img: {} }).img.meta || {}, d = patientFromMeta(m), t = Q.pt || {};
+  return { name: t.name ?? d.name, age: t.age !== undefined ? t.age : d.age, mrn: t.mrn ?? d.mrn };
+}
+function ptFields() {
+  const p = ptNow(), off = Q.leaveOut ? ' disabled' : '';
+  return `<div class="ptf"><label class="f" for="ptN">Patient name</label><input type="text" id="ptN" autocomplete="off" maxlength="120" value="${esc(p.name)}"${off}>
+    <div class="ptr"><span><label class="f" for="ptA">Age</label><input type="number" id="ptA" min="0" max="130" step="1" autocomplete="off" value="${Number.isInteger(p.age) ? p.age : ''}"${off}></span>
+    <span><label class="f" for="ptM">Record number (MRN)</label><input type="text" id="ptM" autocomplete="off" maxlength="64" value="${esc(p.mrn)}"${off}></span></div>
+    <label class="chk"><input type="checkbox" id="noName"${Q.leaveOut ? ' checked' : ''}> Leave the patient's details out (to share outside the hospital)</label></div>`;
+}
+function wirePt(card) {
+  const set = patch => { Q.pt = { ...ptNow(), ...patch }; };
+  card.querySelector('#ptN').oninput = e => set({ name: cleanText(e.target.value) });
+  card.querySelector('#ptM').oninput = e => set({ mrn: cleanText(e.target.value, 64) });
+  card.querySelector('#ptA').oninput = e => { const a = parseAge(e.target.value); e.target.style.borderColor = a === undefined ? 'var(--bad)' : ''; if (a !== undefined) set({ age: a }); };
+  card.querySelector('#noName').onchange = e => { Q.leaveOut = e.target.checked; for (const id of ['ptN', 'ptA', 'ptM']) card.querySelector('#' + id).disabled = Q.leaveOut; };
+}
+const picName = (ext = 'jpg') => `${resultBase({ patient: ptNow(), leaveOut: Q.leaveOut, sides: [...new Set(caseItems().map(it => SIDE[it.side]))], joint: `${Q.joint}${Q.joint === 'knee' ? '-' + F().fv : ''}` })}.${ext}`;
+const picTitle = () => { const w = Q.leaveOut ? '' : patientLine(ptNow(), ', '); return `${w ? w + ': ' : ''}Quick templating plan (draft)`; };
 // ---- the result to keep or send (Sami, 6 Nov 2026): the X-ray with the implants and the sizes as a file others can open. Save at
 // the top stays the plan file, which only this page reopens. PNG: lossless, opens anywhere. PDF: one A4 page to print or attach.
 // DICOM: a Secondary Capture in the X-ray's own study, for PACS or another viewer; it carries the patient's details unless the
@@ -1971,31 +2049,38 @@ const blobOf = (c, type, q) => new Promise(res => c.toBlob(res, type, q));
 function keepFile(blob, name) { const a = document.createElement('a'), u = URL.createObjectURL(blob); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); }
 const canSharePic = () => !!(navigator.canShare && navigator.share);
 const fromPatient = () => !!(Q.img && Q.img.meta && Q.img.meta.Modality !== 'picture');
-const resultBtns = () => `${canSharePic() ? '<button class="go" id="savePic">Share picture</button>' : ''}<div class="reso"><button class="go alt" id="dlPng" title="Lossless picture; opens anywhere">PNG</button><button class="go alt" id="dlPdf" title="One A4 page to print or attach">PDF</button><button class="go alt" id="dlDcm" title="For PACS or another DICOM viewer">DICOM</button></div>${fromPatient() ? `<label class="chk"><input type="checkbox" id="noName"> DICOM without the patient's name (to share outside the hospital)</label>` : ''}`;
+const resultBtns = () => `${canSharePic() ? '<button class="go" id="savePic">Share picture</button>' : ''}<div class="reso"><button class="go alt" id="dlPng" title="Lossless picture; opens anywhere">PNG</button><button class="go alt" id="dlPdf" title="One A4 page to print or attach">PDF</button><button class="go alt" id="dlDcm" title="For PACS or another DICOM viewer">DICOM</button></div>`;
 function wireResult(card) {
   const on = (id, fn) => { const b = card.querySelector('#' + id); if (b) b.onclick = async () => { b.disabled = true; try { await fn(); } catch (e) { msg(`Not saved: ${(e && e.message) || e}`); } finally { b.disabled = false; } }; };
   on('savePic', sharePic); on('dlPng', savePng); on('dlPdf', savePdf);
-  on('dlDcm', () => saveDicom(!!(card.querySelector('#noName') && card.querySelector('#noName').checked)));
+  on('dlDcm', () => saveDicom(Q.leaveOut));
 }
-async function savePng() { keepFile(await blobOf(picture(), 'image/png'), picName('png')); }
+// every result: its name, title and details taken at the press, so a box ticked while it is being made cannot leave a file with the
+// wrong name on it
+async function savePng() {
+  const c = picture(), name = picName('png'), meta = [['Title', picTitle()], ['Description', textLines().join('\n')]];
+  const u8 = new Uint8Array(await (await blobOf(c, 'image/png')).arrayBuffer());
+  keepFile(new Blob([pngWithText(u8, meta)], { type: 'image/png' }), name);
+}
 async function savePdf() {
-  const c = picture(), jpeg = new Uint8Array(await (await blobOf(c, 'image/jpeg', 0.92)).arrayBuffer());
-  keepFile(new Blob([pdfOfJpeg({ jpeg, width: c.width, height: c.height, title: 'Quick templating plan (draft)' })], { type: 'application/pdf' }), picName('pdf'));
+  const c = picture(), name = picName('pdf'), title = picTitle(), jpeg = new Uint8Array(await (await blobOf(c, 'image/jpeg', 0.92)).arrayBuffer());
+  keepFile(new Blob([pdfOfJpeg({ jpeg, width: c.width, height: c.height, title })], { type: 'application/pdf' }), name);
 }
 async function saveDicom(noName) {
-  const c = picture(), jpeg = new Uint8Array(await (await blobOf(c, 'image/jpeg', 0.92)).arrayBuffer()), sides = [...new Set(caseItems().map(it => SIDE[it.side]))].join(' and ');
-  const { bytes } = secondaryCapture({ jpeg, width: c.width, height: c.height, meta: noName ? {} : (Q.img.meta || {}), seriesDescription: `Templating plan ${sides} ${Q.joint} (draft)`, comments: textLines().join('\n').replace(/[^\x20-\x7E\n]/g, ' ').slice(0, 9000) });
-  keepFile(new Blob([bytes], { type: 'application/dicom' }), picName('dcm'));
+  const c = picture(), name = picName('dcm'), meta = noName ? {} : dicomIdentity(Q.img.meta || {}, ptNow()), comments = textLines().join('\n').replace(/[^\x20-\x7E\n]/g, ' ').slice(0, 9000), sides = [...new Set(caseItems().map(it => SIDE[it.side]))].join(' and '), joint = Q.joint;
+  const jpeg = new Uint8Array(await (await blobOf(c, 'image/jpeg', 0.92)).arrayBuffer());
+  const { bytes } = secondaryCapture({ jpeg, width: c.width, height: c.height, meta, seriesDescription: `Templating plan ${sides} ${joint} (draft)`, comments });
+  keepFile(new Blob([bytes], { type: 'application/dicom' }), name);
 }
 const picReady = () => !!(Q.img && sizable() && Q.cal && (Q.items.length || (Q.joint === 'tumour' && F().dia)));
 function resultSheet() {
   if (copyPending() || !picReady()) return;
-  sheet(`<h2>Save the result</h2><p class="note">The X-ray with the implants and the sizes, as a file others can open. Save at the top keeps the plan to reopen here.</p>
-    <label class="f">Label on the picture (optional)</label><input type="text" id="lab" maxlength="60" value="${esc(Q.label)}" placeholder="e.g. record number; leave empty to share outside the hospital">
+  sheet(`<h2>Save the result</h2><p class="note">The X-ray with the implants and the sizes, as a file others can open. Save at the top keeps the case in My cases.</p>
+    ${ptFields()}
     ${resultBtns()}
     <p class="note">Text burned into the film itself (often the name at the top) stays on the picture: crop it off before sharing outside the hospital.</p>
     <button class="go alt" id="back">Back to the X-ray</button>`, card => {
-    card.querySelector('#lab').oninput = e => { Q.label = e.target.value.trim(); };
+    wirePt(card);
     wireResult(card); card.querySelector('#back').onclick = closeSheet;
   });
 }
@@ -2051,6 +2136,20 @@ new ResizeObserver(() => { const had = !!Q.img; resize(); if (had && !Q.items.le
 document.addEventListener('dragover', e => e.preventDefault());
 document.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) openFile(f); });
 
+// r44g: Open card's My cases; ?case= a saved case; ?joint=pfna&handoff=1 the film the full page passes to the PFNA planner
+if ($('casesBtn')) { $('casesBtn').hidden = !casesOk(); $('casesBtn').onclick = () => myCases(); }
+async function caseBoot() {
+  const q = new URLSearchParams(location.search);
+  if (q.get('joint') === 'pfna' && famsOf('nail').length) Q.joint = 'pfna';
+  if (q.get('case')) { await openCase(q.get('case')); return; }
+  if (q.get('handoff') === '1' && casesOk()) {
+    let o = null; try { o = await takeHandoff(); } catch (e) { o = null; }
+    if (!o) { $('openErr').textContent = 'The film did not come across from the full planner: open the X-ray here.'; return; }
+    if (o.side === 'R' || o.side === 'L') Q.side = o.side;
+    if (o.leaveOut) { Q.ptNext = { name: '', age: null, mrn: '' }; } else if (o.patient) Q.ptNext = { name: cleanText(o.patient.name), age: Number.isInteger(o.patient.age) ? o.patient.age : null, mrn: cleanText(o.patient.mrn, 64) };
+    await openFile(new File([o.bytes], o.name || 'xray', { type: o.mime || '' }));
+  }
+}
 (async function boot() {
   try {
     const r = await fetch('library.json', { credentials: 'same-origin' });
@@ -2062,6 +2161,7 @@ document.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTra
     $('jPfna').hidden = !famsOf('nail').length;   // q6: shown only to an account that holds a nail range
     if (!famsOf('cup').length && !famsOf('stem').length && !famsOf('nail').length && famsOf('tka-femur').length === 0 && famsOf('tka-tibia').length === 0) $('openErr').textContent = 'No hip or knee implant range is open to your account yet. Ask Addis Ortho to open one.';
   } catch (e) { $('openErr').textContent = 'The implant library did not load: ' + ((e && e.message) || e); }
+  await caseBoot();
   syncUI(); resize(); showDraftNote();
   // viewer: the Quick button hands its X-ray over, and the Full planner link keeps it
   const handed = new URLSearchParams(location.search), study = handed.get('study'), sop = handed.get('instance');

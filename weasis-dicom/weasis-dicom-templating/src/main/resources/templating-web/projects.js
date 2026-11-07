@@ -1089,8 +1089,12 @@ export async function saveProject() {
     if (S.set.share) file = { ok: false, skipped: true, text: 'Sharing mode: no project file saved to this device (it would hold the original X-ray, whose DICOM header can name the patient). Use Save picture for sharing.' };
     else if (H.privacyKey() !== pk0) file = { ok: false, skipped: true, text: 'No project file saved to this device: the X-ray on screen, the case or sharing mode changed while it was being saved. Save project again.' };
     else try {
-      saveBlob(new Blob(fileParts(ctx, project), { type: 'application/zip' }), ctx.name);
+      const blob = new Blob(fileParts(ctx, project), { type: 'application/zip' });
+      if (H.localCase && await H.localCase(blob, ctx.name)) file = { ok: true, text: 'Saved in My cases on this computer.' };   // r44g: the viewer, which has no patient list
+      else {
+      saveBlob(blob, ctx.name);
       file = { ok: true, text: `File saved to this device: ${ctx.name}${reload ? ' (your version)' : ''}.` };
+      }
     } catch (e) { file = { ok: false, text: `File not saved to this device: ${e.message || e}.` }; }
     const saved = file.ok || (server && server.state === 'ok');
     // the case the film belongs to, unless the list changed it meanwhile (Share raised its revision, Hide forgot it): then

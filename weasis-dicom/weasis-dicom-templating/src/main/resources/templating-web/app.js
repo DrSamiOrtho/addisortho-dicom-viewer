@@ -11,6 +11,7 @@ import { decodePNG } from './imageio.js';
 import * as G from './geom.js';
 import { findBalls, findMarkers, traceCanal, canalFit, fitIsEvidence, stemRegion, findOpaque, exclusionRaster, rasterHas, contactInZone, existFits, isExclusion, isUnresolved } from './auto.js';
 import { GUIDE } from './guide.js';
+import { dicomIdentity, pngWithText, patientLine, casesOk, putCase, getCase, putHandoff, openCasesWindow, cleanText } from './cases.js';   // r44g
 import { secondaryCapture, pdfOfJpeg } from './dicomwrite.js';
 import { reduceFilm, REDUCE_OVER } from './reduce.js';
 import { cleanCopy, addStroke } from './clean.js';
@@ -194,7 +195,7 @@ const S = {
   lm: {}, tpl: {}, tplAll: {}, hidden: {}, hiddenGeo: {}, active: null, rulers: [], angles: [], brand: null, allSizes: null, restoreNote: '',
   arm: null, drag: null, labels: true, set: loadSet(),
   auto: { busy: false, balls: [], ballIdx: 0, markers: [] }, canal: {}, notes: {}, mirror: null,
-  clean: { strokes: [], crop: null }, cleanData: null, showOriginal: false, brush: 8, lmSeq: [], ref: null, prep: { rot: 0 }, prepDone: false, loupe: null,
+  clean: { strokes: [], crop: null }, cleanData: null, showOriginal: false, brush: 8, lmSeq: [], ref: null, prep: { rot: 0 }, prepDone: true, loupe: null,
   segHand: {}, segStep: null, fitted: false,   // segments opened or closed by hand while this step lasts; the view is "fitted" until zoomed or moved
   // saved projects (round 6, 13 Oct 2026; projects.js): the film's original file as opened (bytes, mime, sha256, name),
   // the case on t.addisortho.com it belongs to ({id, rev, sha256} of the server's copy), and the name and record number
@@ -251,7 +252,12 @@ async function boot() {
   if (S.wfs.includes('hip') || S.wfs.includes('kneeAP')) $('wf').add(wfOpt('Long leg', 'll', `${LL_LABEL} (a standing long leg or a CT scout)`));   // r44 (Sami: "ONE PLAN")
   // the knee case (contract section 12): one patient's knee from up to four films; chosen here for a knee film on screen
   if (S.wfs.includes('kneeAP') || S.wfs.includes('kneeLat')) $('wf').add(wfOpt('Knee case', 'kc', 'Knee case: AP · lateral · skyline · long leg'));
+  // r44g (Sami, 7 Nov 2026: "the full template there is no option of adding pfna"): the PFNA planner (nail, blade, tip-apex, Result, My
+  // cases) is Quick's; this choice opens the film on screen in it. Shown only to an account that holds a nail range.
+  const hasNail = S.lib.families.some(f => f.kind === 'nail');
+  if (hasNail) { $('wf').add(wfOpt('PFNA', 'pfna', 'PFNA: nail and blade. Opens this film in the PFNA planner')); const li = document.createElement('p'); li.className = 'quicklink'; const a = document.createElement('a'); a.href = 'quick.html?joint=pfna'; a.textContent = 'PFNA'; li.append(a, ': nail and blade sizes, the blade in the head and the tip-apex distance.'); const ql = document.querySelector('.quicklink'); if (ql) ql.after(li); }
   $('wf').onchange = () => {
+    if ($('wf').value === 'pfna') { $('wf').value = wfSel(); return openPfna(); }
     if (S.kc) { $('wf').value = 'kc'; return prompt('This is a knee case: open another X-ray or case (Open) to plan something else.'); }
     if ($('wf').value === 'kc') { if (!S.img) { $('wf').value = S.wf; return; } if (S.wf === 'hip') switchWf(S.wfs.includes('kneeAP') ? 'kneeAP' : 'kneeLat'); return kcStart(); }
     if ($('wf').value === 'll') return llStart();   // r44
@@ -302,7 +308,7 @@ async function boot() {
   const q = new URLSearchParams(location.search);
   // wording that stays true once projects are saved to the server (Astra, 13 Oct: "nothing is uploaded" would not be)
   if (STANDALONE) $('foot').textContent = 'Addis Ortho Trading PLC · X-ray templating for surgeons. A planning aid: the plan is a draft and the surgeon decides. The X-ray opens in this browser; a saved project is stored for your team.';
-  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r44f). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
+  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r44g). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
   pendingNote();
   for (const [text, fn] of kcOpenItems()) { const li = document.createElement('li'), a = document.createElement('a'); a.href = '#'; a.textContent = text; a.onclick = e => { e.preventDefault(); fn(); }; li.appendChild(a); $('openList').appendChild(li); }
   // the short part on top and the rest under the templated-patients list, so a phone sees the list without scrolling far
@@ -311,6 +317,8 @@ async function boot() {
     $('openNote').textContent = 'Plans are not kept in this browser after the page closes unless you ask for it (Auto plan settings). Saved pictures and files carry the patient\'s name and record number from the X-ray, as in the hospital; tick "sharing outside the hospital" (Auto plan settings) to leave them out. Text burned into the X-ray itself is never removed automatically: cover it with "Black out" before sharing.';
     PJ.showList($('cases')); return;
   }
+  if (VIEWER && casesOk()) { const li = document.createElement('li'), a = document.createElement('a'); a.href = '#'; a.textContent = 'My cases on this computer'; a.onclick = e => { e.preventDefault(); myCases(); }; li.appendChild(a); $('openList').appendChild(li); }
+  if (q.get('case')) { getCase(q.get('case')).then(g => { if (g && g.rec.page === 'full') openFile(new File([g.bytes[0]], g.rec.films[0].name || 'case.aotp')); else if (!g) openMsg('That case is not on this computer', 'It may have been deleted, or saved in another browser. Open an X-ray instead.'); }).catch(failed); return; }
   if (q.get('study') || q.get('accession')) openFromArchive(q).catch(failed);
 }
 
@@ -498,7 +506,7 @@ function loadFilm(img, src, opt, fresh) {
   S.oldCupRule = false; S.cal = null; S.kres = null; S.lm = {}; S.tplAll = { hip: {}, kneeAP: {}, kneeLat: {} }; S.tpl = S.tplAll[S.wf] || (S.tplAll[S.wf] = {}); S.hidden = {}; S.hiddenGeo = {}; S.rulers = []; S.active = null; S.arm = null; S.restoreNote = '';
   S.auto = { busy: false, balls: [], ballIdx: 0, markers: [] }; S.canal = {}; S.notes = {}; S.mirror = null; S.sent = null; S.sendError = null; S.masks = [];
   S.caseType = 'primary'; S.exist = null; S.rv = {}; S.exRevSeen = 0;   // revision and conversion (contract section 13): the case type, the film's existing-implant regions, the revision record
-  S.clean = { strokes: [], crop: null }; S.cleanData = null; S.showOriginal = false; S.lmSeq = []; S.ref = null; S.filling = false; S.prep = { rot: 0 }; S.prepDone = false;
+  S.clean = { strokes: [], crop: null }; S.cleanData = null; S.showOriginal = false; S.lmSeq = []; S.ref = null; S.filling = false; S.prep = { rot: 0 }; S.prepDone = true;
   S.ll = null; S.segHand = {}; S.segStep = null; S.choice = {}; S.keptLibraryId = null; S.brand = null; S.angles = []; S.allSizes = null; S.hemi = {}; S.preBip = {}; S.dia = null;
   defaultCalibration();
   if (opt.state) applyState(opt.state); else if (!opt.kcRole) restore();   // a knee case's new film starts empty (its plan is the case's)
@@ -685,7 +693,7 @@ function toSnap(top) {
   const p = JSON.parse(top.j);
   const strokes0 = S.clean.strokes, view0 = JSON.stringify([S.clean.crop, S.prep]);
   Object.assign(S, { wf: p.wf, ll: p.ll || null, side: p.side, mirrored: p.mirrored, cranial: p.cranial, orient: p.orient, cal: p.cal, ballD: p.ballD, vca: p.vca, kres: p.kres || null, dia: diaIn(p.dia), lm: p.lm, rulers: p.rulers, angles: cleanAngles(p.angles), brand: brandIn(p), hemi: hemiIn(p.hemi), tplAll: p.tplAll,
-    clean: { crop: null, ...p.clean, strokes: top.strokes }, masks: p.masks, caseType: p.caseType || 'primary', exist: p.exist || null, rv: p.rv || {}, lmSeq: p.lmSeq, ref: p.ref, sideSet: p.sideSet, scope: p.scope, prep: p.prep || { rot: 0 }, prepDone: !!p.prepDone });
+    clean: { crop: null, ...p.clean, strokes: top.strokes }, masks: p.masks, caseType: p.caseType || 'primary', exist: p.exist || null, rv: p.rv || {}, lmSeq: p.lmSeq, ref: p.ref, sideSet: p.sideSet, scope: p.scope, prep: p.prep || { rot: 0 }, prepDone: true });
   if (!sameStrokes(S.clean.strokes, strokes0)) rebuildClean();
   if (JSON.stringify([S.clean.crop, S.prep]) !== view0) fit();   // a crop or turn undone: show the film as it now is
   if (S.kc && p.kc) { const K = S.kc; K.side = p.kc.side; K.shared = p.kc.shared; K.notices = p.kc.notices; for (const [r, q] of Object.entries(p.kc.qc || {})) if (K.films[r]) K.films[r].qc = q; kcSideToFilms(); }
@@ -834,7 +842,7 @@ function applyPlan(p) {
   S.exRevSeen = Math.max(S.exRevSeen || 0, exRev());
   { const b = brandSet(); if (b && b !== 'mixed' && S.tpl) { S.tpl = S.tplAll[S.wf] || (S.tplAll[S.wf] = {}); const gone = foreignOf(b).filter(x => x.wf !== 'kc'); if (gone.length) { dropForeign(b); S.restoreNote = (S.restoreNote ? S.restoreNote + ' ' : '') + `Implants of another maker than this case's (${b}) were removed: ${[...new Set(gone.map(x => x.label))].join('; ')}.`; } } }   // r36: a knee case's other film after a maker change
   S.clean = { strokes: [], crop: null, ...(p.clean || {}) }; S.lmSeq = p.lmSeq || []; S.ref = p.ref || null; rebuildClean();
-  S.prep = p.prep || { rot: 0 }; S.prepDone = p.prepDone ?? Object.keys(S.lm).length > 0;   // plans from before this step have it done
+  S.prep = p.prep || { rot: 0 }; S.prepDone = true;   // r44g: not a step any more, whatever the plan says
   S.sent = p.sent ? { ...p.sent, at: new Date(p.sent.at) } : null;
   S.pending = p.pendingSend || null;   // an earlier send that got no answer (without its picture: it is looked up first)
   // the plan's own automatic rules come back with it (they are not this browser's preferences; Astra, 11 Oct)
@@ -4651,7 +4659,6 @@ function stepNow() {
   if ((S.orient.from === 'marker' || S.orient.from === 'assumed') && !latFilm()) return { id: 'cal', confirmOrient: true, text: S.orient.from === 'marker' ? `${cap(S.orient.note)}. Is that right?` : `${S.orient.note ? cap(S.orient.note) + '. ' : 'The image does not say which way it faces. '}Is the patient's right on the image left (a standard film)?` };
   if (S.wf === 'hip' && (!S.sideSet || !S.scope)) return { id: 'prep', side: true, text: S.scope ? 'Which hip is the surgery side?' : 'Which hip is the surgery side, and does the film show both hips or one?' };
   if (S.wf === 'hip' && S.scope === 'both' && !S.ref) return { id: 'prep', ref: true, text: `Is the ${SIDE[S.side]} hip fit to template on? Not if it is fractured, shortened, externally rotated or destroyed: then template the normal ${SIDE[other(S.side)]} side and copy it across (sizes, neck cut, offset).` };
-  if (!S.prepDone) return { id: 'prep', prep: true, text: 'Prepare the film (optional): erase leads, clips and labels; crop to the part you need; level the pelvis if it is tilted. Then continue to the landmarks.' };
   const lm = lmDefs().find(d => (!d.optional || neededHere(d)) && (!lmGeom(d.key) || lmProblem(d.key)));
   if (lm) return { id: 'lm', lm, text: `Mark: ${lm.label}` };
   if (S.wf === 'kneeAP' && !kneeAxes().tma) { const t = WF.kneeAP.lm.find(d => d.key === 'tibShaft'); return { id: 'lm', lm: t, text: `Mark: ${t.label}` }; }
@@ -4712,7 +4719,6 @@ function backTarget() {
   const extra = lmDefs().map(d => d.key).filter(k => S.lm[k] && !seq.includes(k));   // plans saved before Back existed
   const order = [...extra, ...seq], cur = S.arm && S.arm.kind === 'lm' ? S.arm.key : null, i = cur ? order.indexOf(cur) : -1;
   const prev = i > 0 ? order[i - 1] : i === -1 && order.length ? order[order.length - 1] : null;
-  if (!prev && S.prepDone) return { what: 'prepare the film again (erase, crop, level)', go: () => { S.prepDone = false; save(); nextStep(); } };
   if (prev) return { what: `mark again: ${lmDefs().find(d => d.key === prev).label}${Object.keys(S.tpl).length ? ' (implants are kept)' : ''}`, go: () => armLm(prev) };
   if (S.wf === 'hip' && S.scope === 'both' && S.ref) return { what: 'choose again how the surgery side is planned', go: () => { S.ref = null; save(); nextStep(); } };
   if (S.wf === 'hip' && S.sideSet) return { what: 'choose the surgery side again', go: () => { S.sideSet = false; save(); nextStep(); } };
@@ -4899,6 +4905,7 @@ function syncWL() {   // brightness and contrast sliders follow the window
 }
 
 // Erase, crop and level: in the guided "Prepare" step and in the Prepare segment.
+function openPrep() { S.segHand.prep = true; panel(); const s = $('sec-prep'); if (s) s.scrollIntoView({ block: 'nearest' }); }   // r44g: the small button
 function prepTools(guided = false) {
   const d = el('<div class="prep"></div>'), brushOn = S.arm && S.arm.kind === 'brush';
   const r1 = el('<div class="row"></div>');
@@ -4971,7 +4978,7 @@ function segSummaries(R) {
   if (revCase()) p.unshift(CASE_WORD[ctype()].toLowerCase());
   if (exActive().length) p.push(`${exActive().length} existing implant region${exActive().length > 1 ? 's' : ''}`);
   if (exOpen().length) p.push(`${exOpen().length} to confirm`);
-  out.prep = [p.join(', ') || (S.prepDone ? 'nothing changed' : 'optional'), exOpen().length ? 'warn' : ''];
+  out.prep = [p.join(', ') || 'optional', exOpen().length ? 'warn' : ''];
   const need = lmDefs().filter(d => !d.optional || neededHere(d)), ok = need.filter(d => lmGeom(d.key) && !lmProblem(d.key)).length, bad = lmDefs().filter(d => lmProblem(d.key) || lmBroken(d.key)).length;
   out.lm = [`${ok}/${need.length} marked${bad ? `, ${bad} to place again` : ''}`, bad ? 'bad' : ''];
   const imp = WF[S.wf].slots.filter(sl => S.tpl && S.tpl[sl]).map(sl => { const t = S.tpl[sl], f = S.fam[t.fam], fn = shortFam(f); return `${shortSlot(sl)} ${fn ? fn + ' ' : ''}${t.size}${f.kind === 'stem' ? `, head ${t.head}${bipOf(t) ? `, bipolar ${bipOf(t).z.size}${bipAssumed(bipOf(t).z) ? ' (inner part assumed)' : ''}` : ''}` : ''}${t.on ? '' : ' (hidden)'}`; });
@@ -5033,7 +5040,7 @@ function panelBody(P_) {
     const b = el(`<button class="${i < ci ? 'done' : i === ci ? 'cur' : ''}" aria-label="Step ${i + 1}, ${s.strip}${i < ci ? ', done' : ''}" title="${s.title}">${i < ci ? '<span class="mk">✓</span>' : i > ci ? `<span class="mk">${i + 1}</span>` : ''}<span class="nm">${s.strip}</span></button>`);
     if (i === ci) b.setAttribute('aria-current', 'step');
     if (i < ci && s.id === 'cal') { b.title = 'Check the calibration again; landmarks and implants are kept'; b.onclick = recalibrate; }
-    else if (i < ci && s.id === 'prep') { b.title = 'Erase, crop or level the film again; nothing is removed'; b.onclick = () => { S.prepDone = false; save(); nextStep(); }; }
+    else if (i < ci && s.id === 'prep') { b.title = 'Erase, crop or level the film; nothing is removed'; b.onclick = openPrep; }
     else if (i < ci && s.id === 'lm') { b.title = 'Go back to the landmarks; nothing is removed'; b.onclick = () => { S.segHand.lm = true; const k = (S.lmSeq || []).filter(x => S.lm[x]).pop() || lmDefs()[0].key; armLm(k); }; }
     else if (i < ci && s.id === 'tpl') { b.title = 'Show the implants'; b.onclick = () => { S.segHand.tpl = true; panel(); }; }
     else b.disabled = i > ci;
@@ -5041,6 +5048,7 @@ function panelBody(P_) {
   });
   add(steps);
   add(ctxBox());
+  { const pr = el('<div class="row prepbtn"></div>'); pr.appendChild(btn('Prepare film', openPrep, 'mini', false, 'Optional: erase leads, clips and labels; crop; level the pelvis')); add(pr); }
   if (S.wfAsk && !S.kc && S.wf === 'hip' && !Object.keys(S.lm).length) add(wfAskRow());   // r43 (DIAG #11)
   if (S.ll) add(llCard());   // r44
   if (S.kc) add(kcTabs());   // the knee case's films: AP · Lateral · Skyline · Long leg, each done, in progress or missing
@@ -5270,6 +5278,7 @@ function panelBody(P_) {
   // the project (round 6, 13 Oct 2026; Sami: "save the project and upload project for easy adjustment"): here as well as in
   // the header, so a phone reaches it from this segment too; its two outcomes (this device, the patient list) under it
   const rj = el('<div class="row"></div>');
+  if (VIEWER && casesOk()) rj.appendChild(btn('My cases', myCases, '', false, 'The cases saved on this computer'));
   rj.appendChild(btn('Save project', () => PJ.saveProject(), 'primary projsave', false, STANDALONE ? 'The X-ray and the whole plan, to this device and to the templated-patients list, to reopen and adjust later' : 'The X-ray and the whole plan in one file (.aotp), to reopen and adjust later'));
   s5.appendChild(rj);
   s5.appendChild(PJ.outcomeEl());
@@ -6184,6 +6193,22 @@ const llKcLong = () => !!(S.ll && S.kc && S.kc.active === 'long');
 const wfBase = () => (S.ll ? S.ll.base : S.wf);
 const wfLabel = () => (S.ll ? LL_LABEL : WF[S.wf].label);
 const wfSel = () => (S.kc ? 'kc' : S.ll ? 'll' : S.wf);
+// the film on screen, in Quick's PFNA, in a window of its own; this plan stays here as it is
+async function openPfna() {
+  const url = new URL('quick.html', location.href), o = S.orig; url.searchParams.set('joint', 'pfna');
+  if (!S.img) { location.assign(url.href); return; }
+  const w = window.open('about:blank', '_blank');   // now, while the press still counts: a browser blocks a window opened later
+  if (o && o.bytes && casesOk()) {
+    const id = identNow(), share = !!S.set.share;
+    try { await putHandoff({ bytes: o.bytes, name: o.name || 'xray', mime: o.mime || '', side: S.sideSet ? S.side : '', leaveOut: share, patient: share ? null : { name: id.name, age: Number.isInteger(id.age) ? id.age : null, mrn: id.recordNo } }); url.searchParams.set('handoff', '1'); }
+    catch (e) { prompt(`The film could not be passed to the PFNA planner (${(e && e.message) || e}): open it there.`); }
+  } else {
+    const q = new URLSearchParams(location.search);
+    if (q.get('study') && q.get('instance')) { url.searchParams.set('study', q.get('study')); url.searchParams.set('instance', q.get('instance')); }
+    else prompt(S.origWhy || 'This film cannot be passed to the PFNA planner: open it there.');
+  }
+  if (w) w.location = url.href; else location.assign(url.href);
+}
 function llZones(base = S.ll && S.ll.base) { return (base === 'kneeLong' ? ['align', 'hip', 'knee'] : ['hip', 'knee']).filter(z => z === 'align' || S.wfs.includes(llWf(z))); }
 // a stored {zone} → {zone, base} (null: not a long-leg plan; a zone this account has no implants for: the first it has)
 function llIn(v, base) {
@@ -6867,7 +6892,8 @@ function baseName() {
   const joint = S.kc && kcProjFile ? 'knee-case' : S.ll ? (S.kc ? 'knee-long-leg' : 'long-leg') : { hip: 'hip', kneeAP: 'knee-AP', kneeLat: 'knee-lateral', kneeLong: 'knee-long-leg', kneeSky: 'knee-skyline' }[S.wf];
   if (S.set.share) return `shared_${SIDE[S.side].toUpperCase()}-${joint}_template_${d}`;
   const nm = patientName().replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
-  return `${nm ? nm + '_' : ''}${id}_${SIDE[S.side].toUpperCase()}-${joint}_template_${d}`;
+  const age = identNow().age;
+  return `${nm ? nm + '_' : ''}${id}_${Number.isInteger(age) ? age + 'y_' : ''}${SIDE[S.side].toUpperCase()}-${joint}_template_${d}`;
 }
 
 // ---------- saved projects (round 6, 13 Oct 2026; projects.js has the file, the server and the list) ----------
@@ -6934,7 +6960,23 @@ function projectNow0() {
     state };
 }
 // what projects.js uses of the page
-const PROJ = { S, STANDALONE, prompt: t => prompt(t), panel: () => panel(), projectNow, metaNow, fileName: projectFileName, loadProject, patientKnown, markSaved, isDirty, revision, base: () => histBase, stepNow: () => stepNow().id, applyState: st => applyFullState(st),
+// r44g: My cases (cases.js): the viewer's Save project keeps the .aotp here instead of a file to find on disk. The case's identity comes
+// from its image or knee case, so saving again replaces it.
+async function localCase(blob, name) {
+  if (!VIEWER || !casesOk()) return false;
+  const k = String(PROJ.caseKeyNow() || ''), cid = /^[0-9a-f]{64}$/.test(k) ? k.slice(0, 32) : /^kc[0-9a-f]{16}$/.test(k) ? '0'.repeat(16) + k.slice(2) : '';
+  if (!cid) return false;
+  const id = identNow(), imp = Object.values(S.tpl || {}).filter(t => t && t.on !== false && S.fam[t.fam]).map(t => `${S.fam[t.fam].label.replace(/^Addis Ortho\s+/, '')} ${t.size}`).join('; ');
+  const rec = { id: cid, page: 'full', savedAt: new Date().toISOString(), patient: { name: id.name, age: Number.isInteger(id.age) ? id.age : null, mrn: recordNo() }, joint: wfLabel(), side: SIDE[S.side], summary: cleanText(imp, 300), films: [{ name, mime: 'application/zip' }] };
+  try { await putCase(rec, [new Uint8Array(await blob.arrayBuffer())]); return true; } catch (e) { prompt(`Not kept on this computer (${(e && e.message) || e}): saving it as a file instead.`); return false; }
+}
+function caseToFile(c) { getCase(c.id).then(g => { if (g) download(new Blob([g.bytes[0]], { type: 'application/zip' }), c.films[0].name || 'case.aotp'); }); }
+function openLocalCase(c) {
+  if (c.page !== 'full') { location.assign('quick.html?case=' + encodeURIComponent(c.id)); return; }
+  getCase(c.id).then(g => { if (g) openFile(new File([g.bytes[0]], c.films[0].name || 'case.aotp')); else prompt('That case is no longer on this computer.'); }).catch(e => prompt(`The case could not be read: ${(e && e.message) || e}`));
+}
+function myCases() { openCasesWindow({ onOpen: openLocalCase, onExport: caseToFile }); }
+const PROJ = { S, STANDALONE, localCase, prompt: t => prompt(t), panel: () => panel(), projectNow, metaNow, fileName: projectFileName, loadProject, patientKnown, markSaved, isDirty, revision, base: () => histBase, stepNow: () => stepNow().id, applyState: st => applyFullState(st),
   // the knee case (contract section 12): what is open (the case, else the X-ray), its case key, its films' bytes, what the
   // kept-changes store keeps of it, kept changes put back, and why its file cannot be written now
   unit: () => S.kc || S.img, isCase: () => !!S.kc, caseKeyNow: () => (S.kc ? PJ.caseKey(S.kc.cid) : (S.orig && S.orig.sha256) || null), images: () => kcImages(),
@@ -7084,15 +7126,18 @@ function exportPNG() {
   if (S.filling) return prompt('Wait a moment: a stroke is still being filled.');
   const nr = notReady(); if (nr) return prompt(nr); const rf = refused(); if (rf.length && !confirm(`These landmarks are marked red: ${rf.join('; ')}. Save the picture anyway (the red marks are on it)?`)) return;
   const c = exportCanvas(), k0 = privacyKey();
-  if (S.set.share) return preview(c, () => c.toBlob(bl => { if (!privacyChanged(k0, 'Picture')) download(bl, baseName() + '.png'); }, 'image/png'));   // Astra, 11 Oct: look before sharing
-  c.toBlob(bl => { if (!privacyChanged(k0, 'Picture')) download(bl, baseName() + '.png'); }, 'image/png');
+  if (S.set.share) return preview(c, () => c.toBlob(bl => { if (!privacyChanged(k0, 'Picture')) savePngMeta(bl); }, 'image/png'));   // Astra, 11 Oct: look before sharing
+  c.toBlob(bl => { if (!privacyChanged(k0, 'Picture')) savePngMeta(bl); }, 'image/png');
 }
+// r44g: the patient in the file's own metadata as well as its name and report; none in sharing mode
+function planTitle() { if (S.set.share) return 'Templating plan (draft)'; const id = identNow(), w = patientLine({ name: id.name, age: id.age, mrn: recordNo() }, ', '); return `${w ? w + ': ' : ''}Templating plan (draft)`; }
+async function savePngMeta(bl) { const u8 = new Uint8Array(await bl.arrayBuffer()); download(new Blob([pngWithText(u8, [['Title', planTitle()]])], { type: 'image/png' }), baseName() + '.png'); }
 // One A4 page around the same picture (6 Nov 2026); sharing mode looks first, like the PNG.
 function exportPDF() {
   if (S.filling) return prompt('Wait a moment: a stroke is still being filled.');
   const nr = notReady(); if (nr) return prompt(nr); const rf = refused(); if (rf.length && !confirm(`These landmarks are marked red: ${rf.join('; ')}. Save the PDF anyway (the red marks are on it)?`)) return;
   const c = exportCanvas(), k0 = privacyKey();
-  const go = () => c.toBlob(async bl => { const jpeg = new Uint8Array(await bl.arrayBuffer()); if (!privacyChanged(k0, 'PDF')) download(new Blob([pdfOfJpeg({ jpeg, width: c.width, height: c.height })], { type: 'application/pdf' }), baseName() + '.pdf'); }, 'image/jpeg', 0.92);
+  const go = () => c.toBlob(async bl => { const jpeg = new Uint8Array(await bl.arrayBuffer()); if (!privacyChanged(k0, 'PDF')) download(new Blob([pdfOfJpeg({ jpeg, width: c.width, height: c.height, title: planTitle() })], { type: 'application/pdf' }), baseName() + '.pdf'); }, 'image/jpeg', 0.92);
   if (S.set.share) return preview(c, go);
   go();
 }
@@ -7109,7 +7154,8 @@ function preview(c, ok) {
 async function planDicom() {
   const c = exportCanvas(2400), m = S.img.meta || {};
   const bl = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.92)), jpeg = new Uint8Array(await bl.arrayBuffer());
-  return secondaryCapture({ jpeg, width: c.width, height: c.height, meta: m, seriesDescription: `Templating plan ${SIDE[S.side]} ${PJ.procOf(wfBase())} (draft)`,
+  const id = identNow();
+  return secondaryCapture({ jpeg, width: c.width, height: c.height, meta: dicomIdentity(m, { name: id.name, age: id.age, mrn: id.recordNo }), seriesDescription: `Templating plan ${SIDE[S.side]} ${PJ.procOf(wfBase())} (draft)`,
     comments: `Addis Ortho X-ray templating (trial). ${wfLabel()}, surgery side ${SIDE[S.side]}. Draft for the surgeon; not true size.${S.clean.strokes.length && !S.showOriginal ? ` ${S.clean.strokes.length} area(s) of the film filled for display (not anatomy), outlined on the picture.` : ''}` });
 }
 async function exportDICOM() { if (S.set.share) return; if (S.filling) return prompt('Wait a moment: a stroke is still being filled.'); const nr = notReady(); if (nr) return prompt(nr); const rf = refused(); if (rf.length) return prompt(`Fix the landmarks marked red first: ${rf.join('; ')}.`); const k0 = privacyKey(), { bytes } = await planDicom(); if (S.set.share || privacyChanged(k0, 'DICOM')) { if (S.set.share) prompt('DICOM not saved: sharing mode is on (a DICOM carries the patient\'s details).'); return; } download(new Blob([bytes], { type: 'application/dicom' }), baseName() + '.dcm'); }

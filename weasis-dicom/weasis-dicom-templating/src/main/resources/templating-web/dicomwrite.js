@@ -65,6 +65,7 @@ export function secondaryCapture({ rgba, jpeg, width, height, meta = {}, seriesD
     Array.isArray(meta.IssuerQualifiers) && meta.IssuerQualifiers.length ? el('00100024', 'SQ', meta.IssuerQualifiers.map(q => [   // (0010,0024)
       q.ueid ? el('00400032', 'UT', q.ueid) : null, q.type ? el('00400033', 'CS', q.type) : null, q.idType ? el('00400035', 'CS', q.idType) : null].filter(Boolean))) : null,
     el('00100030', 'DA', meta.PatientBirthDate || ''), el('00100040', 'CS', meta.PatientSex || ''),
+    meta.PatientAge ? el('00101010', 'AS', meta.PatientAge) : null,   // r44g
     el('0020000D', 'UI', study), el('0020000E', 'UI', series), el('00200010', 'SH', meta.StudyID || ''),
     el('00200011', 'IS', '990'), el('00200013', 'IS', '1'), el('00200020', 'CS', ''),
     comments ? el('00204000', 'LT', comments) : null,
@@ -82,11 +83,12 @@ export function secondaryCapture({ rgba, jpeg, width, height, meta = {}, seriesD
 }
 
 // The saved picture as a one-page A4 PDF (6 Nov 2026): the JPEG is stored as it is, so nothing is lost twice and no library is
-// needed. For a report to print or attach; the picture carries the sizes. Title: words only, never a patient's details.
+// needed. For a report to print or attach; the picture carries the sizes. Title (r44g): the patient's details unless left out; any language.
 export function pdfOfJpeg({ jpeg, width, height, title = 'Templating plan (draft)', now = new Date() }) {
   const A4W = 595.28, A4H = 841.89, M = 18, f = Math.min((A4W - 2 * M) / width, (A4H - 2 * M) / height), w = width * f, h = height * f, x = (A4W - w) / 2, y = A4H - M - h;
   const bytes = s => Uint8Array.from(String(s), c => c.charCodeAt(0) & 0xFF), n = v => v.toFixed(2);
-  const content = `q ${n(w)} 0 0 ${n(h)} ${n(x)} ${n(y)} cm /Im0 Do Q\n`, safe = String(title).replace(/[^\x20-\x7E]/g, ' ').replace(/([\\()])/g, '\\$1');
+  const content = `q ${n(w)} 0 0 ${n(h)} ${n(x)} ${n(y)} cm /Im0 Do Q\n`, ascii = /^[\x20-\x7E]*$/.test(String(title)), safe = String(title).replace(/([\\()])/g, '\\$1');
+  const hex16 = s => 'FEFF' + [...Array(s.length).keys()].map(i => s.charCodeAt(i).toString(16).padStart(4, '0')).join('').toUpperCase();
   const stamp = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}${String(now.getUTCDate()).padStart(2, '0')}${String(now.getUTCHours()).padStart(2, '0')}${String(now.getUTCMinutes()).padStart(2, '0')}${String(now.getUTCSeconds()).padStart(2, '0')}Z`;
   const objs = [
     [bytes('<< /Type /Catalog /Pages 2 0 R >>')],
@@ -94,7 +96,7 @@ export function pdfOfJpeg({ jpeg, width, height, title = 'Templating plan (draft
     [bytes(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${A4W} ${A4H}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`)],
     [bytes(`<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`), jpeg, bytes('\nendstream')],
     [bytes(`<< /Length ${content.length} >>\nstream\n${content}endstream`)],
-    [bytes(`<< /Title (${safe}) /Producer (Addis Ortho templating) /CreationDate (D:${stamp}) >>`)],
+    [bytes(`<< /Title ${ascii ? `(${safe})` : `<${hex16(String(title))}>`} /Producer (Addis Ortho templating) /CreationDate (D:${stamp}) >>`)],
   ];
   const parts = [bytes('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n')], off = []; let pos = parts[0].length;
   objs.forEach((o, i) => { const seq = [bytes(`${i + 1} 0 obj\n`), ...o, bytes('\nendobj\n')]; off.push(pos); for (const b of seq) { parts.push(b); pos += b.length; } });
