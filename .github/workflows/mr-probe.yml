@@ -16,7 +16,87 @@ env:
   BUILD_RUN: "42336952514"
 
 jobs:
+  windows-cd:
+    # The black study came from a CD. Start v1.0, then "insert" a made-up MRI CD by mounting an ISO, so
+    # the viewer's CD watcher imports it the way it does a real disc (copied into the cache).
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the v1.0 installer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: addisortho-viewer-windows-x86-64-*
+          merge-multiple: true
+          run-id: ${{ env.BUILD_RUN }}
+          github-token: ${{ github.token }}
+          path: dl
+
+      - name: Install the MSI and build the CD image
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dl -Filter *.msi -Recurse | Select-Object -First 1).FullName
+          $p = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn') -Wait -PassThru
+          "msiexec exit code: $($p.ExitCode)"
+          python -m venv "$env:RUNNER_TEMP\venv"
+          & "$env:RUNNER_TEMP\venv\Scripts\python.exe" -m pip install --quiet pillow pydicom pycdlib
+          & "$env:RUNNER_TEMP\venv\Scripts\python.exe" .github/mr-probe/make_cd.py "$env:RUNNER_TEMP\cdwork" "$env:RUNNER_TEMP\phantom.iso" | Tee-Object "$env:RUNNER_TEMP\discfiles.txt"
+
+      - name: Start the viewer, insert the CD, screenshot
+        shell: pwsh
+        run: |
+          $exe = 'C:\Program Files\Addis Ortho Viewer\Addis Ortho Viewer.exe'
+          $py = "$env:RUNNER_TEMP\venv\Scripts\python.exe"
+          $env:SHOT_DIR = "$env:RUNNER_TEMP\shots"
+          New-Item -ItemType Directory -Force $env:SHOT_DIR | Out-Null
+          Remove-Item "$env:USERPROFILE\.weasis" -Recurse -Force -ErrorAction SilentlyContinue
+          $out = "$env:RUNNER_TEMP\app.out"; $err = "$env:RUNNER_TEMP\app.err"
+          Start-Process -FilePath $exe -RedirectStandardOutput $out -RedirectStandardError $err | Out-Null
+          Start-Sleep -Seconds 90
+          & $py .github/scripts/smoke_helper.py shot 'cd-0-before-insert' | Select-Object -First 1
+          $img = Mount-DiskImage -ImagePath "$env:RUNNER_TEMP\phantom.iso" -PassThru
+          $vol = $img | Get-Volume
+          "mounted as $($vol.DriveLetter): file system $($vol.FileSystem), drive type $($vol.DriveType)"
+          Start-Sleep -Seconds 90
+          & $py .github/scripts/smoke_helper.py shot 'cd-1-after-insert' | Select-Object -First 1
+          Start-Sleep -Seconds 30
+          & $py .github/scripts/smoke_helper.py shot 'cd-2-later' | Select-Object -First 1
+          "--- cached copies compared with the disc"
+          $disc = @{}; $sizes = @{}
+          Get-Content "$env:RUNNER_TEMP\discfiles.txt" | Where-Object { $_ -like 'DISCFILE *' } | ForEach-Object { $f = $_ -split ' '; $disc[$f[2]] = $f[3]; $sizes[[long]$f[1]] = 1 }
+          $match = 0; $bad = 0
+          foreach ($root in @("$env:USERPROFILE\.weasis", $env:TEMP)) {
+            Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 100000 -and $_.FullName -notmatch '\\cache-' } | ForEach-Object {
+              $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+              if ($disc.ContainsKey($h)) { $match++ }
+              elseif ($sizes.ContainsKey($_.Length)) { $bad++; "DIFFERENT $($_.Length) $($_.FullName.Replace($env:USERPROFILE, '~'))" }
+            }
+          }
+          "cached copies identical to the disc: $match; files of a disc file's size that differ: $bad"
+          "--- the files the viewer wrote, by folder"
+          Get-ChildItem "$env:USERPROFILE\.weasis", $env:TEMP -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '\\cache-' -and $_.Length -gt 100000 } | Group-Object DirectoryName | ForEach-Object { "$($_.Count) files in $($_.Name.Replace($env:USERPROFILE, '~'))" }
+          Get-Process | Where-Object { $_.Path -like 'C:\Program Files\Addis*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+          "--- app output: disc, copy and error lines"
+          Get-Content $out -ErrorAction SilentlyContinue | Select-String -Pattern 'CD/DVD|disc|Disc|Copying|copy|ERROR|Exception|Cannot|outside' | Select-Object -First 80 | ForEach-Object { $_.Line.Substring(0, [Math]::Min(260, $_.Line.Length)) }
+          exit 0
+
+      - name: Upload screenshots and output
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: mr-probe-windows-cd
+          path: |
+            ${{ runner.temp }}/shots
+            ${{ runner.temp }}/app.out
+            ${{ runner.temp }}/app.err
+          if-no-files-found: warn
+
   windows:
+    if: false  # the file test passed on 7 Nov 2026; kept for reference
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
