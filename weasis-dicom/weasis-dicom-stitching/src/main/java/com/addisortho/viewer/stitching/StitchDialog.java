@@ -655,10 +655,14 @@ final class StitchDialog extends JDialog {
   // saved image cannot be used for, and the image says so itself (burned in, no scale)
   private void saveUnverified() {
     Stitch s = new Stitch(chosen, seams, choices(), cuts, true);
+    // one HTML string without newlines: JOptionPane splits a message at newlines into separate
+    // labels, and only a label that starts with <html> is laid out as HTML (7 Nov 2026: the
+    // reasons came out as raw text, the box grew wider than the screen, and OK fell off it)
     StringBuilder why = new StringBuilder();
     for (int i = 0; i < seams.size(); i++) {
       if (seams.get(i).status() == Seam.Status.FAILED) {
-        why.append("\n").append("Seam %d: %s".formatted(i + 1, seams.get(i).reasons().get(0)));
+        why.append("<br>")
+            .append(html("Seam %d: %s".formatted(i + 1, seams.get(i).reasons().get(0))));
       }
     }
     int answer =
