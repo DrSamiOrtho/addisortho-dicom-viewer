@@ -70,6 +70,13 @@ final class TemplatingService {
       return Messages.getString("TemplatingToolBar.notXray")
           .formatted(modality == null ? "?" : modality);
     }
+    // a stitch saved although a seam failed says so in its comments: nothing may be measured on it
+    String comments = TagD.getTagValue(image, Tag.ImageComments, String.class);
+    String description = TagD.getTagValue(series, Tag.SeriesDescription, String.class);
+    if ((comments != null && comments.contains("UNVERIFIED"))
+        || (description != null && description.contains("UNVERIFIED"))) {
+      return Messages.getString("TemplatingToolBar.unverifiedStitch");
+    }
     return null;
   }
 

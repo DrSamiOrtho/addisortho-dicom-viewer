@@ -511,3 +511,20 @@ anatomy-aware or movable cut, not the middle of the overlap). Built as `Cut`:
   text say where each cut is and why. A cut set by hand is recorded as such.
 - Not built: recognising the trochanter or the condyles by shape; the straight-outline rule stands in for it. The
   compositor still feathers 10 mm about the cut.
+
+### 15.3 Save as unverified draft (Sami, 7 Nov 2026)
+
+On the real case with target leg Both every seam read failed although the preview was right, and Save stayed off. Sami
+asked for a way to save the stitched X-ray anyway. Built, within Kimi's rule that an unconfirmed seam must not
+produce a measurable image: a second button, "Save as unverified draft...", enabled only while a seam reads failed.
+It names the failed seams and their first reason, warns what the image cannot be used for, and on OK writes the
+stitch with `Stitch.unverified`: the label's first line is "UNVERIFIED STITCH: seam N failed. Not for lengths, angles
+or templating.", the series description reads "Long leg stitched (UNVERIFIED draft, not for measurement)", the
+derivation text starts with UNVERIFIED, the private seam data carries `"unverified":true`, and the file has no
+PixelSpacing, so no viewer can measure in mm on it. The Template button refuses an image whose comments or series
+description contain UNVERIFIED. The ordinary save is unchanged and still needs every seam at "check".
+
+Also seen on that run: with target leg Both the strict rule of 15.1 (each leg on its own, agreeing, and the whole
+width) failed all three seams on the bilateral film even though the whole-width match had found the right place;
+target leg Left or Right with the whole image width lets the ankle seam pass. Whether Both should accept a passing
+whole-width match when one half merely lacks held-back points is an open tuning question.

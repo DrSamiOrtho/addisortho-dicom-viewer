@@ -167,6 +167,29 @@ class StitchWriterTest {
     assertTrue(correlation(pairs) > 0.97, "correlation " + correlation(pairs));
   }
 
+  /** Saved although a seam failed: no scale, the warning first on the label, said in every text. */
+  @Test
+  void anUnverifiedStitchCarriesNoScaleAndSaysSo() throws IOException {
+    Built b = build();
+    List<Seam> seams = new ArrayList<>(b.stitch().seams);
+    seams.set(1, Seam.failed(seams.get(1).transform(), Seam.Method.AUTOMATIC, List.of("test")));
+    Stitch s = new Stitch(b.stitch().pieces, seams, b.stitch().choices, null, true);
+    assertTrue(s.anyFailed());
+    assertFalse(s.hasScale());
+    assertEquals("seam 2", s.failedSeams());
+    assertTrue(
+        s.labelLines().get(0).startsWith("UNVERIFIED STITCH: seam 2 failed"),
+        s.labelLines().toString());
+    assertTrue(s.seriesDescription().contains("UNVERIFIED"));
+    assertTrue(s.derivation().startsWith("UNVERIFIED (seam 2 failed)"), s.derivation());
+    assertTrue(s.noScaleReason().orElseThrow().contains("unverified"));
+    assertTrue(StitchWriter.seamData(s, new Compositor(s)).contains("\"unverified\":true"));
+    // the ordinary stitch of the same pieces keeps its scale and says nothing of the kind
+    Stitch ok = new Stitch(b.stitch().pieces, b.stitch().seams, b.stitch().choices);
+    assertTrue(ok.hasScale());
+    assertTrue(StitchWriter.seamData(ok, new Compositor(ok)).contains("\"unverified\":false"));
+  }
+
   @Test
   void spacingFromDifferentSourcesGivesNoScale() throws IOException {
     Built b = build();

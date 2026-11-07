@@ -55,21 +55,33 @@ final class Stitch {
   private final double[] cuts;
   private final Cut.Row[] rows;
 
+  /**
+   * Saved although a seam failed (Sami, 7 Nov 2026): the picture is kept for viewing, with the
+   * warning burned in, without scale so nothing can be measured on it, and refused by the Template
+   * button (Kimi, second review: an unconfirmed seam must not produce a measurable image).
+   */
+  final boolean unverified;
+
   Stitch(List<Piece> pieces, List<Seam> seams, Choices choices) {
-    this(pieces, seams, choices, null);
+    this(pieces, seams, choices, null, false);
+  }
+
+  Stitch(List<Piece> pieces, List<Seam> seams, Choices choices, double[] cuts) {
+    this(pieces, seams, choices, cuts, false);
   }
 
   /**
    * @param cuts the cut row of each seam in its upper piece's millimetres, where the user dragged
    *     it; NaN (or null) for a cut found automatically (never through a sphere, see {@link Cut})
    */
-  Stitch(List<Piece> pieces, List<Seam> seams, Choices choices, double[] cuts) {
+  Stitch(List<Piece> pieces, List<Seam> seams, Choices choices, double[] cuts, boolean unverified) {
     if (seams.size() != pieces.size() - 1) {
       throw new IllegalArgumentException("one seam between each two pieces");
     }
     this.pieces = List.copyOf(pieces);
     this.seams = List.copyOf(seams);
     this.choices = choices;
+    this.unverified = unverified;
     this.cuts = new double[seams.size()];
     Arrays.fill(this.cuts, Double.NaN);
     if (cuts != null) {
@@ -115,8 +127,22 @@ final class Stitch {
    * Otherwise the output carries no PixelSpacing (design section 5).
    */
   boolean hasScale() {
+    if (unverified) {
+      return false; // nothing may be measured on an unverified stitch
+    }
     Spacing.Basis b = pieces.get(0).spacing.basis();
     return b != Spacing.Basis.NONE && pieces.stream().allMatch(p -> p.spacing.basis() == b);
+  }
+
+  /** The seams that failed, as "seam 2, seam 3". */
+  String failedSeams() {
+    List<String> out = new ArrayList<>();
+    for (int i = 0; i < seams.size(); i++) {
+      if (seams.get(i).status() == Seam.Status.FAILED) {
+        out.add("seam " + (i + 1));
+      }
+    }
+    return String.join(", ", out);
   }
 
   /**
@@ -132,6 +158,9 @@ final class Stitch {
   Optional<String> noScaleReason() {
     if (hasScale()) {
       return Optional.empty();
+    }
+    if (unverified) {
+      return Optional.of("an unverified stitch carries no scale, so nothing can be measured on it");
     }
     if (pieces.stream().allMatch(p -> !p.spacing.hasScale())) {
       return Optional.of("the pieces carry no pixel spacing");
@@ -273,6 +302,11 @@ final class Stitch {
   /** The draft label burned into the image, line by line (design section 7). */
   List<String> labelLines() {
     List<String> lines = new ArrayList<>();
+    if (unverified) {
+      lines.add(
+          "UNVERIFIED STITCH: %s failed. Not for lengths, angles or templating."
+              .formatted(failedSeams().isEmpty() ? "a seam" : failedSeams()));
+    }
     lines.add("Stitched draft, %s, not reviewed.".formatted(method().word));
     lines.add("%s leg. Lengths and angles across seams unverified.".formatted(choices.leg().word));
     if (!hasScale()) {
@@ -283,24 +317,29 @@ final class Stitch {
 
   /** SeriesDescription: contains LONG so the templating page takes it as a long film. */
   String seriesDescription() {
-    return "Long leg stitched (draft, %s, not reviewed)".formatted(method().word);
+    return unverified
+        ? "Long leg stitched (UNVERIFIED draft, not for measurement)"
+        : "Long leg stitched (draft, %s, not reviewed)".formatted(method().word);
   }
 
   /** The derivation text: who joined what, how well, on what scale. */
   String derivation() {
     StringBuilder sb =
         new StringBuilder(
-            "Stitched draft from %d images by %s; %s, %s; %s leg, matched on the %s; output %s. "
-                .formatted(
-                    pieces.size(),
-                    StitchWriter.SOFTWARE,
-                    choices.projection(),
-                    choices.position(),
-                    choices.leg().word,
-                    choices.band().words(),
-                    hasScale()
-                        ? String.format(Locale.ROOT, "%.3f mm per pixel", outputMm())
-                        : "without scale"));
+            (unverified
+                    ? "UNVERIFIED (%s failed), saved for viewing only. ".formatted(failedSeams())
+                    : "")
+                + "Stitched draft from %d images by %s; %s, %s; %s leg, matched on the %s; output %s. "
+                    .formatted(
+                        pieces.size(),
+                        StitchWriter.SOFTWARE,
+                        choices.projection(),
+                        choices.position(),
+                        choices.leg().word,
+                        choices.band().words(),
+                        hasScale()
+                            ? String.format(Locale.ROOT, "%.3f mm per pixel", outputMm())
+                            : "without scale"));
     for (int i = 0; i < seams.size(); i++) {
       sb.append("Seam %d: %s; %s. ".formatted(i + 1, seams.get(i).summary(), cut(i).note()));
     }

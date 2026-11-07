@@ -193,6 +193,7 @@ final class StitchWriter {
   static String seamData(Stitch s, Compositor c) {
     StringBuilder sb = new StringBuilder("{\"version\":1,\"software\":\"").append(SOFTWARE);
     sb.append("\",\"status\":\"draft, ").append(s.method().word).append(", not reviewed\"");
+    sb.append(",\"unverified\":").append(s.unverified);
     sb.append(",\"leg\":\"").append(s.choices.leg().word).append('"');
     sb.append(",\"projection\":\"").append(s.choices.projection()).append('"');
     sb.append(",\"position\":\"").append(s.choices.position()).append('"');

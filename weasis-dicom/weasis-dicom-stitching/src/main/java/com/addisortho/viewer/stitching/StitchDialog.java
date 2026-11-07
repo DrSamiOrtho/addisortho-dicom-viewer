@@ -86,6 +86,8 @@ final class StitchDialog extends JDialog {
   private final JButton lineUp = new JButton(Messages.getString("StitchDialog.lineUp"));
   private final JButton inspect = new JButton(Messages.getString("StitchDialog.inspect"));
   private final JButton save = new JButton(Messages.getString("StitchDialog.save"));
+  private final JButton saveUnverified =
+      new JButton(Messages.getString("StitchDialog.saveUnverified"));
   private final JButton cancel = new JButton(Messages.getString("StitchDialog.cancel"));
   private final JProgressBar progress = new JProgressBar();
   private final JLabel state = new JLabel(" ");
@@ -385,6 +387,7 @@ final class StitchDialog extends JDialog {
     JButton close = new JButton(Messages.getString("StitchDialog.close"));
     close.addActionListener(e -> dispose());
     buttons.add(cancel);
+    buttons.add(saveUnverified);
     buttons.add(save);
     buttons.add(close);
     south.add(buttons, BorderLayout.SOUTH);
@@ -404,7 +407,8 @@ final class StitchDialog extends JDialog {
     band.addActionListener(e -> discardSeams());
     lineUp.addActionListener(e -> lineUp());
     inspect.addActionListener(e -> inspectSelected());
-    save.addActionListener(e -> save());
+    save.addActionListener(e -> save(stitch()));
+    saveUnverified.addActionListener(e -> saveUnverified());
     cancel.addActionListener(
         e -> {
           if (running != null) {
@@ -481,11 +485,9 @@ final class StitchDialog extends JDialog {
     }
     boolean lined = !seams.isEmpty() && seams.size() == chosen.size() - 1;
     inspect.setEnabled(!busy && lined && seamTable.getSelectedRow() >= 0);
-    save.setEnabled(
-        !busy
-            && lined
-            && confirmed()
-            && seams.stream().noneMatch(s -> s.status() == Seam.Status.FAILED));
+    boolean anyFailed = seams.stream().anyMatch(s -> s.status() == Seam.Status.FAILED);
+    save.setEnabled(!busy && lined && confirmed() && !anyFailed);
+    saveUnverified.setEnabled(!busy && lined && confirmed() && anyFailed);
     cancel.setEnabled(busy);
     if (!busy && lined && seams.stream().anyMatch(s -> s.status() == Seam.Status.FAILED)) {
       state.setText(Messages.getString("StitchDialog.failedSeams"));
@@ -649,8 +651,29 @@ final class StitchDialog extends JDialog {
         .ifPresent(r -> state.setText(Messages.getString("StitchDialog.noScale").formatted(r)));
   }
 
-  private void save() {
-    Stitch s = stitch();
+  // a failed seam may still be saved for viewing: the user is told what failed and what the
+  // saved image cannot be used for, and the image says so itself (burned in, no scale)
+  private void saveUnverified() {
+    Stitch s = new Stitch(chosen, seams, choices(), cuts, true);
+    StringBuilder why = new StringBuilder();
+    for (int i = 0; i < seams.size(); i++) {
+      if (seams.get(i).status() == Seam.Status.FAILED) {
+        why.append("\n").append("Seam %d: %s".formatted(i + 1, seams.get(i).reasons().get(0)));
+      }
+    }
+    int answer =
+        JOptionPane.showConfirmDialog(
+            this,
+            Messages.getString("StitchDialog.unverifiedConfirm").formatted(why),
+            Messages.getString("StitchDialog.saveUnverified"),
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE);
+    if (answer == JOptionPane.OK_OPTION) {
+      save(s);
+    }
+  }
+
+  private void save(Stitch s) {
     running =
         new SwingWorker<Path, Void>() {
           @Override
@@ -676,7 +699,9 @@ final class StitchDialog extends JDialog {
               Path file = get();
               String uid = seriesUid(file);
               StitchService.loadAndOpen(study.model(), file, uid);
-              state.setText(Messages.getString("StitchDialog.saved"));
+              state.setText(
+                  Messages.getString(
+                      s.unverified ? "StitchDialog.savedUnverified" : "StitchDialog.saved"));
             } catch (CancellationException e) {
               state.setText(" ");
             } catch (Exception e) {
