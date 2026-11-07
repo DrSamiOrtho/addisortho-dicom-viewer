@@ -1,0 +1,97 @@
+name: MR probe (Windows)
+
+# Addis Ortho: a real 0.34T MRI study shows black in v1.0 on Windows and correctly on macOS. This installs
+# the v1.0 MSI on a real Windows machine and opens made-up files of the same shape. No patient data: this
+# repository is public, so its logs and artifacts are too.
+on:
+  push:
+    branches: ['addisortho/mr-windows-probe']
+    paths: ['.github/mr-probe/**', '.github/workflows/mr-probe.yml']
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  BUILD_RUN: "42336952514"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95  # v5.6.0
+        with:
+          distribution: 'temurin'
+          java-version: '26'
+
+      - name: Download the v1.0 installer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: addisortho-viewer-windows-x86-64-*
+          merge-multiple: true
+          run-id: ${{ env.BUILD_RUN }}
+          github-token: ${{ github.token }}
+          path: dl
+
+      - name: Install the MSI and make the phantoms
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dl -Filter *.msi -Recurse | Select-Object -First 1).FullName
+          "msi: $msi"
+          $p = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn') -Wait -PassThru
+          "msiexec exit code: $($p.ExitCode)"
+          python -m venv "$env:RUNNER_TEMP\venv"
+          & "$env:RUNNER_TEMP\venv\Scripts\python.exe" -m pip install --quiet pillow
+          python .github/mr-probe/make_phantom.py "$env:RUNNER_TEMP\phantoms"
+          Get-ChildItem "$env:RUNNER_TEMP\phantoms" | Format-Table Name, Length -AutoSize | Out-String | Write-Host
+
+      - name: Decoder probe with the installed Windows libraries
+        shell: pwsh
+        run: |
+          $jars = "$env:RUNNER_TEMP\jars"
+          python .github/mr-probe/unpack_bundles.py 'C:\Program Files\Addis Ortho Viewer\app\bundle' $jars
+          Invoke-WebRequest -Uri 'https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.18/slf4j-api-2.0.18.jar' -OutFile "$jars\slf4j-api-2.0.18.jar"
+          $files = (Get-ChildItem "$env:RUNNER_TEMP\phantoms" -Filter *.dcm).FullName
+          java --enable-native-access=ALL-UNNAMED "-Djava.library.path=$jars" -cp "$jars\*" .github/mr-probe/Probe.java @files 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -notmatch 'SLF4J' } | Tee-Object "$env:RUNNER_TEMP\probe.txt"
+          exit 0
+
+      - name: Open each phantom in the installed viewer and screenshot
+        shell: pwsh
+        run: |
+          $exe = 'C:\Program Files\Addis Ortho Viewer\Addis Ortho Viewer.exe'
+          $py = "$env:RUNNER_TEMP\venv\Scripts\python.exe"
+          $env:SHOT_DIR = "$env:RUNNER_TEMP\shots"
+          New-Item -ItemType Directory -Force $env:SHOT_DIR | Out-Null
+          $files = Get-ChildItem "$env:RUNNER_TEMP\phantoms" -Filter *.dcm
+          $n = 0
+          foreach ($f in $files) {
+            $out = "$env:RUNNER_TEMP\app$n.out"; $err = "$env:RUNNER_TEMP\app$n.err"
+            Start-Process -FilePath $exe -ArgumentList @("`"$($f.FullName)`"") -RedirectStandardOutput $out -RedirectStandardError $err | Out-Null
+            Start-Sleep -Seconds $(if ($n -eq 0) { 90 } else { 30 })
+            "--- $($f.Name)"
+            & $py .github/scripts/smoke_helper.py shot "win-$n-$($f.BaseName)" | Out-File "$env:RUNNER_TEMP\shot$n.txt"
+            $n++
+          }
+          Get-ChildItem $env:SHOT_DIR | Format-Table Name, Length -AutoSize | Out-String | Write-Host
+          Get-Process | Where-Object { $_.Path -like 'C:\Program Files\Addis*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+          "--- app output, decoder and error lines"
+          Get-Content "$env:RUNNER_TEMP\app0.out" -ErrorAction SilentlyContinue | Select-String -Pattern 'OpenCV|ERROR|Exception|Cannot|native' | Select-Object -First 60 | ForEach-Object { $_.Line }
+          exit 0
+
+      - name: Upload screenshots and output
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: mr-probe-windows
+          path: |
+            ${{ runner.temp }}/shots
+            ${{ runner.temp }}/probe.txt
+            ${{ runner.temp }}/app*.out
+            ${{ runner.temp }}/app*.err
+          if-no-files-found: warn
