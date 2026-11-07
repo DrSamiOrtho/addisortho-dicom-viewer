@@ -192,11 +192,45 @@ final class SeamMatcher {
         lower,
         band,
         chosen,
-        Rigid.shift(coarse.dx, coarse.dy),
+        levelShift(upper, lower, band, coarse),
         coarse.uniqueness,
         fail,
         check,
         Seam.Method.AUTOMATIC);
+  }
+
+  /** The rough position is refined by shift only within this many mm, on the 1 mm intensity. */
+  static final double LEVEL_MM = 2;
+
+  /**
+   * The rough position refined by shift alone: the 1 mm intensity of the overlap correlated at
+   * every whole-millimetre shift within {@link #LEVEL_MM} of the 2 mm rough peak, then the peak
+   * read to a fraction of a millimetre. No rotation. This is where a failed automatic seam is left
+   * (case LL-001, 7 Nov 2026: the 2 mm grid alone put the femoral cortex 1.6 mm off).
+   */
+  static Rigid levelShift(MatchImage upper, MatchImage lower, Band band, Coarse coarse) {
+    Gray u = upper.fine();
+    Gray l = lower.fine();
+    double g = MatchImage.FINE_MM;
+    int cx = (int) Math.round(coarse.dx / g);
+    int cy = (int) Math.round(coarse.dy / g);
+    int r = (int) Math.round(LEVEL_MM / g);
+    int n = 2 * r + 1;
+    double[] score = new double[n * n];
+    for (int j = 0; j < n; j++) {
+      for (int i = 0; i < n; i++) {
+        score[j * n + i] = ncc(u, l, cx + i - r, cy + j - r, band);
+      }
+    }
+    int best = argmax(score);
+    if (best < 0 || !Double.isFinite(score[best])) {
+      return Rigid.shift(coarse.dx, coarse.dy);
+    }
+    int bi = best % n;
+    int bj = best / n;
+    double sx = bi > 0 && bi < n - 1 ? parabola(score[best - 1], score[best], score[best + 1]) : 0;
+    double sy = bj > 0 && bj < n - 1 ? parabola(score[best - n], score[best], score[best + n]) : 0;
+    return Rigid.shift((cx + bi + sx - r) * g, (cy + bj + sy - r) * g);
   }
 
   /**
@@ -239,8 +273,10 @@ final class SeamMatcher {
   }
 
   /**
-   * The gates on a fine match. {@code rough} is where a failed seam is left: the rough position, so
-   * the user starts the manual line-up from there, not from a fit of too few points.
+   * The gates on a fine match. {@code rough} is where a failed seam is left: the rough position
+   * refined by shift only, or the position set by hand, never the failed fit. A fit the gates
+   * refused must not tilt the picture: on case LL-001 (7 Nov 2026) a -1.17 deg fit, parallax
+   * absorbed as rotation, failed its hold-out and still turned the tibiae in the saved image.
    */
   private static Seam judge(
       MatchImage upper,
@@ -381,11 +417,30 @@ final class SeamMatcher {
     check.add("automatic match, not reviewed: inspect the overlap");
     check.add("ruler and skin are not yet excluded from the match automatically");
     boolean failed = !fail.isEmpty();
+    if (failed) {
+      check.add(
+          0,
+          String.format(
+              Locale.ROOT,
+              "placed at the %s (shift %.1f, %.1f mm, rotation %.2f deg) without the failed fit"
+                  + " (%d points, rotation %.2f deg, residual %.2f mm): a match the gates refuse"
+                  + " keeps no fitted rotation",
+              method == Seam.Method.AUTOMATIC
+                  ? "rough position refined by shift only"
+                  : "position set by hand",
+              rough.tx(),
+              rough.ty(),
+              rough.degrees(),
+              inliers.size(),
+              fit.degrees(),
+              rms));
+      fit = rough;
+      rms = Double.NaN;
+      sigma = new double[] {Double.NaN, Double.NaN};
+      scale = Double.NaN;
+    }
     List<String> reasons = new ArrayList<>(fail);
     reasons.addAll(check);
-    if (failed && inliers.size() < MIN_INLIERS) {
-      fit = rough; // too few points for the fit to mean anything: start the user at the rough spot
-    }
     return new Seam(
         fit,
         method,

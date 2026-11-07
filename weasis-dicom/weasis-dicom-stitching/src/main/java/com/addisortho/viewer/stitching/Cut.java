@@ -40,6 +40,17 @@ final class Cut {
   /** Vertical over horizontal gradient on bone below this: the outline runs straight. */
   static final double STRAIGHT = 0.6;
 
+  /**
+   * Added to a row's straightness score in proportion to its distance from the middle of the
+   * allowed rows, this much at either end: a row at the end must be this much straighter than one
+   * in the middle to win, half of {@link #STRAIGHT}. Three pieces that all overlap (case LL-001, 7
+   * Nov 2026: 343 mm between the knee and ankle pieces) then share the limb instead of one cut at
+   * the top of the overlap and the next at the bottom, which left the knee piece a 35 mm strip and
+   * took the knee from the femur exposure. A round outline still loses: it scores well over {@link
+   * #STRAIGHT}.
+   */
+  static final double MIDDLE_PULL = 0.3;
+
   // a bright round marker on the 2 mm copy: bright, compact, round, and standing out from its
   // surroundings. Not "saturated": on the 7 Nov 2026 case the ball reached only 0.9 of the
   // normalised range on two pieces while dense bone reached 1.0.
@@ -102,9 +113,12 @@ final class Cut {
     double lowerBright = SeamMatcher.otsu(l, 0, 0, l.width(), l.height());
     Rigid toLower = lowerToUpper.inverse();
     double best = Double.NaN;
-    double bestScore = Double.POSITIVE_INFINITY;
+    double bestScore = Double.POSITIVE_INFINITY; // the chosen row's own straightness
+    double bestRanked = Double.POSITIVE_INFINITY; // with the pull towards the middle
     double bestFree = Double.NaN; // the candidate farthest from any marker, if all are near one
     double bestFreeDist = -1;
+    double mid = (lo + hi) / 2;
+    double half = Math.max(1e-6, (hi - lo) / 2);
     for (double y = lo; y <= hi; y += mm) {
       double gyUp = 0;
       double gxUp = 0;
@@ -144,7 +158,9 @@ final class Cut {
         bestFreeDist = dist;
         bestFree = y;
       }
-      if (dist > 0 && score < bestScore) {
+      double ranked = score + MIDDLE_PULL * Math.abs(y - mid) / half;
+      if (dist > 0 && ranked < bestRanked) {
+        bestRanked = ranked;
         bestScore = score;
         best = y;
       }

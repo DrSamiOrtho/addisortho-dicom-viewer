@@ -130,6 +130,60 @@ class SeamMatcherTest {
     assertEquals(Seam.Status.FAILED, seam.status(), seam.summary());
   }
 
+  /**
+   * A failed seam is left level: the rough position refined by shift only, never the failed fit's
+   * rotation (case LL-001, 7 Nov 2026). The lower piece is cut 0.8 deg askew; the shaft fixes the
+   * sideways position, which must be within 1 mm of the truth at the overlap's centre.
+   */
+  @Test
+  void aFailedSeamKeepsNoRotation() {
+    Phantom shaft = Phantom.shaftOnly(300, 900);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, W, H, 0.2, 1, 0);
+    var lower = new Phantom.Cut(new Rigid(Math.toRadians(0.8), 2, 320), W, H, 0.2, 1, 0);
+    Seam seam =
+        SeamMatcher.match(
+            shaft.matchImage(upper, 0.01, 71),
+            shaft.matchImage(lower, 0.01, 72),
+            SeamMatcher.Band.WHOLE);
+    assertEquals(Seam.Status.FAILED, seam.status(), seam.summary());
+    assertEquals(0, seam.transform().theta(), 0.0, seam.summary());
+    assertTrue(Double.isNaN(seam.rmsMm()), seam.summary());
+    double[] want = Phantom.truth(upper, lower).apply(W / 2, 30);
+    double[] got = seam.transform().apply(W / 2, 30);
+    assertEquals(want[0], got[0], 1.0, seam.summary());
+  }
+
+  /**
+   * Two legs 3 mm apart in the second film (parallax), matched on the whole width: a rigid fit
+   * tilts to meet both. Whether the gates refuse it or not, the seam carries no tilt the gates
+   * refused, and a refused seam says so.
+   */
+  @Test
+  void aRefusedFitLeavesNoTilt() {
+    double w = 427;
+    double h = 356;
+    Phantom legs = Phantom.twoLegs(w, 900, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lowerLeft = new Phantom.Cut(Rigid.shift(2, 280), w, h, 0.139, 1, 0);
+    var lowerRight = new Phantom.Cut(Rigid.shift(2, 277), w, h, 0.139, 1, 0);
+    Seam seam =
+        SeamMatcher.match(
+            legs.matchImage(upper, 0.02, 45),
+            legs.splicedMatchImage(lowerLeft, lowerRight, 0.02, 46),
+            SeamMatcher.Band.WHOLE);
+    if (seam.status() == Seam.Status.FAILED) {
+      assertEquals(0, seam.transform().theta(), 0.0, seam.summary());
+      assertTrue(
+          seam.reasons().stream().anyMatch(r -> r.contains("keeps no fitted rotation")),
+          seam.reasons().toString());
+      double[] got = seam.transform().apply(w / 2, 300);
+      double[] want = Rigid.shift(2, 278.5).apply(w / 2, 300);
+      assertTrue(Math.hypot(got[0] - want[0], got[1] - want[1]) < 2.5, seam.summary());
+    } else {
+      assertTrue(Math.abs(seam.transform().degrees()) < 1.0, seam.summary());
+    }
+  }
+
   @Test
   void refusesAShaftOnlyOverlap() {
     Phantom shaft = Phantom.shaftOnly(300, 900);

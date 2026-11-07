@@ -15,6 +15,7 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
+import java.awt.Rectangle;
 import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
@@ -220,6 +221,13 @@ final class SeamEditor extends JDialog {
     bindKeys(root);
     setSeam(seam);
     pack();
+    // most of the screen, and resizable: the aligned view takes the space, so a seam can be
+    // judged and corrected on a large screen (Sami, 7 Nov 2026)
+    Rectangle screen =
+        (owner != null ? owner.getGraphicsConfiguration() : getGraphicsConfiguration()).getBounds();
+    setSize(
+        Math.max(getWidth(), (int) (screen.width * 0.9)),
+        Math.max(getHeight(), (int) (screen.height * 0.9)));
     setLocationRelativeTo(owner);
   }
 

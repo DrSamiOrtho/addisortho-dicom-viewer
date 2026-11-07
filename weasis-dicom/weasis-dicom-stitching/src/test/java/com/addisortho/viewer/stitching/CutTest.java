@@ -61,7 +61,8 @@ class CutTest {
 
   /**
    * Overlap rows 250 to 400 of the upper piece: a ball at 330 and condyles at 380 lie in it; the
-   * cut must land on the shaft above the ball.
+   * cut must land on the shaft above the ball, outside the ball's margin (rows up to 303), and with
+   * the pull towards the middle of the overlap it lands on the lowest such row.
    */
   @Test
   void cutsTheShaftNotTheBallOrTheCondyle() {
@@ -69,7 +70,8 @@ class CutTest {
     MatchImage lower = MatchImage.of(film(40, 80, 130), W, H, MM, MM, false);
     Cut.Row row = Cut.find(upper, lower, H, W, Rigid.shift(0, 250));
     assertTrue(row.clean(), row.note());
-    assertTrue(row.yMm() >= 265 && row.yMm() <= 300, row.note());
+    double ballMargin = 330 - 13 - Cut.BALL_MARGIN_MM;
+    assertTrue(row.yMm() >= ballMargin - 10 && row.yMm() <= ballMargin + 1e-6, row.note());
     assertTrue(row.note().contains("round marker"), row.note());
   }
 
@@ -80,6 +82,19 @@ class CutTest {
     MatchImage lower = MatchImage.of(film(40, 35, 1000), W, H, MM, MM, false);
     Cut.Row row = Cut.find(upper, lower, H, W, Rigid.shift(0, 250));
     assertTrue(Math.abs(row.yMm() - 285) > 13 + Cut.BALL_MARGIN_MM - 1, row.note());
+  }
+
+  /**
+   * Straight shafts over a 340 mm overlap, every row as straight as the next: the cut lands near
+   * the middle, so three overlapping pieces share the limb (case LL-001, 7 Nov 2026).
+   */
+  @Test
+  void cutsALongStraightOverlapNearItsMiddle() {
+    MatchImage upper = MatchImage.of(film(40, 1000, 1000), W, H, MM, MM, false);
+    MatchImage lower = MatchImage.of(film(40, 1000, 1000), W, H, MM, MM, false);
+    Cut.Row row = Cut.find(upper, lower, H, W, Rigid.shift(0, 60));
+    assertTrue(row.clean(), row.note());
+    assertTrue(Math.abs(row.yMm() - 230) < 25, row.note());
   }
 
   @Test
