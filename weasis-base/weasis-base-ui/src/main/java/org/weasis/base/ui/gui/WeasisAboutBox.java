@@ -99,6 +99,7 @@ public class WeasisAboutBox extends JDialog {
         """
         <div align="center">
           <h2>%s %s</h2>
+          Based on Weasis %s<br>
           %s
           %s<br>
           %s <a href="%s">%s</a><br>
@@ -108,6 +109,7 @@ public class WeasisAboutBox extends JDialog {
         """
             .formatted(
                 AppProperties.WEASIS_NAME,
+                AppProperties.AO_VERSION,
                 AppProperties.WEASIS_VERSION,
                 releaseNotesLink,
                 preferences.getProperty("weasis.copyrights", ""),

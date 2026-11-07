@@ -314,7 +314,7 @@ public class WeasisWin {
 
     rootPaneContainer.setGlassPane(AppProperties.glassPane);
 
-    frame.setTitle(AppProperties.WEASIS_NAME + " v" + AppProperties.WEASIS_VERSION); // NON-NLS
+    frame.setTitle(AppProperties.WEASIS_NAME + " v" + AppProperties.AO_VERSION); // NON-NLS
 
     LogoIcon logoIcon =
         AppProperties.WEASIS_NAME.endsWith("Dicomizer") // NON-NLS
@@ -1485,10 +1485,10 @@ public class WeasisWin {
     Option opt = Options.compile(usage).parse(argv);
 
     if (opt.isSet("version")) {
-      System.out.println(AppProperties.WEASIS_VERSION);
+      System.out.println(AppProperties.AO_VERSION);
     } else if (opt.isSet("all")) { // NON-NLS
       PrintStream out = System.out;
-      out.println("  " + AppProperties.WEASIS_NAME + " " + AppProperties.WEASIS_VERSION);
+      out.println("  " + AppProperties.WEASIS_NAME + " " + AppProperties.AO_VERSION);
       out.println("  Installation path: " + AppProperties.WEASIS_PATH); // NON-NLS
       out.println("  Path for temporary files: " + AppProperties.APP_TEMP_DIR); // NON-NLS
       out.println("  Profile: " + AppProperties.WEASIS_PROFILE); // NON-NLS

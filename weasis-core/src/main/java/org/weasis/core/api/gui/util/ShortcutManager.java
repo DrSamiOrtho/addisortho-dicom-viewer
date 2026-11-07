@@ -1476,7 +1476,7 @@ public final class ShortcutManager {
         .append(" · ")
         .append(AppProperties.WEASIS_NAME)
         .append(StringUtil.SPACE)
-        .append(AppProperties.WEASIS_VERSION)
+        .append(AppProperties.AO_VERSION)
         .append("</footer>\n");
     html.append("</body>\n</html>\n");
     return html.toString();

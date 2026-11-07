@@ -74,7 +74,7 @@ final class SegWriteWorker extends SwingWorker<SegWriteWorker.Outcome, Void> {
             GrowSession.segments(bones),
             session.segSeriesUID(),
             instanceNumber,
-            AppProperties.WEASIS_VERSION,
+            AppProperties.AO_VERSION,
             new Date());
     String sopUID = dataset.getString(Tag.SOPInstanceUID);
     Path dir =
