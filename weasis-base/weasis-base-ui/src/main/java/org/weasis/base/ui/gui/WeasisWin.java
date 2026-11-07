@@ -35,19 +35,24 @@ import bibliothek.gui.dock.util.DirectWindowProvider;
 import bibliothek.gui.dock.util.DockUtilities;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.formdev.flatlaf.extras.FlatSVGIcon;
+import com.formdev.flatlaf.util.SystemInfo;
 import java.awt.AWTException;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dialog;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Frame;
+import java.awt.Graphics2D;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
+import java.awt.Image;
 import java.awt.Insets;
 import java.awt.MouseInfo;
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.Robot;
 import java.awt.Taskbar;
 import java.awt.Taskbar.Feature;
@@ -58,6 +63,7 @@ import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -90,8 +96,10 @@ import javax.swing.Action;
 import javax.swing.Icon;
 import javax.swing.JCheckBox;
 import javax.swing.JCheckBoxMenuItem;
+import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JLayer;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
@@ -172,6 +180,12 @@ public class WeasisWin {
 
   /** URL of the issue tracker opened by "Submit bug report"; the menu item is off when empty. */
   private static final String P_REPORT_URL = "weasis.help.report"; // NON-NLS
+
+  /** Addis Ortho's download page (Help, Download page); the menu item is off when empty. */
+  private static final String P_DOWNLOAD_URL = "addisortho.help.download"; // NON-NLS
+
+  /** Addis Ortho's support channel (Help, Support (Telegram)); the menu item is off when empty. */
+  private static final String P_SUPPORT_URL = "addisortho.help.support"; // NON-NLS
 
   public static final List<String> functions = List.of("info", "ui"); // NON-NLS
 
@@ -294,11 +308,13 @@ public class WeasisWin {
     scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
     scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER);
     scrollPane.setBorder(null);
-    rootPaneContainer.getContentPane().add(scrollPane, BorderLayout.NORTH);
+    rootPaneContainer
+        .getContentPane()
+        .add(brandedToolbar(scrollPane, toolbarContainer), BorderLayout.NORTH);
 
     rootPaneContainer.setGlassPane(AppProperties.glassPane);
 
-    frame.setTitle(AppProperties.WEASIS_NAME + " v" + AppProperties.WEASIS_VERSION); // NON-NLS
+    frame.setTitle(AppProperties.WEASIS_NAME + " v" + AppProperties.AO_VERSION); // NON-NLS
 
     LogoIcon logoIcon =
         AppProperties.WEASIS_NAME.endsWith("Dicomizer") // NON-NLS
@@ -319,9 +335,28 @@ public class WeasisWin {
       }
     }
 
-    if (!taskBarIcon) frame.setIconImage(imageIcon.getImage());
+    // Windows has no taskbar icon API: the taskbar shows the window's own icon. Give it real
+    // pictures at the sizes Windows uses (16 to 256 px); the lazily drawn SVG image alone showed
+    // a blank taskbar button there.
+    if (!taskBarIcon) frame.setIconImages(windowIconImages(logoIcon));
 
     DesktopAdapter.buildDesktopMenu(this);
+  }
+
+  private static List<Image> windowIconImages(LogoIcon logoIcon) {
+    List<Image> images = new ArrayList<>();
+    for (int size : new int[] {16, 20, 24, 32, 40, 48, 64, 128, 256}) {
+      FlatSVGIcon icon = ResourceUtil.getIcon(logoIcon, size, size);
+      BufferedImage image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+      Graphics2D g = image.createGraphics();
+      g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+      // The icon size includes the user interface scale; draw it at exactly size x size.
+      g.scale((double) size / icon.getIconWidth(), (double) size / icon.getIconHeight());
+      icon.paintIcon(null, g, 0, 0);
+      g.dispose();
+      images.add(image);
+    }
+    return images;
   }
 
   public Frame getFrame() {
@@ -401,9 +436,13 @@ public class WeasisWin {
 
     control.addFocusListener(selectionListener);
 
-    rootPaneContainer.getContentPane().add(GuiUtils.getUICore().getBaseArea(), BorderLayout.CENTER);
     // Allow dropping series into the empty main area
     CWorkingArea mainArea = GuiUtils.getUICore().getMainArea();
+    rootPaneContainer
+        .getContentPane()
+        .add(
+            new JLayer<>(GuiUtils.getUICore().getBaseArea(), new WelcomeLayerUI(mainArea)),
+            BorderLayout.CENTER);
     mainArea.getComponent().setTransferHandler(new SeriesHandler());
     mainArea.setLocation(CLocation.base().normalRectangle(0, 0, 1, 1));
     mainArea.setVisible(true);
@@ -415,6 +454,24 @@ public class WeasisWin {
     if (updateRelease && showDownloadRelease && getConfiguredUrl(P_UPDATE_URL) != null) {
       CompletableFuture.runAsync(() -> checkReleaseUpdate(frame));
     }
+  }
+
+  /**
+   * Draws a hairline under the toolbar and, on macOS, puts the Addis Ortho mark at its left, as
+   * tall as the buttons of {@code buttonRow}: there the menu bar is in the screen and the title bar
+   * is native. On other systems FlatLaf already shows the mark in the title bar.
+   */
+  private static JComponent brandedToolbar(JComponent toolbar, JComponent buttonRow) {
+    JPanel north = new JPanel(new BorderLayout());
+    north.add(toolbar, BorderLayout.CENTER);
+    north.add(new JSeparator(), BorderLayout.SOUTH);
+    if (SystemInfo.isMacOS) {
+      JPanel west = new JPanel(new FlowLayout(FlowLayout.LEADING, 0, 0));
+      west.setOpaque(false);
+      west.add(new BrandMark(buttonRow));
+      north.add(west, BorderLayout.WEST);
+    }
+    return north;
   }
 
   HashMap<MediaSeriesGroup, List<MediaSeries<?>>> getSeriesByEntry(
@@ -812,6 +869,8 @@ public class WeasisWin {
       websiteMenuItem.addActionListener(e -> openBrowser(websiteMenuItem, onlineHelpURL));
       helpMenuItem.add(websiteMenuItem);
     }
+    addLinkItem(helpMenuItem, "WeasisWin.download", P_DOWNLOAD_URL); // NON-NLS
+    addLinkItem(helpMenuItem, "WeasisWin.support", P_SUPPORT_URL); // NON-NLS
     helpMenuItem.add(new JSeparator());
 
     if (getConfiguredUrl(P_UPDATE_URL) != null) {
@@ -926,6 +985,15 @@ public class WeasisWin {
   }
 
   /** Returns the trimmed value of a URL property, or null when it is missing or empty. */
+  private void addLinkItem(JMenu menu, String messageKey, String urlKey) {
+    String url = getConfiguredUrl(urlKey);
+    if (url != null) {
+      JMenuItem item = new JMenuItem(Messages.getString(messageKey));
+      item.addActionListener(_ -> openBrowser(item, url));
+      menu.add(item);
+    }
+  }
+
   private static String getConfiguredUrl(String key) {
     String value = GuiUtils.getUICore().getSystemPreferences().getProperty(key);
     return StringUtil.hasText(value) ? value.trim() : null;
@@ -1417,10 +1485,10 @@ public class WeasisWin {
     Option opt = Options.compile(usage).parse(argv);
 
     if (opt.isSet("version")) {
-      System.out.println(AppProperties.WEASIS_VERSION);
+      System.out.println(AppProperties.AO_VERSION);
     } else if (opt.isSet("all")) { // NON-NLS
       PrintStream out = System.out;
-      out.println("  " + AppProperties.WEASIS_NAME + " " + AppProperties.WEASIS_VERSION);
+      out.println("  " + AppProperties.WEASIS_NAME + " " + AppProperties.AO_VERSION);
       out.println("  Installation path: " + AppProperties.WEASIS_PATH); // NON-NLS
       out.println("  Path for temporary files: " + AppProperties.APP_TEMP_DIR); // NON-NLS
       out.println("  Profile: " + AppProperties.WEASIS_PROFILE); // NON-NLS

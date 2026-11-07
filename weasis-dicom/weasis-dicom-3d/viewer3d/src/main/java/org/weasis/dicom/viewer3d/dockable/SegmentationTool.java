@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.dockable;
 
 import bibliothek.gui.dock.common.CLocation;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
@@ -74,6 +76,8 @@ public class SegmentationTool extends PluginTool implements SeriesViewerListener
     NONE(Messages.getString("segmentation.none")),
     SEG_ONLY(Messages.getString("segmentation.only")),
     SEG_OVERLAY(Messages.getString("segmentation.overlay")),
+    /** The CT itself, shown only inside the visible segments and tinted in their colours. */
+    BONES(Messages.getString("segmentation.bones")),
     SEG_MASK_INCLUDE(Messages.getString("segmentation.mask.include")),
     SEG_MASK_EXCLUDE(Messages.getString("segmentation.mask.exclude"));
 
@@ -99,6 +103,8 @@ public class SegmentationTool extends PluginTool implements SeriesViewerListener
   private final DefaultMutableTreeNode rootNodeStructures =
       new DefaultMutableTreeNode("rootNode", true); // NON-NLS
   private final Map<GroupTreeNode, SpecialElementRegion> segNodeMap = new LinkedHashMap<>();
+  private final JCheckBox smoothSurfaces =
+      new JCheckBox(Messages.getString("segmentation.smooth"), true);
 
   public SegmentationTool() {
     super(BUTTON_NAME, Insertable.Type.TOOL, 30);
@@ -197,6 +203,9 @@ public class SegmentationTool extends PluginTool implements SeriesViewerListener
               combo.setMaximumRowCount(10);
               panel.add(GuiUtils.getHorizontalBoxLayoutPanel(5, label, combo));
             });
+    smoothSurfaces.setToolTipText(Messages.getString("segmentation.smooth.tip"));
+    smoothSurfaces.addActionListener(_ -> setSmoothSurfaces(smoothSurfaces.isSelected()));
+    panel.add(GuiUtils.getFlowLayoutPanel(smoothSurfaces));
     JButton showAll =
         new JButton(org.weasis.dicom.viewer2d.Messages.getString("show.all")); // NON-NLS
     showAll.addActionListener(_ -> setAllSegVisible(true));
@@ -206,6 +215,19 @@ public class SegmentationTool extends PluginTool implements SeriesViewerListener
     panel.add(GuiUtils.getFlowLayoutPanel(showAll, hideAll));
     panel.add(GuiUtils.boxVerticalStrut(gabY));
     add(panel, BorderLayout.SOUTH);
+  }
+
+  /** Applies the smooth surfaces option to every 3D view of the selected viewer. */
+  private void setSmoothSurfaces(boolean smooth) {
+    ImageViewerPlugin<DicomImageElement> container =
+        EventManager.getInstance().getSelectedView2dContainer();
+    if (container != null) {
+      for (ViewCanvas<DicomImageElement> v : container.getImagePanels()) {
+        if (v instanceof View3d view3d) {
+          view3d.setSegSmooth(smooth);
+        }
+      }
+    }
   }
 
   /** Checks or unchecks every segmentation node at once and refreshes the views. */
@@ -426,7 +448,11 @@ public class SegmentationTool extends PluginTool implements SeriesViewerListener
   public void changingViewContentEvent(SeriesViewerEvent event) {
     EVENT e = event.getEventType();
     if (EVENT.SELECT_VIEW.equals(e) && event.getSeriesViewer() instanceof ImageViewerPlugin) {
-      initTreeValues(((ImageViewerPlugin<?>) event.getSeriesViewer()).getSelectedViewCanvas());
+      ViewCanvas<?> view = ((ImageViewerPlugin<?>) event.getSeriesViewer()).getSelectedViewCanvas();
+      initTreeValues(view);
+      if (view instanceof View3d view3d) {
+        smoothSurfaces.setSelected(view3d.isSegSmooth());
+      }
     }
   }
 

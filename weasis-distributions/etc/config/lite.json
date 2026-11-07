@@ -20,7 +20,7 @@
     {
       "code": "felix.auto.start.110",
       "value": "",
-      "description": "REMOVE - DICOM send, Q/R and ISO writer"
+      "description": "REMOVE - DICOM send, Q/R, ISO writer, templating, stitching and the receiver"
     },
     {
       "code": "felix.auto.start.115",
@@ -36,6 +36,11 @@
       "code": "felix.auto.install.121",
       "value": "",
       "description": "REMOVE - JOGL native package"
+    },
+    {
+      "code": "felix.auto.start.125",
+      "value": "",
+      "description": "REMOVE - 3D bones"
     },
     {
       "code": "weasis.name",

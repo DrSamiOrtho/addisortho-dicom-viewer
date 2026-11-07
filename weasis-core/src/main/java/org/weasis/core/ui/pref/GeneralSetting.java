@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.core.ui.pref;
 
 import java.awt.GridLayout;
@@ -21,6 +22,8 @@ import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.gui.util.PageItem;
 import org.weasis.core.api.service.UICore;
 import org.weasis.core.api.service.WProperties;
+import org.weasis.core.ui.editor.image.ViewTransferHandler;
+import org.weasis.core.ui.util.ToolbarLabels;
 
 public class GeneralSetting extends AbstractItemDialogPage {
   private static final Logger LOGGER = LoggerFactory.getLogger(GeneralSetting.class);
@@ -29,6 +32,11 @@ public class GeneralSetting extends AbstractItemDialogPage {
 
   private final JCheckBox checkboxConfirmClosing =
       new JCheckBox(Messages.getString("GeneralSetting.closingConfirmation"));
+  private final JCheckBox checkboxPictureFooter =
+      new JCheckBox(Messages.getString("GeneralSetting.pictureFooter"));
+
+  private final JCheckBox checkboxToolbarLabels =
+      new JCheckBox("Show text labels under toolbar icons");
 
   private final JPanel menuPanel = new JPanel();
 
@@ -60,6 +68,9 @@ public class GeneralSetting extends AbstractItemDialogPage {
 
   private void jbInit() {
     add(GuiUtils.getFlowLayoutPanel(0, ITEM_SEPARATOR_LARGE, checkboxConfirmClosing));
+    add(GuiUtils.boxVerticalStrut(ITEM_SEPARATOR));
+    add(GuiUtils.getFlowLayoutPanel(0, ITEM_SEPARATOR_LARGE, checkboxToolbarLabels));
+    add(GuiUtils.getFlowLayoutPanel(0, ITEM_SEPARATOR_LARGE, checkboxPictureFooter));
     add(GuiUtils.boxVerticalStrut(BLOCK_SEPARATOR));
 
     add(GuiUtils.boxYLastElement(LAST_FILLER_HEIGHT));
@@ -74,6 +85,8 @@ public class GeneralSetting extends AbstractItemDialogPage {
   protected void initialize() {
     WProperties preferences = GuiUtils.getUICore().getSystemPreferences();
     checkboxConfirmClosing.setSelected(preferences.getBooleanProperty(UICore.CONFIRM_CLOSE, false));
+    checkboxToolbarLabels.setSelected(preferences.getBooleanProperty(ToolbarLabels.PREF_KEY, true));
+    checkboxPictureFooter.setSelected(ViewTransferHandler.isFooterEnabled());
   }
 
   @Override
@@ -85,6 +98,13 @@ public class GeneralSetting extends AbstractItemDialogPage {
     GuiUtils.getUICore()
         .getSystemPreferences()
         .putBooleanProperty(UICore.CONFIRM_CLOSE, checkboxConfirmClosing.isSelected());
+    boolean labels = checkboxToolbarLabels.isSelected();
+    GuiUtils.getUICore().getSystemPreferences().putBooleanProperty(ToolbarLabels.PREF_KEY, labels);
+    ToolbarLabels.setEnabled(labels);
+    GuiUtils.getUICore()
+        .getSystemPreferences()
+        .putBooleanProperty(
+            ViewTransferHandler.P_PICTURE_FOOTER, checkboxPictureFooter.isSelected());
   }
 
   @Override
@@ -92,6 +112,12 @@ public class GeneralSetting extends AbstractItemDialogPage {
     GuiUtils.getUICore()
         .getSystemPreferences()
         .resetProperty(UICore.CONFIRM_CLOSE, Boolean.FALSE.toString());
+    GuiUtils.getUICore()
+        .getSystemPreferences()
+        .resetProperty(ToolbarLabels.PREF_KEY, Boolean.TRUE.toString());
+    GuiUtils.getUICore()
+        .getSystemPreferences()
+        .resetProperty(ViewTransferHandler.P_PICTURE_FOOTER, Boolean.TRUE.toString());
     initialize();
   }
 }

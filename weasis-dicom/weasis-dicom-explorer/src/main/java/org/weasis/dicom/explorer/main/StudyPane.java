@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer.main;
 
 import java.awt.Component;
@@ -24,6 +25,9 @@ import net.miginfocom.swing.MigLayout;
 import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.media.data.MediaSeriesGroup;
 import org.weasis.core.api.media.data.SeriesThumbnail;
+import org.weasis.core.api.media.data.TagW;
+import org.weasis.core.api.media.data.TagW.TagType;
+import org.weasis.dicom.explorer.Messages;
 
 /**
  * A panel component that displays a DICOM study and manages its associated series panes. This
@@ -39,6 +43,10 @@ public class StudyPane extends JPanel {
   private static final int BORDER_INSET = 3; // study pane empty border left/right
   private static final int SEPARATION = 4; // gap kept between the last column and the scrollbar
 
+  /** Number of images received from a modality for this study, shown in the title. */
+  public static final TagW RECEIVED_IMAGES = new TagW("ReceivedImages", TagType.INTEGER);
+
+  private final JLabel receivedLabel = new JLabel();
   private final JPanel subPanel;
   private final MediaSeriesGroup dicomStudy;
   private final TitledBorder titleBorder;
@@ -69,6 +77,8 @@ public class StudyPane extends JPanel {
         BorderFactory.createCompoundBorder(
             GuiUtils.getEmptyBorder(0, BORDER_INSET, 0, BORDER_INSET), titleBorder));
     setFocusable(false);
+    updateReceivedLabel();
+    add(receivedLabel, "hidemode 3");
     add(subPanel, SUB_PANEL_CONSTRAINTS);
     addComponentListener(resizeHandler);
   }
@@ -248,10 +258,21 @@ public class StudyPane extends JPanel {
     return dicomStudy;
   }
 
+  private void updateReceivedLabel() {
+    boolean received = dicomStudy.getTagValue(RECEIVED_IMAGES) instanceof Integer;
+    if (received) {
+      receivedLabel.setText(
+          Messages.getString("received.images")
+              .formatted((Integer) dicomStudy.getTagValue(RECEIVED_IMAGES)));
+    }
+    receivedLabel.setVisible(received);
+  }
+
   /** Updates the title text of this study pane. */
   public void updateText() {
     if (titleBorder != null) {
       titleBorder.setTitle(dicomStudy.toString());
+      updateReceivedLabel();
       repaint();
     }
   }

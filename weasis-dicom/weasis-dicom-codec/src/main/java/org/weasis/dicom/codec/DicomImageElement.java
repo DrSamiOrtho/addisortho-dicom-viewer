@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.codec;
 
 import java.awt.image.RenderedImage;
@@ -576,7 +577,7 @@ public class DicomImageElement extends ImageElement implements DicomElement {
         attributes, adaptTransferSyntax, context.getEditable(), desc, output.toPath())) {
       return attributes;
     } else {
-      LOGGER.error("Cannot export DICOM file: {}", getFileCache().getOriginalFile().orElse(null));
+      LOGGER.error("Cannot export DICOM file");
       return null;
     }
   }

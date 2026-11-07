@@ -88,6 +88,15 @@ public class MprController
   // one whose build was attempted but produced no volume (must not loop rebuilding).
   private final Set<SegSpecialElement> attemptedSegs = new HashSet<>();
   private volatile CompletableFuture<Void> segBuildFuture; // NOSONAR visibility reference
+
+  // Addis Ortho: guards segElements, segVolumes and attemptedSegs, which a build publishes together
+  // so a reader never pairs a SEG with another SEG's volume.
+  private final Object segLock = new Object();
+
+  // Addis Ortho: only the latest build publishes; an older one still running when it ends is
+  // dropped.
+  private final java.util.concurrent.atomic.AtomicInteger segGeneration =
+      new java.util.concurrent.atomic.AtomicInteger();
   private volatile boolean segBuilding;
   private final MprAxis axial;
   private final MprAxis coronal;
@@ -175,12 +184,33 @@ public class MprController
     axesControl.reset();
   }
 
+  /** A copy of the SEGs whose volumes are built, in the order of {@link #getSegVolumes()}. */
   public List<SegSpecialElement> getSegElements() {
-    return segElements;
+    synchronized (segLock) {
+      return new ArrayList<>(segElements);
+    }
   }
 
+  /** A copy of the built SEG volumes. */
   public List<SegmentationVolume> getSegVolumes() {
-    return segVolumes;
+    synchronized (segLock) {
+      return new ArrayList<>(segVolumes);
+    }
+  }
+
+  /** A SEG with its volume resampled on this controller's image volume. */
+  public record BuiltSeg(SegSpecialElement seg, SegmentationVolume volume) {}
+
+  /** The built SEGs with their volumes, taken together so that each pair matches. */
+  public List<BuiltSeg> getBuiltSegs() {
+    synchronized (segLock) {
+      List<BuiltSeg> built = new ArrayList<>(segElements.size());
+      int n = Math.min(segElements.size(), segVolumes.size());
+      for (int i = 0; i < n; i++) {
+        built.add(new BuiltSeg(segElements.get(i), segVolumes.get(i)));
+      }
+      return built;
+    }
   }
 
   /**
@@ -201,18 +231,16 @@ public class MprController
    * volume is built with {@code (done, total)}.
    */
   private void buildSegElements(BiConsumer<Integer, Integer> progress) {
-    disposeSegVolumes();
-    segElements.clear();
-    attemptedSegs.clear();
+    int generation = segGeneration.incrementAndGet();
 
     // Only currently-visible SEGs are worth the expensive resample; hidden ones are built on
     // demand.
     List<SegSpecialElement> elements =
         collectRelatedSegs().stream().filter(SegSpecialElement::isVisible).toList();
     if (elements.isEmpty()) {
+      publishSegs(generation, elements, List.of());
       return;
     }
-    attemptedSegs.addAll(elements);
 
     // Per-segment work is independent and CPU-bound, but a study can hold dozens of SEG files and
     // each build allocates a full image-grid raster: go through the global SEG budget rather than
@@ -245,10 +273,33 @@ public class MprController
               }
             });
 
+    List<BuiltSeg> pairs = new ArrayList<>(built.size());
     for (SegPair p : built) {
-      segElements.add(p.seg());
-      segVolumes.add(p.vol());
-      p.vol().retain(); // MprController holds one consumer reference per entry in segVolumes
+      pairs.add(new BuiltSeg(p.seg(), p.vol()));
+    }
+    publishSegs(generation, elements, pairs);
+  }
+
+  /**
+   * Addis Ortho: makes {@code built} the SEG volumes of this controller in one step, unless a newer
+   * build started meanwhile: building into the shared lists let a reader pair a SEG with another
+   * SEG's volume, and an older build finishing late overwrite a newer one.
+   */
+  private void publishSegs(
+      int generation, List<SegSpecialElement> attempted, List<BuiltSeg> built) {
+    synchronized (segLock) {
+      if (generation != segGeneration.get()) {
+        return; // superseded: the newer build publishes its own
+      }
+      disposeSegVolumes();
+      segElements.clear();
+      attemptedSegs.clear();
+      attemptedSegs.addAll(attempted);
+      for (BuiltSeg p : built) {
+        segElements.add(p.seg());
+        segVolumes.add(p.volume());
+        p.volume().retain(); // one consumer reference per entry in segVolumes
+      }
     }
   }
 
@@ -268,6 +319,11 @@ public class MprController
     }
     List<SegSpecialElement> elements =
         HiddenSeriesManager.getHiddenElementsFromPatient(SegSpecialElement.class, patientPseudoUID);
+    // Addis Ortho: a SEG file that live labels stand for is drawn from those labels instead.
+    elements =
+        elements.stream()
+            .filter(e -> !org.weasis.dicom.codec.seg.LiveSegmentation.isReplaced(e))
+            .toList();
     return elements.isEmpty() ? List.of() : filterSegsForCurrentSeries(elements);
   }
 
