@@ -78,14 +78,26 @@ final class ImagePanel extends JPanel {
     g2.dispose();
   }
 
-  /** A grey picture from values in 0..1 (NaN dark blue: masked or outside the piece). */
+  /** A grey picture from values in 0..1, black where there is no picture (NaN), as saved. */
   static BufferedImage gray(float[] v, int w, int h) {
+    return gray(v, w, h, 0x000000);
+  }
+
+  /**
+   * As {@link #gray(float[], int, int)}, with NaN dark blue: for the seam editor's overlap, where
+   * "no data" and "no difference" must be told apart.
+   */
+  static BufferedImage grayMarked(float[] v, int w, int h) {
+    return gray(v, w, h, 0x101830);
+  }
+
+  private static BufferedImage gray(float[] v, int w, int h, int nanRgb) {
     BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
     for (int i = 0; i < v.length; i++) {
       float f = v[i];
       int rgb;
       if (Float.isNaN(f)) {
-        rgb = 0x101830;
+        rgb = nanRgb;
       } else {
         int g = (int) Math.max(0, Math.min(255, f * 255));
         rgb = (g << 16) | (g << 8) | g;

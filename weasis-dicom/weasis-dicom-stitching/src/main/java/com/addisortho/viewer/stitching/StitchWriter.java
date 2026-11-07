@@ -15,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -35,7 +36,8 @@ import org.dcm4che3.util.UIDUtils;
  */
 final class StitchWriter {
 
-  static final String SOFTWARE = "Addis Ortho Viewer long-leg stitch 0.1 (phase 1, draft)";
+  // 0.2: gates measured against the bone, the two-legs check, padding 0 (7 Nov 2026)
+  static final String SOFTWARE = "Addis Ortho Viewer long-leg stitch 0.2 (draft)";
   static final String PRIVATE_CREATOR = "ADDIS ORTHO STITCH 1";
   static final int PRIVATE_DATA = 0x00711001;
   static final int SERIES_NUMBER = 903;
@@ -101,7 +103,9 @@ final class StitchWriter {
     a.setString(Tag.ContentTime, VR.TM, time);
     a.setString(Tag.InstanceCreationDate, VR.DA, now);
     a.setString(Tag.InstanceCreationTime, VR.TM, time);
+    a.setString(Tag.Manufacturer, VR.LO, "Addis Ortho Trading PLC"); // Type 2, General Equipment
     a.setString(Tag.SecondaryCaptureDeviceManufacturer, VR.LO, "Addis Ortho Trading PLC");
+    lossy(s, a);
     a.setString(Tag.SecondaryCaptureDeviceSoftwareVersions, VR.LO, SOFTWARE);
     a.setString(Tag.ImageComments, VR.LT, String.join(" ", s.labelLines()));
 
@@ -124,13 +128,11 @@ final class StitchWriter {
       if (magnified) {
         a.setString(Tag.PixelSpacingCalibrationType, VR.CS, "GEOMETRY");
       }
+      // LO holds 64 characters: the basis's long words were cut off before "not calibrated"
       a.setString(
           Tag.PixelSpacingCalibrationDescription,
           VR.LO,
-          trim(
-              s.pieces.get(0).spacing.basis().words
-                  + "; not calibrated to the patient plane; stitched draft",
-              64));
+          "Stitched draft; piece 1's spacing; not at the patient plane");
     }
 
     copyIfAllAgree(s, a, Tag.PatientOrientation, VR.CS);
@@ -258,6 +260,31 @@ final class StitchWriter {
           .append('}');
     }
     return sb.append("]}").toString();
+  }
+
+  /** LossyImageCompression is Type 1C: 01 when any piece was lossy, with its ratios and methods. */
+  private static void lossy(Stitch s, Attributes a) {
+    List<String> ratios = new ArrayList<>();
+    List<String> methods = new ArrayList<>();
+    boolean any = false;
+    for (Piece p : s.pieces) {
+      if ("01".equals(p.header.getString(Tag.LossyImageCompression))) {
+        any = true;
+        String[] r = p.header.getStrings(Tag.LossyImageCompressionRatio);
+        String[] m = p.header.getStrings(Tag.LossyImageCompressionMethod);
+        if (r != null && m != null && r.length == m.length) {
+          ratios.addAll(Arrays.asList(r));
+          methods.addAll(Arrays.asList(m));
+        }
+      }
+    }
+    if (any) {
+      a.setString(Tag.LossyImageCompression, VR.CS, "01");
+      if (!ratios.isEmpty()) {
+        a.setString(Tag.LossyImageCompressionRatio, VR.DS, ratios.toArray(String[]::new));
+        a.setString(Tag.LossyImageCompressionMethod, VR.CS, methods.toArray(String[]::new));
+      }
+    }
   }
 
   private static void copyIfAllAgree(Stitch s, Attributes a, int tag, VR vr) {

@@ -57,6 +57,79 @@ class SeamMatcherTest {
     assertRecovers(Phantom.truth(upper, lower), seam, W / 2, 40);
   }
 
+  /**
+   * A single leg on a 427 mm wide plate (the hospital's DR panel), texture on the bone only and the
+   * overlap over the knee: the matched points can only span the bone, so the spread and hold-out
+   * gates must be measured against the bone, not the film (the 7 Nov 2026 case).
+   */
+  @Test
+  void matchesASingleLegInAWideFilm() {
+    double w = 427;
+    double h = 356;
+    Phantom leg = Phantom.singleLeg(w, 900, 150, 21);
+    var upper = new Phantom.Cut(new Rigid(Math.toRadians(0.3), 0, 140), w, h, 0.139, 1.0, 0);
+    var lower = new Phantom.Cut(new Rigid(Math.toRadians(-0.4), 3, 420), w, h, 0.139, 1.3, -0.2);
+    for (double noise : new double[] {0.02, 0.04}) {
+      Seam seam =
+          SeamMatcher.match(
+              leg.matchImage(upper, noise, 31),
+              leg.matchImage(lower, noise, 32),
+              SeamMatcher.Band.WHOLE);
+      assertEquals(
+          Seam.Status.CHECK, seam.status(), noise + ": " + String.join("; ", seam.reasons()));
+      assertRecovers(Phantom.truth(upper, lower), seam, 150, 320);
+    }
+  }
+
+  /** Target leg Both: two legs that moved alike give one seam, and the check says they agree. */
+  @Test
+  void bothLegsThatAgreeGiveOneSeam() {
+    double w = 427;
+    double h = 356;
+    Phantom legs = Phantom.twoLegs(w, 900, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lower = new Phantom.Cut(new Rigid(Math.toRadians(0.3), 2, 280), w, h, 0.139, 1.2, 0);
+    Seam seam =
+        SeamMatcher.matchBothLegs(
+            legs.matchImage(upper, 0.02, 43), legs.matchImage(lower, 0.02, 44));
+    assertEquals(Seam.Status.CHECK, seam.status(), String.join("; ", seam.reasons()));
+    assertTrue(seam.reasons().get(0).contains("within the limits"), seam.reasons().get(0));
+    assertRecovers(Phantom.truth(upper, lower), seam, w / 2, 320);
+  }
+
+  /** Target leg Both: the right leg sits 3 mm lower in the second film (parallax): refused. */
+  @Test
+  void bothLegsThatDisagreeAreRefused() {
+    double w = 427;
+    double h = 356;
+    Phantom legs = Phantom.twoLegs(w, 900, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lowerLeft = new Phantom.Cut(Rigid.shift(2, 280), w, h, 0.139, 1, 0);
+    var lowerRight = new Phantom.Cut(Rigid.shift(2, 277), w, h, 0.139, 1, 0);
+    Seam seam =
+        SeamMatcher.matchBothLegs(
+            legs.matchImage(upper, 0.02, 45),
+            legs.splicedMatchImage(lowerLeft, lowerRight, 0.02, 46));
+    assertEquals(Seam.Status.FAILED, seam.status(), String.join("; ", seam.reasons()));
+    assertTrue(seam.reasons().get(0).contains("parallax"), seam.reasons().get(0));
+  }
+
+  /** The same leg with the overlap on bare shaft, no texture there: still refused. */
+  @Test
+  void refusesASingleLegShaftOverlap() {
+    double w = 427;
+    double h = 356;
+    Phantom shaft = Phantom.shaftOnly(w, 900);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lower = new Phantom.Cut(Rigid.shift(0, 290), w, h, 0.139, 1, 0);
+    Seam seam =
+        SeamMatcher.match(
+            shaft.matchImage(upper, 0.02, 33),
+            shaft.matchImage(lower, 0.02, 34),
+            SeamMatcher.Band.WHOLE);
+    assertEquals(Seam.Status.FAILED, seam.status(), seam.summary());
+  }
+
   @Test
   void refusesAShaftOnlyOverlap() {
     Phantom shaft = Phantom.shaftOnly(300, 900);

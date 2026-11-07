@@ -418,6 +418,20 @@ automatic, semi-automatic or manual, and not reviewed.
   excluded from the match automatically (a brightness filter stands in for "on bone"); no seam-aware uncertainty in the
   templating page; no 4GB edition memory and time benchmark on a real 4 GB PC yet; the VOI LUT curve is not reproduced. Not tested inside the running viewer yet:
   the window was driven from code with synthetic phantom pieces.
+- 7 Nov 2026, stitch 0.2, after Sami's first real four-piece standing film failed every seam (reviews by Fable and
+  Kimi, `~/Documents/kimi/workspace/REVIEW-KIMI-2026-11-07-stitch-seams.md`). The spread gate and the hold-out regions
+  were measured against the film's width, so one leg on the 427 mm panel could never pass; they are now measured
+  against where points matched (with a 20 mm floor). Up to three rough positions are refined on structure and the
+  fit is re-matched once so rotation is followed; a rough match that is ambiguous now fails only when another
+  position is about as well supported (70 % of the points, more than 2 mm away). Patch search is +/- 10 mm on a
+  4 mm step, with a test that rejects a patch that could slide. Gradients are clipped at the 95th percentile and the
+  flat-region mask grows by 4 mm. Leg Both on the whole width also matches each half and fails the seam when the
+  legs need different shifts (over 1.5 mm or 0.3 deg: parallax or movement). The acceptance thresholds are
+  unchanged (Kimi); Fable's case for rotation uncertainty 0.3 deg waits for real cases. Empty areas are saved as 0
+  (padding 0, pixels from 1), so viewers that ignore padding show black, not white; the preview is black, blue
+  stays only in the seam editor's difference view. The header gains Manufacturer and LossyImageCompression, and a
+  calibration description that fits in 64 characters. Hovering a seam's notes shows every reason. Not yet tested on
+  the real study or in the running viewer; the templating page still does not read the seam data.
 
 ## Shortcuts (6 Nov 2026)
 

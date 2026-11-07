@@ -124,7 +124,9 @@ class StitchWriterTest {
         read.getString(Tag.PixelSpacingCalibrationType), "PixelSpacing as stated is not GEOMETRY");
     assertEquals("LEG", read.getString(Tag.BodyPartExamined));
     assertEquals("NO", read.getString(Tag.BurnedInAnnotation));
-    assertEquals(65535, read.getInt(Tag.PixelPaddingValue, 0));
+    assertEquals(
+        0, read.getInt(Tag.PixelPaddingValue, -1), "empty areas black, also without padding");
+    assertEquals("Addis Ortho Trading PLC", read.getString(Tag.Manufacturer));
     assertEquals(
         "113090", read.getNestedDataset(Tag.DerivationCodeSequence).getString(Tag.CodeValue));
     assertEquals(3, read.getSequence(Tag.SourceImageSequence).size());
@@ -152,13 +154,11 @@ class StitchWriterTest {
     for (int r = 200; r < rows - 200; r += 7) {
       for (int c = cols / 4; c < cols * 3 / 4; c += 5) {
         int v = px.get(r * cols + c) & 0xffff;
-        if (v == 65535) {
-          continue;
-        }
         double[] q =
             frameToCanvas.apply(c0.originX + (c + 0.5) * 0.3, c0.originY + (r + 0.5) * 0.3);
         float truth = b.phantom().canvas.sample(q[0], q[1]);
         if (!Float.isNaN(truth)) {
+          assertTrue(v != 0, "a real pixel is never stored as the padding value");
           pairs.add(new double[] {truth, v});
         }
       }

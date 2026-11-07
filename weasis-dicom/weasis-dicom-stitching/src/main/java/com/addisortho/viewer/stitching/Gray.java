@@ -187,6 +187,44 @@ record Gray(int width, int height, double mm, float[] data) {
     return new Gray(width, height, mm, out);
   }
 
+  /**
+   * Values above the given percentile of the finite values set to it: a metal implant, shutter or
+   * lead-marker edge then weighs no more than a strong cortex edge in the correlation.
+   */
+  Gray clippedAbove(double percentile) {
+    float[] finite = finiteValues();
+    float[] out = data.clone();
+    if (finite.length == 0) {
+      return new Gray(width, height, mm, out);
+    }
+    Arrays.sort(finite);
+    float top = finite[Math.min(finite.length - 1, (int) (finite.length * percentile))];
+    for (int i = 0; i < out.length; i++) {
+      if (out[i] > top) {
+        out[i] = top;
+      }
+    }
+    return new Gray(width, height, mm, out);
+  }
+
+  /** NaN spread by {@code cells} in every direction: the edge of a shutter or film border goes. */
+  Gray dilateNaN(int cells) {
+    float[] out = data.clone();
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        if (!Float.isNaN(data[y * width + x])) {
+          continue;
+        }
+        for (int j = Math.max(0, y - cells); j <= Math.min(height - 1, y + cells); j++) {
+          for (int i = Math.max(0, x - cells); i <= Math.min(width - 1, x + cells); i++) {
+            out[j * width + i] = Float.NaN;
+          }
+        }
+      }
+    }
+    return new Gray(width, height, mm, out);
+  }
+
   /** Separable area weights from a source axis to a target axis, both starting at 0 mm. */
   private record Weights(int[] first, int[] last, float[][] w) {
 

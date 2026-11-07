@@ -20,7 +20,7 @@ import java.util.Locale;
  * @param shiftSigmaMm one-sigma shift uncertainty at the matched points' centre
  * @param scale the scale a similarity fit would give (a check, not applied)
  * @param uniqueness best coarse correlation peak over the best one outside its basin
- * @param holdoutMm median residual of the held-back patches
+ * @param holdoutMm worst residual of the held-back patches
  * @param pairs the point pairs the fit used (matched patches or the user's clicks)
  * @param reasons why the seam is "check" or "failed", in words for the user
  */

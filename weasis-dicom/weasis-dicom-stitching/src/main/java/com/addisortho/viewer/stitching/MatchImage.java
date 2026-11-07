@@ -26,6 +26,12 @@ record MatchImage(Gray coarse, Gray coarseGrad, Gray fine, Gray fineGrad) {
   /** Flat-region threshold on the 2 mm grid, as a fraction of the 0..1 range. */
   private static final double FLAT_STD = 0.0015;
 
+  /** Cells (2 mm each) the flat mask grows by. */
+  private static final int MASK_GROW_CELLS = 2;
+
+  /** Gradient magnitude is clipped at this percentile so metal edges do not dominate. */
+  private static final double GRADIENT_CLIP = 0.95;
+
   /**
    * @param values modality values, row-major
    * @param colMm horizontal pixel size in mm
@@ -40,7 +46,12 @@ record MatchImage(Gray coarse, Gray coarseGrad, Gray fine, Gray fineGrad) {
         v[i] = -values[i];
       }
     }
-    Gray coarse = Gray.resample(v, w, h, colMm, rowMm, COARSE_MM).normalized().maskFlat(FLAT_STD);
+    // the masked border grows by 4 mm so a shutter or film edge cannot be what matches
+    Gray coarse =
+        Gray.resample(v, w, h, colMm, rowMm, COARSE_MM)
+            .normalized()
+            .maskFlat(FLAT_STD)
+            .dilateNaN(MASK_GROW_CELLS);
     Gray fine = Gray.resample(v, w, h, colMm, rowMm, FINE_MM).normalized();
     float[] f = fine.data();
     for (int y = 0; y < fine.height(); y++) {
@@ -50,7 +61,11 @@ record MatchImage(Gray coarse, Gray coarseGrad, Gray fine, Gray fineGrad) {
         }
       }
     }
-    return new MatchImage(coarse, coarse.gradientMagnitude(), fine, fine.gradientMagnitude());
+    return new MatchImage(
+        coarse,
+        coarse.gradientMagnitude().clippedAbove(GRADIENT_CLIP),
+        fine,
+        fine.gradientMagnitude().clippedAbove(GRADIENT_CLIP));
   }
 
   double widthMm() {

@@ -234,7 +234,7 @@ final class SeamEditor extends JDialog {
         }
       }
     }
-    aligned.setImage(ImagePanel.gray(v, w, h), null);
+    aligned.setImage(ImagePanel.grayMarked(v, w, h), null);
   }
 
   private void renderPairs() {

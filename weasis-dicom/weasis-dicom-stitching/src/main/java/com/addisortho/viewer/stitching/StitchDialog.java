@@ -250,6 +250,21 @@ final class StitchDialog extends JDialog {
     pieceTable.getColumnModel().getColumn(2).setPreferredWidth(300);
     pieceTable.getColumnModel().getColumn(3).setPreferredWidth(240);
     seamTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+    // the notes column is cut short; the full reasons, one per line, show on hover
+    seamTable
+        .getColumnModel()
+        .getColumn(5)
+        .setCellRenderer(
+            new DefaultTableCellRenderer() {
+              @Override
+              public java.awt.Component getTableCellRendererComponent(
+                  JTable t, Object value, boolean sel, boolean focus, int row, int col) {
+                super.getTableCellRendererComponent(t, value, sel, focus, row, col);
+                setToolTipText(row < seams.size() ? reasonsHtml(seams.get(row)) : null);
+                return this;
+              }
+            });
+    seamTable.getColumnModel().getColumn(5).setPreferredWidth(360);
 
     up.addActionListener(e -> moveSelected(-1));
     down.addActionListener(e -> moveSelected(1));
@@ -462,6 +477,7 @@ final class StitchDialog extends JDialog {
   private void lineUp() {
     List<Piece> pieces = ticked();
     SeamMatcher.Band on = (SeamMatcher.Band) band.getSelectedItem();
+    boolean bothLegs = leg.getSelectedItem() == Stitch.Leg.BOTH && on == SeamMatcher.Band.WHOLE;
     int job = generation;
     running =
         new SwingWorker<List<Seam>, String>() {
@@ -487,7 +503,12 @@ final class StitchDialog extends JDialog {
               publish(
                   Messages.getString("StitchDialog.matching").formatted(i + 1, pieces.size() - 1));
               setProgress(100 * (pieces.size() + i) / (2 * pieces.size() - 1));
-              out.add(SeamMatcher.match(pieces.get(i).match(), pieces.get(i + 1).match(), on));
+              MatchImage up = pieces.get(i).match();
+              MatchImage down = pieces.get(i + 1).match();
+              out.add(
+                  bothLegs
+                      ? SeamMatcher.matchBothLegs(up, down)
+                      : SeamMatcher.match(up, down, on));
             }
             return out;
           }
@@ -708,6 +729,16 @@ final class StitchDialog extends JDialog {
       rows.get(r).use = Boolean.TRUE.equals(v);
       discardSeams();
     }
+  }
+
+  private static String reasonsHtml(Seam s) {
+    StringBuilder b = new StringBuilder("<html><body style='width:420px'>");
+    for (String r : s.reasons()) {
+      b.append("&bull; ")
+          .append(r.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+          .append("<br>");
+    }
+    return b.append("</body></html>").toString();
   }
 
   private final class SeamModel extends AbstractTableModel {

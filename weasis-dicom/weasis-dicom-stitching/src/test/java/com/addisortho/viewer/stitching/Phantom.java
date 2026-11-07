@@ -55,6 +55,53 @@ final class Phantom {
     return new Phantom(g);
   }
 
+  /**
+   * One leg in a wide film, as on a real single-leg plate: a bone about 30 mm wide with a flare
+   * (condyles) mid-height, soft tissue around it, and texture on the bone only, none on skin or
+   * background. The matched points can then only lie on the bone, a small part of the film.
+   */
+  static Phantom singleLeg(double widthMm, double heightMm, double legX, long seed) {
+    Gray g = Gray.blank((int) (widthMm / MM), (int) (heightMm / MM), MM);
+    java.util.Arrays.fill(g.data(), 0.1f);
+    drawLeg(g, heightMm, legX, new Random(seed));
+    return new Phantom(g);
+  }
+
+  /** Two such legs in one film, as on a bilateral standing plate. */
+  static Phantom twoLegs(double widthMm, double heightMm, double leftX, double rightX, long seed) {
+    Gray g = Gray.blank((int) (widthMm / MM), (int) (heightMm / MM), MM);
+    java.util.Arrays.fill(g.data(), 0.1f);
+    Random rnd = new Random(seed);
+    drawLeg(g, heightMm, leftX, rnd);
+    drawLeg(g, heightMm, rightX, rnd);
+    return new Phantom(g);
+  }
+
+  private static void drawLeg(Gray g, double heightMm, double legX, Random rnd) {
+    float[] d = g.data();
+    double[] boneHalf = new double[g.height()];
+    double[] centre = new double[g.height()];
+    for (int y = 0; y < g.height(); y++) {
+      double ym = (y + 0.5) * MM;
+      double half = 55 + 10 * Math.sin(ym / 180);
+      boneHalf[y] = 15 + 12 * Math.exp(-Math.pow((ym - heightMm / 2) / 40, 2));
+      centre[y] = legX + 6 * Math.sin(ym / 300);
+      for (int x = 0; x < g.width(); x++) {
+        double r = Math.abs((x + 0.5) * MM - centre[y]);
+        double v = 0.3 * smoothStep(half - r);
+        v += 0.4 * smoothStep(boneHalf[y] - r) * (0.8 + 0.2 * Math.cos(r / boneHalf[y] * Math.PI));
+        d[y * g.width() + x] += (float) v;
+      }
+    }
+    int blobs = (int) (heightMm * 40 / 6);
+    for (int k = 0; k < blobs; k++) {
+      double ym = rnd.nextDouble() * heightMm;
+      int row = Math.min(g.height() - 1, (int) (ym / MM));
+      double xm = centre[row] + (rnd.nextDouble() * 2 - 1) * boneHalf[row] * 0.9;
+      splat(g, xm, ym, 0.5 + rnd.nextDouble() * 1.5, (rnd.nextDouble() - 0.5) * 0.25);
+    }
+  }
+
   /** Bones and soft tissue only: straight vertical edges, nothing to fix a vertical shift. */
   static Phantom shaftOnly(double widthMm, double heightMm) {
     Gray g = Gray.blank((int) (widthMm / MM), (int) (heightMm / MM), MM);
@@ -105,6 +152,21 @@ final class Phantom {
     int w = (int) Math.round(c.widthMm / c.spacingMm);
     int h = (int) Math.round(c.heightMm / c.spacingMm);
     return MatchImage.of(piece(c, noise, seed), w, h, c.spacingMm, c.spacingMm, false);
+  }
+
+  /**
+   * A piece whose left half is cut through {@code left} and right half through {@code right}: the
+   * two legs moved differently between exposures, as parallax or movement does.
+   */
+  MatchImage splicedMatchImage(Cut left, Cut right, double noise, long seed) {
+    int w = (int) Math.round(left.widthMm / left.spacingMm);
+    int h = (int) Math.round(left.heightMm / left.spacingMm);
+    float[] a = piece(left, noise, seed);
+    float[] b = piece(right, noise, seed + 1);
+    for (int y = 0; y < h; y++) {
+      System.arraycopy(b, y * w + w / 2, a, y * w + w / 2, w - w / 2);
+    }
+    return MatchImage.of(a, w, h, left.spacingMm, left.spacingMm, false);
   }
 
   /** The true seam between two cuts: lower piece mm to upper piece mm. */
