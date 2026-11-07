@@ -17,14 +17,22 @@ import java.util.Random;
 
 /**
  * The automatic overlap match of design section 5.2, for one pair of neighbouring pieces: a coarse
- * correlation search on gradient magnitude, then textured patches matched at 0.5 mm and a RANSAC
- * rigid fit, then the gates. Every seam it returns is "check" or "failed"; none is "good" until the
- * thresholds are measured on real cases (design section 10).
+ * correlation search on gradient magnitude, then textured patches matched on the 1 mm intensity and
+ * a RANSAC rigid fit, then the gates. Every seam it returns is "check" or "failed"; none is "good"
+ * until the thresholds are measured on real cases (design section 10).
  */
 final class SeamMatcher {
 
   static final double MIN_OVERLAP_MM = 15;
-  static final double MAX_OVERLAP_MM = 150;
+
+  /**
+   * The overlap may be nearly the whole piece: on the 7 Nov 2026 four-piece case the radiographer
+   * moved the detector only 84 mm between the knee and ankle exposures, an overlap of 343 mm of
+   * 427. The earlier 150 mm cap made that seam impossible. The rival-candidate check and the gates
+   * guard the larger search.
+   */
+  static final double MAX_OVERLAP_FRACTION = 0.85;
+
   static final double MAX_SIDE_SHIFT_MM = 40;
   static final double MAX_ROTATION_DEG = 3;
 
@@ -44,26 +52,44 @@ final class SeamMatcher {
   static final double MIN_EDGE_RATIO = 0.08;
   static final int MIN_INLIERS = 6;
   static final double MAX_RMS_MM = 1.5;
+
+  /**
+   * The median residual of the held-back patches (was the worst one: a single held patch on a skin
+   * fold or on the other leg, which parallax moves by a few mm, failed seams that 50 or more bone
+   * patches supported). The worst is still reported.
+   */
   static final double MAX_HOLDOUT_MM = 2.0;
+
   static final double SCALE_TOLERANCE = 0.01;
   // Kept at 0.15 (Kimi review, 7 Nov 2026): denser patches give a single leg enough points. Fable
   // argued for 0.3 (2 mm at the far end of a 400 mm segment); retune only on real cases.
   static final double MAX_ROTATION_SIGMA_DEG = 0.15;
   static final double MIN_SPREAD = 0.4;
   static final double MIN_SPREAD_MM = 20;
-  static final int MIN_HELD = 2;
+  static final int MIN_HELD = 3;
   static final double MIN_MANUAL_SPREAD_MM = 30;
 
-  private static final int PATCH = 30; // 15 mm at 0.5 mm
-  private static final int STEP = 8;
-  private static final int SEARCH = 20; // +/- 10 mm: coarse grid and a 1 deg turn 200 mm off-centre
-  private static final int MAX_PATCHES = 120;
+  private static final int PATCH = 15; // 15 mm at 1 mm
+  private static final int STEP = 4;
+  private static final int SEARCH = 10; // +/- 10 mm: coarse grid and a 1 deg turn 200 mm off-centre
+  // 300, not 120: the 1 mm grid with a 4 mm step offers many more candidates, and on a real knee
+  // the strongest 120 lay on one condyle (7 Nov 2026 case)
+  private static final int MAX_PATCHES = 300;
+  // every tenth patch by strength is held back from the fit and checks it
+  private static final int HOLD_EVERY = 10;
   // unchanged (Kimi review); the ridge test in matchPatch rejects a patch that could slide
   private static final double MIN_PATCH_NCC = 0.6;
   private static final double MIN_PATCH_ISOTROPY = 0.15;
   private static final double RIDGE_SCORE = 0.03;
-  private static final int RIDGE_PX = 3; // 1.5 mm
-  private static final double INLIER_MM = 1.0;
+  private static final int RIDGE_PX = 2; // 2 mm
+
+  /**
+   * 1.5 mm, the same as {@link #MAX_RMS_MM} (was 1.0): in the DRGEM machine's own stitch of the 7
+   * Nov 2026 case the two legs sit 2 to 3 mm apart vertically (parallax between exposures), so true
+   * pairs on both legs cannot all agree within 1 mm of one rigid fit.
+   */
+  private static final double INLIER_MM = 1.5;
+
   private static final int MIN_COARSE_CELLS = 150;
   private static final int REGIONS = 3;
 
@@ -113,7 +139,6 @@ final class SeamMatcher {
         chosen = f;
       }
     }
-    Rigid start = chosen.start;
     int rivalPoints = 0;
     boolean rival = false;
     for (Fine f : fines) {
@@ -158,12 +183,68 @@ final class SeamMatcher {
               coarse.slideYMm,
               coarse.slideXMm));
     }
-    double edgeRatio = edgeRatio(upper.coarse(), start, lower, band);
+    return judge(
+        upper,
+        lower,
+        band,
+        chosen,
+        Rigid.shift(coarse.dx, coarse.dy),
+        coarse.uniqueness,
+        fail,
+        check,
+        Seam.Method.AUTOMATIC);
+  }
+
+  /**
+   * The fine match from a position the user set by hand (design section 5.4): no rough search and
+   * no rival check, since the user settled where the pieces meet; the fit's own gates decide, so a
+   * seam placed by hand can become "check" with a measured residual and uncertainty, or fail.
+   */
+  static Seam refine(MatchImage upper, MatchImage lower, Band band, Rigid start) {
+    List<String> check = new ArrayList<>();
+    check.add("refined by the automatic match from a position set by hand");
+    return judge(
+        upper,
+        lower,
+        band,
+        fine(upper, lower, band, start),
+        start,
+        Double.NaN,
+        new ArrayList<>(),
+        check,
+        Seam.Method.SEMI_AUTOMATIC);
+  }
+
+  /**
+   * The gates on a fine match. {@code rough} is where a failed seam is left: the rough position, so
+   * the user starts the manual line-up from there, not from a fit of too few points.
+   */
+  private static Seam judge(
+      MatchImage upper,
+      MatchImage lower,
+      Band band,
+      Fine chosen,
+      Rigid rough,
+      double uniqueness,
+      List<String> fail,
+      List<String> check,
+      Seam.Method method) {
+    double edgeRatio = edgeRatio(upper.coarse(), chosen.start, lower, band);
+    // straight shafts only: a fail unless the fine match found plenty of points, each of which
+    // passed the ridge test and so is fixed in both directions (the 343 mm knee-to-ankle overlap
+    // of the 7 Nov 2026 case: 45 to 90 such points on tibial structure, yet the shafts dominate
+    // the edge directions)
     if (edgeRatio < MIN_EDGE_RATIO) {
-      fail.add(
-          "the overlap has edges in one direction only (straight shaft or ruler): the shift along"
-              + " the bone is not determined. Pick matching points on something that is not a"
-              + " straight line: a ruler numeral, a nutrient foramen, the other leg, a skin crease");
+      (chosen.inliers.size() < 2 * MIN_INLIERS ? fail : check)
+          .add(
+              "the overlap has edges in one direction only (straight shaft or ruler): the shift"
+                  + " along the bone is "
+                  + (chosen.inliers.size() < 2 * MIN_INLIERS
+                      ? "not determined. Pick matching points on something that is not a straight"
+                          + " line: a ruler numeral, a nutrient foramen, the other leg, a skin"
+                          + " crease"
+                      : "fixed only by the %d matched points; inspect the overlap"
+                          .formatted(chosen.inliers.size())));
     }
 
     double[] extent = new double[2];
@@ -171,16 +252,16 @@ final class SeamMatcher {
     List<Rigid.Pair> heldPairs = chosen.heldPairs;
     if (pairs.size() < 2) {
       fail.add("too few matching points on structure in the overlap");
-      Seam f = Seam.failed(start, Seam.Method.AUTOMATIC, fail);
+      Seam f = Seam.failed(rough, method, fail);
       return new Seam(
-          start,
+          rough,
           f.method(),
           f.status(),
           f.rmsMm(),
           f.rotationSigmaDeg(),
           f.shiftSigmaMm(),
           f.scale(),
-          coarse.uniqueness,
+          uniqueness,
           f.holdoutMm(),
           List.of(),
           fail);
@@ -190,7 +271,9 @@ final class SeamMatcher {
     double rms = fit.rms(inliers);
     double[] sigma = Rigid.uncertainty(fit, inliers);
     double scale = Rigid.similarityScale(inliers);
-    double holdout = heldPairs.stream().mapToDouble(fit::residual).max().orElse(Double.NaN);
+    double[] heldRes = heldPairs.stream().mapToDouble(fit::residual).sorted().toArray();
+    double holdout = heldRes.length == 0 ? Double.NaN : heldRes[heldRes.length / 2];
+    double worstHeld = heldRes.length == 0 ? Double.NaN : heldRes[heldRes.length - 1];
     // spread is judged against where matches were found (the bone, side to side), not the film's
     // width: one leg on a 427 mm plate can never span 40 % of the plate (7 Nov 2026 case). Noise
     // patches in soft tissue do not match, so they cannot widen it.
@@ -241,7 +324,19 @@ final class SeamMatcher {
     } else if (holdout > MAX_HOLDOUT_MM) {
       fail.add(
           String.format(
-              Locale.ROOT, "a held-back point disagrees with the fit by %.1f mm", holdout));
+              Locale.ROOT,
+              "the %d held-back points disagree with the fit by %.1f mm (median; worst %.1f mm)",
+              heldPairs.size(),
+              holdout,
+              worstHeld));
+    } else {
+      check.add(
+          String.format(
+              Locale.ROOT,
+              "%d held-back points agree with the fit within %.1f mm (median; worst %.1f mm)",
+              heldPairs.size(),
+              holdout,
+              worstHeld));
     }
     if (Math.abs(scale - 1) > SCALE_TOLERANCE) {
       check.add(
@@ -256,15 +351,18 @@ final class SeamMatcher {
     boolean failed = !fail.isEmpty();
     List<String> reasons = new ArrayList<>(fail);
     reasons.addAll(check);
+    if (failed && inliers.size() < MIN_INLIERS) {
+      fit = rough; // too few points for the fit to mean anything: start the user at the rough spot
+    }
     return new Seam(
         fit,
-        Seam.Method.AUTOMATIC,
+        method,
         failed ? Seam.Status.FAILED : Seam.Status.CHECK,
         rms,
         sigma[0],
         sigma[1],
         scale,
-        coarse.uniqueness,
+        uniqueness,
         holdout,
         inliers,
         reasons);
@@ -482,8 +580,7 @@ final class SeamMatcher {
     Gray u = upper.coarseGrad();
     Gray l = lower.coarseGrad();
     double g = MatchImage.COARSE_MM;
-    double maxOverlap =
-        Math.min(MAX_OVERLAP_MM, 0.6 * Math.min(upper.heightMm(), lower.heightMm()));
+    double maxOverlap = MAX_OVERLAP_FRACTION * Math.min(upper.heightMm(), lower.heightMm());
     int oyMin = (int) Math.ceil((u.heightMm() - maxOverlap) / g);
     int oyMax = (int) Math.floor((u.heightMm() - MIN_OVERLAP_MM) / g);
     int oxMax = (int) Math.round(MAX_SIDE_SHIFT_MM / g);
@@ -750,21 +847,20 @@ final class SeamMatcher {
     return n < PATCH * PATCH * 0.9 ? null : new double[] {mean / n, sxx, sxy, syy};
   }
 
-  // one patch per region (the median-strength one) is kept out of the fit and checks it; patches
-  // that overlap it leave the fit too, so the check is independent of the fitted pixels
+  // every tenth patch by strength is kept out of the fit and checks it, so the held patches lie
+  // wherever the evidence lies; a fitted patch sharing more than a quarter of its pixels with a
+  // held one leaves the fit, so the check is independent of the fitted pixels (was one patch per
+  // region, of which on a real film usually one matched, so the check mostly could not run)
   private static List<Patch> holdOut(List<Patch> patches) {
     List<Patch> held = new ArrayList<>();
-    for (int r = 0; r < REGIONS; r++) {
-      int region = r;
-      List<Patch> in = patches.stream().filter(p -> p.region == region).toList();
-      if (in.size() >= 4) {
-        held.add(in.get(in.size() / 2));
-      }
+    for (int i = HOLD_EVERY / 2; i < patches.size(); i += HOLD_EVERY) {
+      held.add(patches.get(i));
     }
     patches.removeIf(
         p ->
             held.stream()
-                .anyMatch(h -> Math.abs(h.x - p.x) < PATCH && Math.abs(h.y - p.y) < PATCH));
+                .anyMatch(
+                    h -> Math.abs(h.x - p.x) < PATCH / 2.0 && Math.abs(h.y - p.y) < PATCH / 2.0));
     return held;
   }
 
@@ -773,7 +869,7 @@ final class SeamMatcher {
     Rigid toLower = start.inverse();
     List<Rigid.Pair> pairs = new ArrayList<>();
     for (Patch p : patches) {
-      Rigid.Pair pair = matchPatch(p, upper.fineGrad(), lower.fineGrad(), toLower);
+      Rigid.Pair pair = matchPatch(p, upper.fine(), lower.fine(), toLower);
       if (pair != null) {
         pairs.add(pair);
       }

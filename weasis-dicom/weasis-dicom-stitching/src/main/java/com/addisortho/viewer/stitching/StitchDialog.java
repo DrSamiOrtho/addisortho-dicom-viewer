@@ -506,9 +506,7 @@ final class StitchDialog extends JDialog {
               MatchImage up = pieces.get(i).match();
               MatchImage down = pieces.get(i + 1).match();
               out.add(
-                  bothLegs
-                      ? SeamMatcher.matchBothLegs(up, down)
-                      : SeamMatcher.match(up, down, on));
+                  bothLegs ? SeamMatcher.matchBothLegs(up, down) : SeamMatcher.match(up, down, on));
             }
             return out;
           }

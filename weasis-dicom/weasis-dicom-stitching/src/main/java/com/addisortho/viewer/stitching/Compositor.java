@@ -32,13 +32,15 @@ import java.util.concurrent.CancellationException;
 final class Compositor {
 
   static final int MAX_VALUE = 65000;
+
   /**
    * Stored where no piece lies, declared as PixelPaddingValue. 0, not 65535: a viewer or PACS that
    * ignores padding (the templating page does) then shows the empty corners black, not white, and
-   * auto-windowing is not pulled by them. Real pixels are stored from 1 up (Fable review,
-   * 7 Nov 2026).
+   * auto-windowing is not pulled by them. Real pixels are stored from 1 up (Fable review, 7 Nov
+   * 2026).
    */
   static final int PADDING = 0;
+
   private static final int STRIP = 128;
   private static final double TICK_MM = 15;
   private static final double LABEL_LINE_MM = 5;

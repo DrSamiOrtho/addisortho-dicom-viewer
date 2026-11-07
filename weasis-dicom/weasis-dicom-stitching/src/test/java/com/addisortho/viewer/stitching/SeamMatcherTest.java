@@ -229,4 +229,44 @@ class SeamMatcherTest {
     Seam failed = Seam.failed(Rigid.shift(0, 300), Seam.Method.AUTOMATIC, List.of("no overlap"));
     assertEquals(Seam.Status.FAILED, failed.adjusted(Rigid.shift(0, 301)).status());
   }
+
+  /**
+   * The radiographer moved the detector only 84 mm between the knee and the ankle (the 7 Nov 2026
+   * case): an overlap of 0.8 of the piece, far past the old 150 mm cap.
+   */
+  @Test
+  void matchesANearlyCompleteOverlap() {
+    double w = 427;
+    double h = 356;
+    Phantom leg = Phantom.singleLeg(w, 900, 150, 51);
+    var upper = new Phantom.Cut(Rigid.shift(0, 200), w, h, 0.139, 1.0, 0);
+    var lower = new Phantom.Cut(new Rigid(Math.toRadians(0.2), 2, 271), w, h, 0.139, 1.2, -0.1);
+    Seam seam =
+        SeamMatcher.match(
+            leg.matchImage(upper, 0.02, 52),
+            leg.matchImage(lower, 0.02, 53),
+            SeamMatcher.Band.WHOLE);
+    assertEquals(Seam.Status.CHECK, seam.status(), String.join("; ", seam.reasons()));
+    assertRecovers(Phantom.truth(upper, lower), seam, 150, 250);
+  }
+
+  /** A seam placed by hand 6 mm and half a degree off, then refined: recovered, semi-automatic. */
+  @Test
+  void refinesFromAHandSetPosition() {
+    Phantom leg = Phantom.leg(300, 900, 7);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, W, H, 0.15, 1.0, 0);
+    var lower = new Phantom.Cut(new Rigid(Math.toRadians(-0.5), 6, 310), W, H, 0.15, 1.3, 0);
+    Rigid truth = Phantom.truth(upper, lower);
+    Rigid hand = new Rigid(truth.theta() + Math.toRadians(0.5), truth.tx() + 4, truth.ty() - 5);
+    Seam seam =
+        SeamMatcher.refine(
+            leg.matchImage(upper, 0.02, 61),
+            leg.matchImage(lower, 0.02, 62),
+            SeamMatcher.Band.WHOLE,
+            hand);
+    assertEquals(Seam.Status.CHECK, seam.status(), String.join("; ", seam.reasons()));
+    assertEquals(Seam.Method.SEMI_AUTOMATIC, seam.method());
+    assertTrue(seam.reasons().stream().anyMatch(r -> r.contains("set by hand")), seam.summary());
+    assertRecovers(truth, seam, W / 2, 30);
+  }
 }

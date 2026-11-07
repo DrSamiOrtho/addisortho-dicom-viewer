@@ -415,3 +415,48 @@ pixel-centre mapping consistent, and three P1 and seven P2 problems. Each was ch
 
 Astra could not run the tests inside its read-only sandbox; they were run here after the fixes (22 pass).
 
+
+## 15. Stitch 0.3: the first real four-piece case (7 Nov 2026)
+
+Stitch 0.2 (section 14 plus Kimi's 7 Nov review) failed all three seams of a real standing bilateral long-leg study:
+four 427 mm DX pieces from a DRGEM GXR, each with its own processing, plus the machine's own stitch of the same four
+exposures (2966 x 7880 px). The machine stitch gave a ground truth for each seam (lower piece origin in the upper
+piece's frame): seam 1 (10.7, 280.2) mm, overlap 147 mm; seam 2 (0.0, 306.5), overlap 121 mm; seam 3 (1.9, 83.7),
+overlap 343 mm. The matcher was run on the real pixels outside the viewer and compared with the truth.
+
+What was wrong, in order of weight:
+
+- The fine match had no signal. At 0.5 mm the gradient magnitude of a DR film is quantum noise, which the other piece
+  does not repeat (the two pieces are also processed differently): at the true position the median patch correlation
+  was 0.23 to 0.60 against a gate of 0.6, so the fine match found 0 to 3 pairs and every seam failed on points. The
+  intensity itself correlates at 0.8 to 0.99. The fine grid is now 1 mm and the patches match on normalised intensity;
+  gradient magnitude stays for the rough search, which found the true position on seams 1 and 2.
+- The overlap was capped at 150 mm and 0.6 of the height; the radiographer moved the detector 84 mm for the ankle, so
+  seam 3 could never be found. The cap is now 0.85 of the piece height.
+- The held-back check was three patches of which usually one matched, so it mostly could not run, and the single worst
+  held patch (on a skin fold, or on the other leg, which parallax moves 2 to 3 mm) failed seams that 50 bone patches
+  supported. Now every tenth patch by strength is held back, at least three must match, and the median residual is the
+  gate (the worst is reported).
+- The inlier tolerance of 1 mm could not hold true pairs on both legs: in the machine's own stitch the two legs sit 2 to
+  3 mm apart vertically. It is now 1.5 mm, the same as the residual gate. Candidate patches went from 120 to 300.
+- The edge-direction gate failed the 343 mm seam of two tibial shafts although 59 ridge-tested points fixed it; it now
+  fails only when fewer than 12 points agree, and is a note otherwise.
+- A failed seam carried the fit of its few points (seam 1 was shown 50 mm and 3 degrees off); it now carries the rough
+  position, which was 4 mm from the truth on seams 1 and 2, so the hand line-up starts there.
+
+Result on the case: seam 3 passes as "check" (shift (3.6, 83.8), 0.34 degrees, 59 points, residual 0.86 mm, 16 held
+points within 1.0 mm). Seam 2 fails and should: inside the knee the patella and the condyles sit at different depths,
+and between two tube positions they project 10 mm apart; the fine match finds 30 points on one layer and 21 on the
+other, and the whole-width fit is rejected by the held points (median 3.2 mm). Seam 1 fails: the overlap is two
+straight femoral shafts and soft tissue, 3 to 5 points. Refined from the true position, seams 1 and 2 still fail the
+gates (hold-out 2.2 to 2.6 mm, rotation uncertainty 0.35 degrees on one knee), which is the overlap's own
+non-rigidity, not a matching error. The gates were not changed to pass them; whether the hold-out and rotation limits
+should be retuned for one-leg bands is an open question for Kimi's second review and Sami.
+
+The manual line-up (section 5.4) is now the working path for such seams: in the seam window the lower piece is dragged
+with the mouse over the checkerboard (wheel turns it), and "Refine automatically from here" runs the fine match and all
+the gates from the hand-set position without a rough search or rival check, so a seam placed by hand can pass with a
+measured residual and uncertainty, or fail with the reasons. Point pairs and "Fit to the points" stay. The button in
+the stitch window is now "Line up by hand / inspect seam...".
+
+Memory: the 0.5 mm fine copy and its gradient were 300 MB per 3072 x 3072 piece; the 1 mm copy is 37 MB.

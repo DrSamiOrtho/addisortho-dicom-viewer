@@ -40,8 +40,9 @@ import javax.swing.SwingWorker;
 
 /**
  * Inspects one seam and lets the user correct it (design sections 4 and 5.4): a checkerboard or
- * difference of the two pieces over the overlap, nudges and turns from the keyboard, and matching
- * points picked in the two pieces.
+ * difference of the two pieces over the overlap, the lower piece dragged with the mouse or nudged
+ * and turned from the keyboard, the automatic match refined from the position set by hand, and
+ * matching points picked in the two pieces.
  */
 final class SeamEditor extends JDialog {
 
@@ -83,7 +84,7 @@ final class SeamEditor extends JDialog {
       pairs.addAll(seam.pairs());
     }
 
-    JTextArea help = text(Messages.getString("SeamEditor.help"), 2);
+    JTextArea help = text(Messages.getString("SeamEditor.help"), 3);
     JRadioButton diff = new JRadioButton(Messages.getString("SeamEditor.difference"));
     ButtonGroup mode = new ButtonGroup();
     mode.add(checker);
@@ -126,6 +127,32 @@ final class SeamEditor extends JDialog {
             }
           }.execute();
         });
+    JButton refine = new JButton(Messages.getString("SeamEditor.refine"));
+    refine.setToolTipText(Messages.getString("SeamEditor.refineTip"));
+    refine.addActionListener(
+        e -> {
+          refine.setEnabled(false);
+          Rigid from = this.seam.transform();
+          new SwingWorker<Seam, Void>() {
+            @Override
+            protected Seam doInBackground() {
+              return SeamMatcher.refine(upper.match(), lower.match(), band, from);
+            }
+
+            @Override
+            protected void done() {
+              refine.setEnabled(true);
+              try {
+                setSeam(get());
+              } catch (Exception ex) {
+                status.setText(String.valueOf(ex.getCause() == null ? ex : ex.getCause()));
+              }
+            }
+          }.execute();
+        });
+    aligned.setOnDrag((dx, dy) -> move(dx * GRID, dy * GRID, 0));
+    aligned.setOnWheel(notches -> move(0, 0, 0.1 * notches));
+    aligned.setToolTipText(Messages.getString("SeamEditor.dragTip"));
     JButton apply = new JButton(Messages.getString("SeamEditor.apply"));
     apply.addActionListener(
         e -> {
@@ -142,6 +169,7 @@ final class SeamEditor extends JDialog {
     tools.add(clear);
     tools.add(fit);
     tools.add(auto);
+    tools.add(refine);
     tools.add(pairCount);
 
     JPanel views = new JPanel(new GridLayout(1, 2, 6, 0));
