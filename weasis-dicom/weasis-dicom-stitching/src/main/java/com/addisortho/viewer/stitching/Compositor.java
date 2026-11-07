@@ -25,13 +25,22 @@ import java.util.concurrent.CancellationException;
 
 /**
  * Builds the output pixels strip by strip (design sections 6 and 7): each output pixel is taken
- * from the piece the seams assign it to, feathered over 10 mm at each seam, with the grey mapping
- * applied; the draft label and the seam ticks are burned in. At most the pieces under the current
- * strip are held at full resolution.
+ * from the piece the seams assign it to, with the grey mapping applied; the draft label and the
+ * seam ticks are burned in. At most the pieces under the current strip are held at full resolution.
+ *
+ * <p>Two bands at each seam (case LL-001, 7 Nov 2026): the machine processes each exposure with its
+ * own curve, so after one gain and offset per piece the overlap still differed by up to 8 % of the
+ * range, soft tissue and bone by different amounts, a visible band at every cut. The tone (the 2 mm
+ * copy blurred by {@link #TONE_SIGMA_MM}) is now feathered over {@link #TONE_MM}, as far as the
+ * overlap allows, where a ramp that gentle is invisible; the detail (the rest) still changes piece
+ * over the 10 mm feather, so bone edges come from one piece and are never doubled more than before.
+ * Nothing moves: lengths and angles are untouched.
  */
 final class Compositor {
 
   static final int MAX_VALUE = 65000;
+  static final double TONE_MM = 60;
+  static final double TONE_SIGMA_MM = 8;
 
   /**
    * Stored where no piece lies, declared as PixelPaddingValue. 0, not 65535: a viewer or PACS that
@@ -55,9 +64,13 @@ final class Compositor {
   private final Stitch stitch;
   private final List<Rigid> inverses;
   private final double[] seamY;
+  // half-width of each seam's tone feather: TONE_MM / 2, or less where the overlap is short
+  private final double[] toneHalf;
   private final double[] pieceTop;
   private final double[] pieceBottom;
   private final List<double[]> maps;
+  // each piece's tone: its 2 mm copy blurred, in the piece's own mm
+  private final Sampler[] tones;
   final double mm;
   final int cols;
   final int rows;
@@ -92,6 +105,21 @@ final class Compositor {
         pieceTop[i] = Math.min(pieceTop[i], y);
         pieceBottom[i] = Math.max(pieceBottom[i], y);
       }
+    }
+    this.toneHalf = new double[n - 1];
+    for (int i = 0; i < n - 1; i++) {
+      toneHalf[i] =
+          Math.max(
+              Stitch.FEATHER_MM / 2,
+              Math.min(
+                  TONE_MM / 2,
+                  Math.min(seamY[i] - pieceTop[i + 1] - 1, pieceBottom[i] - seamY[i] - 1)));
+    }
+    this.tones = new Sampler[n];
+    for (int i = 0; i < n; i++) {
+      Gray level = stitch.pieces.get(i).level();
+      Gray tone = level.blurred(TONE_SIGMA_MM / level.mm());
+      tones[i] = tone::sample;
     }
     this.maps = stitch.exposure();
     this.mm = stitch.outputMm();
@@ -203,19 +231,28 @@ final class Compositor {
     float at(double xMm, double yMm);
   }
 
-  /** The mapped value at a stitch-frame point, or NaN where no piece lies. */
+  /**
+   * The mapped value at a stitch-frame point, or NaN where no piece lies: the pieces' tones blended
+   * over the tone feather plus their detail blended over the 10 mm feather. Where no piece has
+   * weight (outside every feather) any piece with image there counts in full.
+   */
   private double value(double gx, double gy, Sampler[] s, double[] wt) {
-    double sum = 0;
-    double wsum = 0;
-    for (int pass = 0; pass < 2 && wsum <= 0; pass++) {
-      sum = 0;
-      wsum = 0;
+    double tone = 0;
+    double toneW = 0;
+    double detail = 0;
+    double detailW = 0;
+    for (int pass = 0; pass < 2 && toneW <= 0; pass++) {
+      tone = 0;
+      toneW = 0;
+      detail = 0;
+      detailW = 0;
       for (int i = 0; i < s.length; i++) {
         if (s[i] == null) {
           continue;
         }
-        double w = pass == 0 ? seamWeight(i, gy) : 1;
-        if (w <= 0) {
+        double wd = pass == 0 ? seamWeight(i, gy, Stitch.FEATHER_MM / 2) : 1;
+        double wtn = pass == 0 ? seamWeight(i, gy, toneHalf) : 1;
+        if (wtn <= 0) {
           continue;
         }
         double[] p = inverses.get(i).apply(gx, gy);
@@ -223,27 +260,53 @@ final class Compositor {
         if (Float.isNaN(v)) {
           continue;
         }
+        float t = tones[i].at(p[0], p[1]);
+        if (Float.isNaN(t)) {
+          t = v;
+        }
         // a shutter or padding area yields to a piece that has real image there
         if (Float.isNaN(stitch.pieces.get(i).match().coarse().sample(p[0], p[1]))) {
-          w *= 0.001;
+          wd *= 0.001;
+          wtn *= 0.001;
         }
         double[] m = maps.get(i);
-        sum += w * (m[0] * v + m[1]);
-        wsum += w;
+        tone += wtn * (m[0] * t + m[1]);
+        toneW += wtn;
+        detail += wd * m[0] * (v - t);
+        detailW += wd;
       }
     }
-    return wsum > 0 ? sum / wsum : Double.NaN;
+    if (toneW <= 0) {
+      return Double.NaN;
+    }
+    return tone / toneW + (detailW > 0 ? detail / detailW : 0);
   }
 
-  private double seamWeight(int i, double y) {
+  private double seamWeight(int i, double y, double half) {
     double w = 1;
     if (i > 0) {
-      w *= clamp((y - (seamY[i - 1] - Stitch.FEATHER_MM / 2)) / Stitch.FEATHER_MM);
+      w *= clamp((y - (seamY[i - 1] - half)) / (2 * half));
     }
     if (i < seamY.length) {
-      w *= clamp(((seamY[i] + Stitch.FEATHER_MM / 2) - y) / Stitch.FEATHER_MM);
+      w *= clamp(((seamY[i] + half) - y) / (2 * half));
     }
     return w;
+  }
+
+  private double seamWeight(int i, double y, double[] halves) {
+    double w = 1;
+    if (i > 0) {
+      w *= clamp((y - (seamY[i - 1] - halves[i - 1])) / (2 * halves[i - 1]));
+    }
+    if (i < seamY.length) {
+      w *= clamp(((seamY[i] + halves[i]) - y) / (2 * halves[i]));
+    }
+    return w;
+  }
+
+  /** Rows over which seam i blends the tone, for the seam data. */
+  double toneHalfMm(int i) {
+    return toneHalf[i];
   }
 
   private int tick(int c, int r, int px) {

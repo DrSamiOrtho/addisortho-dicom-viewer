@@ -157,3 +157,26 @@ exposure mapping is the next item, untouched here.
 
 Not verified: the larger seam editor in the running viewer (needs an app build), the single-leg path on this case
 (still fails seam 2 on hold-out), PACS, Template gating and the 4 GB PC. Nothing is committed.
+
+## Stitch 0.5: the grey step at the cuts (same evening)
+
+Measured first on the 0.4 output: with one gain and offset per piece the overlap still differed by up to 8 % of the
+range at the cuts, soft tissue and bone by different amounts, because the machine processes each exposure with its own
+curve. A Python prototype of a two-band blend (tone from the 2 mm copy blurred by 8 mm, feathered over 60 mm; detail
+over the existing 10 mm) removed the band at seam 3 on both legs and softened seam 1, with the cortex detail unchanged.
+
+Implemented in `Compositor` (`TONE_MM` 60, `TONE_SIGMA_MM` 8; the tone feather is clamped to what the overlap allows on
+either side of the cut, so seam 2, cut 16 mm above the bottom of the femur piece, blends its tone over 15 mm) and
+`Gray.blurred` (NaN-aware separable Gaussian). The preview uses the same blend. Seam data carries `toneRows` beside
+`blendRows`. Version string 0.5. Test `CompositorTest`: two exposures whose curves differ so that no linear map joins
+them (soft tissue up, bone down) meet with a step at the cut under 0.3 of the difference 40 mm away.
+
+| Local step across the cut, 3 to 6 mm either side, median of the width (p90) | Seam 1 | Seam 2 | Seam 3 |
+|---|---|---|---|
+| 0.4 | 1444 (3323) | 937 (2154) | 729 (1725) |
+| 0.5 | 976 (2728) | 544 (2126) | 322 (1741) |
+
+The transforms and cut rows are those of 0.4; nothing moved. 43 tests pass, Spotless passes. Not verified in the
+running app yet: the app copy in `~/Applications` carries the 0.5 bundle and a new build stamp so its plug-in cache
+refreshes on the next start. Still open: the texture difference at seam 1 (pelvis processing sharper than femur), which
+no tone blend touches; a finer rendering in the seam editor.
