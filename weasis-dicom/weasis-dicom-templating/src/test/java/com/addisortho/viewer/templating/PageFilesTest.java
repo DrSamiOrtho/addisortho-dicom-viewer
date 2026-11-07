@@ -180,6 +180,8 @@ class PageFilesTest {
     for (String range : new String[] {"jnj-", "zb-", "ldk-"}) {
       assertTrue(!lib.contains("\"range\":\"" + range), range);
     }
-    assertEquals("r44f", p.release());
+    // My cases and the patient on the result since 7 Nov 2026 (r44g)
+    assertNotNull(p.get("cases.js"));
+    assertEquals("r44g", p.release());
   }
 }
