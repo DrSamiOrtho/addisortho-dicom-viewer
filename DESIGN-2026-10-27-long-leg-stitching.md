@@ -489,3 +489,25 @@ with ruler and annotation exclusion; a signed-gradient or local-contrast check a
 anatomy-aware or movable cut in a large overlap (`Stitch.seamY`); flicker at full resolution with a signed edge
 overlay and zoom; a separate unverified visual export without PixelSpacing for a seam that cannot be confirmed; the
 templating page reading the seam metadata before any cross-seam measurement. The gates were not loosened.
+
+### 15.2 The cut never goes through a sphere (Sami, 7 Nov 2026)
+
+Sami's rule: wherever a sphere is seen, the cut must not pass through it, nor through the medial or lateral femoral
+condyle or the greater trochanter; the sphere must show whole. Kimi's second review asked for the same (an
+anatomy-aware or movable cut, not the middle of the overlap). Built as `Cut`:
+
+- The cut row of each seam is chosen inside the overlap, 15 mm from its ends, where the bone outline runs straight: on
+  bone (Otsu threshold) in a 14 mm window, the vertical gradient over the horizontal one is smallest. A shaft's edges
+  are vertical, so the ratio is small (0.12 to 0.26 on the four-piece case); a head, condyle, trochanter or plateau has
+  a curved outline and a large ratio. Both pieces' pixels in the window count. Below 0.6 the cut is called "on straight
+  bone"; otherwise the note says the cut crosses a round bone outline and should be moved.
+- A bright round marker in either piece (a calibration ball, a prosthetic head) is found on the unmasked 2 mm copy at
+  three brightness levels (compact, round, standing out from its ring: the ball reached only 0.7 to 0.9 of the range on
+  this case while dense bone reached 1.0), and its rows plus 14 mm on each side are never cut. The marker was found on
+  three of the four pieces (0 to 26 mm from the top, where the stand holds it); the fourth shows none.
+- On the four-piece case at the machine's reference seams the cuts land at 121, 105 and 65 mm below the overlaps'
+  tops: below the knee joint on the proximal tibia for seam 2, on the tibial shaft for seam 3, on the thigh for seam 1.
+- The user can drag a seam line in the stitch preview to move the cut; the derivation text and the preview's hover
+  text say where each cut is and why. A cut set by hand is recorded as such.
+- Not built: recognising the trochanter or the condyles by shape; the straight-outline rule stands in for it. The
+  compositor still feathers 10 mm about the cut.

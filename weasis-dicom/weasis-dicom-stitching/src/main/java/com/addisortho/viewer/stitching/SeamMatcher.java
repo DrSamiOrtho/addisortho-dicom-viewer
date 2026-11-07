@@ -1043,7 +1043,7 @@ final class SeamMatcher {
     return again.size() >= best.size() ? again : best;
   }
 
-  private static double otsu(Gray f, int x0, int y0, int x1, int y1) {
+  static double otsu(Gray f, int x0, int y0, int x1, int y1) {
     int[] hist = new int[64];
     int n = 0;
     for (int y = y0; y < Math.min(y1, f.height()); y++) {

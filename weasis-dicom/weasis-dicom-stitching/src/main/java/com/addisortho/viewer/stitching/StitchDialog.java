@@ -89,12 +89,40 @@ final class StitchDialog extends JDialog {
   private final JButton cancel = new JButton(Messages.getString("StitchDialog.cancel"));
   private final JProgressBar progress = new JProgressBar();
   private final JLabel state = new JLabel(" ");
-  private final ImagePanel preview = new ImagePanel(null);
+  private final ImagePanel preview = new ImagePanel(this::previewPressed);
+  // the cut rows the user dragged, per seam, in the upper piece's mm; NaN: automatic
+  private double[] cuts = new double[0];
+  // while a seam line is dragged in the preview: which seam, and the preview's mm per pixel
+  private int draggedSeam = -1;
+  private double[] previewSeamPx = new double[0];
+  private double previewMm = 1;
   private final JLabel previewCaption = new JLabel(" ");
   private SwingWorker<Void, Loaded> pictures;
   private boolean showingStitch;
 
   private List<Piece> chosen = List.of();
+
+  // a press on a seam line of the stitch preview picks it up; a drag then moves its cut
+  private void previewPressed(double px, double py) {
+    draggedSeam = -1;
+    if (!showingStitch) {
+      return;
+    }
+    for (int i = 0; i < previewSeamPx.length; i++) {
+      if (Math.abs(previewSeamPx[i] - py) <= 8) {
+        draggedSeam = i;
+      }
+    }
+  }
+
+  private void previewDragged(double dx, double dy) {
+    if (draggedSeam < 0 || draggedSeam >= seams.size() || busy()) {
+      return;
+    }
+    cuts[draggedSeam] = stitch().cut(draggedSeam).yMm() + dy * previewMm;
+    showPreview();
+  }
+
   private List<Seam> seams = List.of();
   private SwingWorker<?, ?> running;
   // background work still executing (a cancelled worker is "done" before its loop has stopped)
@@ -138,6 +166,7 @@ final class StitchDialog extends JDialog {
     band.addItem(SeamMatcher.Band.RIGHT_HALF);
 
     setContentPane(layoutContent());
+    preview.setOnDrag(this::previewDragged);
     wire();
     refresh();
     setPreferredSize(new Dimension(1100, 760));
@@ -433,6 +462,7 @@ final class StitchDialog extends JDialog {
     generation++;
     seams = List.of();
     chosen = List.of();
+    cuts = new double[0];
     seamModel.fireTableDataChanged();
     showSelectedPiece();
     refresh();
@@ -526,6 +556,8 @@ final class StitchDialog extends JDialog {
             try {
               chosen = pieces;
               seams = new ArrayList<>(get());
+              cuts = new double[seams.size()];
+              Arrays.fill(cuts, Double.NaN);
               state.setText(" ");
               seamModel.fireTableDataChanged();
               if (!seams.isEmpty()) {
@@ -576,7 +608,7 @@ final class StitchDialog extends JDialog {
   }
 
   private Stitch stitch() {
-    return new Stitch(chosen, seams, choices());
+    return new Stitch(chosen, seams, choices(), cuts);
   }
 
   private void showPreview() {
@@ -590,6 +622,14 @@ final class StitchDialog extends JDialog {
     for (int i = 0; i < ys.length; i++) {
       ys[i] = (s.seamY(i) - b[1]) / g.mm();
     }
+    previewSeamPx = ys;
+    previewMm = g.mm();
+    StringBuilder cutWords = new StringBuilder();
+    for (int i = 0; i < ys.length; i++) {
+      cutWords.append(i == 0 ? "" : " ").append("Seam %d: %s.".formatted(i + 1, s.cut(i).note()));
+    }
+    preview.setToolTipText(
+        "<html><body style='width:360px'>" + html(cutWords.toString()) + "</body></html>");
     preview.setImage(
         ImagePanel.gray(g.data(), g.width(), g.height()),
         (g2, scale) -> {
