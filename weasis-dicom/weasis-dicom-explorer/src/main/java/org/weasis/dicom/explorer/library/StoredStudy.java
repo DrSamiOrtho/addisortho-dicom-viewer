@@ -7,9 +7,9 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
-package org.weasis.dicom.receive;
+package org.weasis.dicom.explorer.library;
 
 import java.nio.file.Path;
 
 /** One study folder of the storage folder. */
-public record ReceivedStudy(Path folder, String studyKey, int images, long sizeBytes) {}
+public record StoredStudy(Path folder, String studyKey, int images, long sizeBytes) {}

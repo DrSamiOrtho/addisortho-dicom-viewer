@@ -32,6 +32,7 @@ import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.Messages;
+import org.weasis.dicom.explorer.library.StudyLibrary;
 
 /**
  * The patients on this computer: the folders to search, their index, kept up to date by one
@@ -78,6 +79,7 @@ public final class PatientIndexService {
     if (files == null) {
       files = store.loadIndex();
       studies = StudyEntry.of(files, false);
+      StudyLibrary.getInstance().addListener(this::fire);
     }
     if (!startupScanDone) {
       startupScanDone = true;
@@ -135,8 +137,14 @@ public final class PatientIndexService {
     return null;
   }
 
+  /** The studies of the managed library and of the searched folders, one row per study. */
   public List<StudyEntry> studies() {
-    return studies;
+    StudyLibrary library = StudyLibrary.getInstance();
+    List<StudyEntry> managed =
+        library.studies().stream()
+            .map(s -> StudyEntry.of(s, library.folderOf(s).toString()))
+            .toList();
+    return StudyEntry.merge(managed, studies);
   }
 
   public List<String> notIndexed() {
@@ -253,6 +261,11 @@ public final class PatientIndexService {
 
   /** Opens a study in the viewer: its files, or the archives that hold it. */
   public static void open(StudyEntry study, DicomModel model) {
+    load(study, model, OpeningViewer.ALL_PATIENTS);
+  }
+
+  /** Brings a study into the viewer's list, opening viewers as {@code opening} says. */
+  public static void load(StudyEntry study, DicomModel model, OpeningViewer opening) {
     Set<File> files = new LinkedHashSet<>();
     for (String c : study.containers()) {
       File f = new File(c);
@@ -262,7 +275,7 @@ public final class PatientIndexService {
     }
     if (!files.isEmpty()) {
       DicomModel.LOADING_EXECUTOR.execute(
-          new LoadLocalDicom(files.toArray(new File[0]), false, model, OpeningViewer.ALL_PATIENTS));
+          new LoadLocalDicom(files.toArray(new File[0]), false, model, opening));
     }
   }
 }

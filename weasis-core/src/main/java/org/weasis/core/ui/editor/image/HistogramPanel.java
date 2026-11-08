@@ -333,7 +333,10 @@ public class HistogramPanel extends JPanel {
     return data;
   }
 
-  public void saveHistogramInCSV(File csvOutputFile) {
+  /**
+   * @return false when the file could not be written
+   */
+  public boolean saveHistogramInCSV(File csvOutputFile) {
     try (PrintWriter pw = new PrintWriter(csvOutputFile, StandardCharsets.UTF_8)) {
       pw.println("Class,Occurrences"); // NON-NLS
       float[] histValues = data.getHistValues();
@@ -355,8 +358,10 @@ public class HistogramPanel extends JPanel {
         buf.append(histValues[i]);
         pw.println(buf);
       }
+      return !pw.checkError();
     } catch (IOException e) {
       LOGGER.error("Cannot save histogram values", e);
+      return false;
     }
   }
 

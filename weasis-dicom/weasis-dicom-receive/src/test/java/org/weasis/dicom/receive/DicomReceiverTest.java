@@ -42,6 +42,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.weasis.dicom.explorer.library.StoreNaming;
+import org.weasis.dicom.explorer.library.StoredInstance;
+import org.weasis.dicom.explorer.library.StoredStudy;
+import org.weasis.dicom.explorer.library.StudyStore;
 
 class DicomReceiverTest {
   private static final String AE = "AOVIEWER";
@@ -51,7 +55,7 @@ class DicomReceiverTest {
 
   @TempDir Path root;
 
-  private final List<ReceivedInstance> stored = new CopyOnWriteArrayList<>();
+  private final List<StoredInstance> stored = new CopyOnWriteArrayList<>();
   private final List<ReceiveProblem> problems = new CopyOnWriteArrayList<>();
   private final AtomicLong freeBytes = new AtomicLong(Long.MAX_VALUE);
   private final AtomicBoolean failWrites = new AtomicBoolean();
@@ -62,7 +66,7 @@ class DicomReceiverTest {
   private final ReceiveListener listener =
       new ReceiveListener() {
         @Override
-        public void onStored(ReceivedInstance instance) {
+        public void onStored(StoredInstance instance) {
           stored.add(instance);
         }
 
@@ -134,8 +138,8 @@ class DicomReceiverTest {
   }
 
   private void startOnce(ReceiveSettings settings) throws Exception {
-    ReceivedStudyStore store =
-        new ReceivedStudyStore(
+    StudyStore store =
+        new StudyStore(
             root,
             settings.includeNameInFileNames(),
             Clock.fixed(Instant.parse("2026-11-06T10:00:00Z"), ZoneOffset.UTC),
@@ -185,6 +189,7 @@ class DicomReceiverTest {
       return files
           .filter(Files::isRegularFile)
           .filter(f -> !f.getParent().getFileName().toString().equals(".incoming"))
+          .filter(f -> !f.getParent().getFileName().toString().equals(".quarantine"))
           .toList();
     }
   }
@@ -205,10 +210,11 @@ class DicomReceiverTest {
     List<Path> files = storedFiles();
     assertEquals(1, files.size());
     Path file = files.getFirst();
-    assertEquals("ABEBE KEBEDE_45Y_MRN77_2026-11-06_1.2.3.1.dcm", file.getFileName().toString());
+    assertEquals(
+        "KEBEDE ABEBE_45Y_MRN77_study 2026-01-01_1.2.3.1.dcm", file.getFileName().toString());
     assertEquals(root, file.getParent().getParent());
     assertEquals(
-        "ABEBE KEBEDE_45Y_MRN77_2026-11-06_" + ReceiveNaming.studyKey(STUDY),
+        "KEBEDE ABEBE_45Y_MRN77_study 2026-01-01_" + StoreNaming.studyKey(STUDY),
         file.getParent().getFileName().toString());
     try (DicomInputStream in = new DicomInputStream(file.toFile())) {
       Attributes back = in.readDataset();
@@ -336,13 +342,55 @@ class DicomReceiverTest {
   }
 
   @Test
-  void aDuplicateKeepsTheFirstCopyAndIsNotCountedTwice() throws Exception {
+  void anImageWithLessPixelDataThanItDeclaresIsRefused() throws Exception {
+    start();
+    Attributes shortImage = image("1.2.3.1");
+    shortImage.setInt(Tag.BitsAllocated, VR.US, 16);
+    shortImage.setInt(Tag.SamplesPerPixel, VR.US, 1);
+    shortImage.setBytes(Tag.PixelData, VR.OW, new byte[4]);
+    try (TestScu scu = new TestScu(XRAY, AE, port)) {
+      assertEquals(Status.CannotUnderstand, scu.store(shortImage));
+    }
+    assertTrue(storedFiles().isEmpty());
+    assertEquals(List.of(ReceiveProblem.NOT_DICOM), problems);
+  }
+
+  @Test
+  void anIdentifierReusedInAnotherStudyIsRefusedAndKeptAside() throws Exception {
+    start();
+    Attributes reused = image("1.2.3.1");
+    reused.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3.999");
+    try (TestScu scu = new TestScu(XRAY, AE, port)) {
+      assertEquals(Status.Success, scu.store(image("1.2.3.1")));
+      assertEquals(Status.ProcessingFailure, scu.store(reused));
+    }
+    assertEquals(1, storedFiles().size());
+    assertEquals(List.of(ReceiveProblem.CONFLICT), problems);
+  }
+
+  @Test
+  void theSameImageSentAgainIsAcceptedAndNotCountedTwice() throws Exception {
+    start();
+    try (TestScu scu = new TestScu(XRAY, AE, port)) {
+      assertEquals(Status.Success, scu.store(image("1.2.3.1")));
+      assertEquals(Status.Success, scu.store(image("1.2.3.1")));
+    }
+    assertEquals(1, storedFiles().size());
+    assertEquals(1, stored.size());
+    assertFalse(Files.exists(root.resolve(".quarantine")));
+  }
+
+  @Test
+  void theSameIdentifierWithOtherContentIsRefusedAndKeptAside() throws Exception {
     start();
     Attributes changed = image("1.2.3.1");
     changed.setString(Tag.PatientID, VR.LO, "CHANGED");
     try (TestScu scu = new TestScu(XRAY, AE, port)) {
       assertEquals(Status.Success, scu.store(image("1.2.3.1")));
-      assertEquals(Status.Success, scu.store(changed));
+      assertEquals(Status.ProcessingFailure, scu.store(changed));
+    }
+    try (var aside = Files.list(root.resolve(".quarantine"))) {
+      assertEquals(1, aside.count());
     }
     List<Path> files = storedFiles();
     assertEquals(1, files.size());
@@ -414,10 +462,9 @@ class DicomReceiverTest {
       assertEquals(Status.Success, scu.store(bare));
     }
     Path file = storedFiles().getFirst();
-    assertEquals("2026-11-06_1.2.3.1.dcm", file.getFileName().toString());
+    assertEquals("1.2.3.1.dcm", file.getFileName().toString());
     assertEquals(
-        "2026-11-06_" + STUDY + "_" + ReceiveNaming.studyKey(STUDY),
-        file.getParent().getFileName().toString());
+        STUDY + "_" + StoreNaming.studyKey(STUDY), file.getParent().getFileName().toString());
   }
 
   @Test
@@ -428,7 +475,7 @@ class DicomReceiverTest {
     }
     Path file = storedFiles().getFirst();
     assertFalse(file.toString().contains("ABEBE"));
-    assertEquals("45Y_MRN77_2026-11-06_1.2.3.1.dcm", file.getFileName().toString());
+    assertEquals("45Y_MRN77_study 2026-01-01_1.2.3.1.dcm", file.getFileName().toString());
   }
 
   @Test
@@ -449,13 +496,13 @@ class DicomReceiverTest {
     try (TestScu scu = new TestScu(XRAY, AE, port)) {
       assertEquals(Status.Success, scu.store(image("1.2.3.1")));
     }
-    assertTrue(storedFiles().getFirst().getFileName().toString().startsWith("ABEBE KEBEDE_"));
+    assertTrue(storedFiles().getFirst().getFileName().toString().startsWith("KEBEDE ABEBE_"));
   }
 
   @Test
   void aFullDiskRefusesWithOutOfResources() throws Exception {
     start();
-    freeBytes.set(ReceivedStudyStore.MIN_FREE_BYTES - 1);
+    freeBytes.set(StudyStore.MIN_FREE_BYTES - 1);
     try (TestScu scu = new TestScu(XRAY, AE, port)) {
       assertEquals(Status.OutOfResources, scu.store(image("1.2.3.1")));
       freeBytes.set(Long.MAX_VALUE);
@@ -525,7 +572,7 @@ class DicomReceiverTest {
     try (TestScu scu = new TestScu(XRAY, AE, port)) {
       assertEquals(Status.Success, scu.store(image("1.2.3.1")));
     }
-    ReceivedStudy study = receiver.store().listStudies().getFirst();
+    StoredStudy study = receiver.store().listStudies().getFirst();
     assertEquals(1, study.images());
     assertTrue(study.sizeBytes() > 0);
 

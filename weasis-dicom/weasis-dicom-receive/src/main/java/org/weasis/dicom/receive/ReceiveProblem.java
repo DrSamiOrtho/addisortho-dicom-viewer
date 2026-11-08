@@ -15,6 +15,7 @@ public enum ReceiveProblem {
   FOLDER_NOT_WRITABLE("receive.problem.folder"),
   FILE_TOO_LARGE("receive.problem.too.large"),
   NOT_DICOM("receive.problem.not.dicom"),
+  CONFLICT("receive.problem.conflict"),
   SENDER_REJECTED("receive.problem.sender");
 
   private final String messageKey;

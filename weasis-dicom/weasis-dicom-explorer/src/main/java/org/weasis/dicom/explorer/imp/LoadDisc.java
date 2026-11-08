@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026 Addis Ortho Trading PLC.
+ * Copyright (c) 2026 Weasis Team and other contributors.
  *
  * This program and the accompanying materials are made available under the terms of the Eclipse
  * Public License 2.0 which is available at https://www.eclipse.org/legal/epl-2.0, or the Apache
@@ -25,6 +25,7 @@ import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.Messages;
+import org.weasis.dicom.explorer.library.StudyLibrary;
 
 /**
  * Opens a CD or DVD that has no DICOMDIR: copies its files into the viewer in one pass, file after
@@ -52,7 +53,11 @@ public class LoadDisc extends LoadLocalDicom {
         dir,
         percent -> showProgress(Messages.getString("LoadDisc.copying"), percent),
         this::isCancelled);
-    LOGGER.info("Copied {} in {} ms", disc, (System.nanoTime() - start) / 1_000_000);
+    LOGGER.info("Copied the disc in {} ms", (System.nanoTime() - start) / 1_000_000);
+    if (!isCancelled()) {
+      // Kept in the library too, so the study outlasts this temporary copy and the disc.
+      StudyLibrary.getInstance().importAndReport(List.of(dir.toFile()), true, null);
+    }
     return new File[] {dir.toFile()};
   }
 
@@ -80,7 +85,7 @@ public class LoadDisc extends LoadLocalDicom {
         Files.copy(file, target);
       } catch (IOException e) {
         // A scratched sector loses one file, not the disc.
-        LOGGER.warn("Cannot copy {} from the disc: {}", file, e.getMessage());
+        LOGGER.warn("Cannot copy a file from the disc: {}", e.getClass().getSimpleName());
       }
       long before = done;
       done += size(file);

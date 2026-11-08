@@ -83,18 +83,21 @@ record Seam(
   }
 
   /**
-   * The same seam moved by hand (nudge or rotation): now semi-automatic unless it was manual. A
-   * failed seam stays failed (design section 5.4: manual adjustment never clears a warning by
-   * itself); only matching points that agree, or a new automatic match, can clear it.
+   * The same seam moved by hand (drag, nudge or rotation): now semi-automatic unless it was manual.
+   * A failed seam stays failed (design section 5.4: manual adjustment never clears a warning by
+   * itself); only the automatic match refined from the hand-set position, matching points that
+   * agree, or a new automatic match can clear it.
    */
   Seam adjusted(Rigid moved) {
     Method m = method == Method.MANUAL ? Method.MANUAL : Method.SEMI_AUTOMATIC;
     List<String> why =
         List.of(
             status == Status.FAILED
-                ? "moved by hand after a failed match; the seam stays failed until it is set by"
-                    + " matching points that agree (Fit to the points)"
-                : "moved by hand: the residual is no longer measured, inspect the overlap",
+                ? "moved by hand after a failed match; the seam stays failed until Refine"
+                    + " automatically from here confirms it, or matching points that agree set it"
+                    + " (Fit to the points)"
+                : "moved by hand: the residual is no longer measured; press Refine automatically"
+                    + " from here to measure it, or inspect the overlap",
             "%s seam, not reviewed".formatted(m.word));
     return new Seam(
         moved,

@@ -15,11 +15,16 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.MouseWheelEvent;
 import java.awt.image.BufferedImage;
 import java.util.function.BiConsumer;
+import java.util.function.IntConsumer;
 import javax.swing.JPanel;
 
-/** Shows a picture scaled to fit, keeps its aspect, and reports clicks in picture pixels. */
+/**
+ * Shows a picture scaled to fit, keeps its aspect, and reports clicks, drags and wheel turns in
+ * picture pixels.
+ */
 final class ImagePanel extends JPanel {
 
   /** Paints over the picture; {@code scale} is screen pixels per picture pixel. */
@@ -33,19 +38,55 @@ final class ImagePanel extends JPanel {
   private double scale = 1;
   private int ox;
   private int oy;
+  private BiConsumer<Double, Double> onDrag;
+  private IntConsumer onWheel;
+  private int lastX;
+  private int lastY;
 
   ImagePanel(BiConsumer<Double, Double> onClick) {
     setBackground(Color.BLACK);
     setPreferredSize(new Dimension(360, 240));
-    addMouseListener(
+    MouseAdapter mouse =
         new MouseAdapter() {
           @Override
           public void mousePressed(MouseEvent e) {
+            lastX = e.getX();
+            lastY = e.getY();
             if (image != null && onClick != null) {
               onClick.accept((e.getX() - ox) / scale, (e.getY() - oy) / scale);
             }
           }
-        });
+
+          @Override
+          public void mouseDragged(MouseEvent e) {
+            if (image != null && onDrag != null) {
+              onDrag.accept((e.getX() - lastX) / scale, (e.getY() - lastY) / scale);
+            }
+            lastX = e.getX();
+            lastY = e.getY();
+          }
+
+          // only with Shift held: an unmodified wheel is too easy to turn by accident
+          @Override
+          public void mouseWheelMoved(MouseWheelEvent e) {
+            if (image != null && onWheel != null && e.getWheelRotation() != 0 && e.isShiftDown()) {
+              onWheel.accept(e.getWheelRotation());
+            }
+          }
+        };
+    addMouseListener(mouse);
+    addMouseMotionListener(mouse);
+    addMouseWheelListener(mouse);
+  }
+
+  /** Called while the mouse drags over the picture, with the move in picture pixels. */
+  void setOnDrag(BiConsumer<Double, Double> onDrag) {
+    this.onDrag = onDrag;
+  }
+
+  /** Called for each wheel notch turned with Shift held (negative towards the user). */
+  void setOnWheel(IntConsumer onWheel) {
+    this.onWheel = onWheel;
   }
 
   void setImage(BufferedImage image, Overlay overlay) {
@@ -78,14 +119,26 @@ final class ImagePanel extends JPanel {
     g2.dispose();
   }
 
-  /** A grey picture from values in 0..1 (NaN dark blue: masked or outside the piece). */
+  /** A grey picture from values in 0..1, black where there is no picture (NaN), as saved. */
   static BufferedImage gray(float[] v, int w, int h) {
+    return gray(v, w, h, 0x000000);
+  }
+
+  /**
+   * As {@link #gray(float[], int, int)}, with NaN dark blue: for the seam editor's overlap, where
+   * "no data" and "no difference" must be told apart.
+   */
+  static BufferedImage grayMarked(float[] v, int w, int h) {
+    return gray(v, w, h, 0x101830);
+  }
+
+  private static BufferedImage gray(float[] v, int w, int h, int nanRgb) {
     BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
     for (int i = 0; i < v.length; i++) {
       float f = v[i];
       int rgb;
       if (Float.isNaN(f)) {
-        rgb = 0x101830;
+        rgb = nanRgb;
       } else {
         int g = (int) Math.max(0, Math.min(255, f * 255));
         rgb = (g << 16) | (g << 8) | g;

@@ -415,3 +415,116 @@ pixel-centre mapping consistent, and three P1 and seven P2 problems. Each was ch
 
 Astra could not run the tests inside its read-only sandbox; they were run here after the fixes (22 pass).
 
+
+## 15. Stitch 0.3: the first real four-piece case (7 Nov 2026)
+
+Stitch 0.2 (section 14 plus Kimi's 7 Nov review) failed all three seams of a real standing bilateral long-leg study:
+four 427 mm DX pieces from a DRGEM GXR, each with its own processing, plus the machine's own stitch of the same four
+exposures (2966 x 7880 px). The machine stitch gave a ground truth for each seam (lower piece origin in the upper
+piece's frame): seam 1 (10.7, 280.2) mm, overlap 147 mm; seam 2 (0.0, 306.5), overlap 121 mm; seam 3 (1.9, 83.7),
+overlap 343 mm. The matcher was run on the real pixels outside the viewer and compared with the truth.
+
+What was wrong, in order of weight:
+
+- The fine match had no signal. At 0.5 mm the gradient magnitude of a DR film is quantum noise, which the other piece
+  does not repeat (the two pieces are also processed differently): at the true position the median patch correlation
+  was 0.23 to 0.60 against a gate of 0.6, so the fine match found 0 to 3 pairs and every seam failed on points. The
+  intensity itself correlates at 0.8 to 0.99. The fine grid is now 1 mm and the patches match on normalised intensity;
+  gradient magnitude stays for the rough search, which found the true position on seams 1 and 2.
+- The overlap was capped at 150 mm and 0.6 of the height; the radiographer moved the detector 84 mm for the ankle, so
+  seam 3 could never be found. The cap is now 0.85 of the piece height.
+- The held-back check was three patches of which usually one matched, so it mostly could not run, and the single worst
+  held patch (on a skin fold, or on the other leg, which parallax moves 2 to 3 mm) failed seams that 50 bone patches
+  supported. Now every tenth patch by strength is held back, at least three must match, and the median residual is the
+  gate (the worst is reported).
+- The inlier tolerance of 1 mm could not hold true pairs on both legs: in the machine's own stitch the two legs sit 2 to
+  3 mm apart vertically. It is now 1.5 mm, the same as the residual gate. Candidate patches went from 120 to 300.
+- The edge-direction gate failed the 343 mm seam of two tibial shafts although 59 ridge-tested points fixed it; it now
+  fails only when fewer than 12 points agree, and is a note otherwise.
+- A failed seam carried the fit of its few points (seam 1 was shown 50 mm and 3 degrees off); it now carries the rough
+  position, which was 4 mm from the truth on seams 1 and 2, so the hand line-up starts there.
+
+Result on the case: seam 3 passes as "check" (shift (3.6, 83.8), 0.34 degrees, 59 points, residual 0.86 mm, 16 held
+points within 1.0 mm; the machine's reference is (1.9, 83.7) over the whole overlap and (2.9, 84) on the leg, so
+within 2 mm of it). Seam 2 fails and should: inside the knee the patella and the condyles sit at different depths,
+and between two tube positions they project 10 mm apart; the fine match finds 30 points on one layer and 21 on the
+other, and the whole-width fit is rejected by the held points (median 3.2 mm). Seam 1 fails: the overlap is two
+straight femoral shafts and soft tissue, 3 to 5 points. Refined from the true position, seams 1 and 2 still fail the
+gates (hold-out 2.2 to 2.6 mm, rotation uncertainty 0.35 degrees on one knee), which is the overlap's own
+non-rigidity, not a matching error. The gates were not changed to pass them; whether the hold-out and rotation limits
+should be retuned for one-leg bands is an open question for Kimi's second review and Sami.
+
+The manual line-up (section 5.4) is now the working path for such seams: in the seam window the lower piece is dragged
+with the mouse over the checkerboard (wheel turns it), and "Refine automatically from here" runs the fine match and all
+the gates from the hand-set position without a rough search or rival check, so a seam placed by hand can pass with a
+measured residual and uncertainty, or fail with the reasons. Point pairs and "Fit to the points" stay. The button in
+the stitch window is now "Line up by hand / inspect seam...".
+
+Memory: the 0.5 mm fine copy and its gradient were 300 MB per 3072 x 3072 piece; the 1 mm copy is 37 MB.
+
+### 15.1 Kimi's second review (7 Nov 2026) and what was done with it
+
+`~/Documents/kimi/workspace/REVIEW-KIMI-2026-11-07-stitch-real-case.md`. Verdict: the 1 mm intensity signal and the
+open overlap are right; seam 2 is genuine parallax between layers of the knee and seam 1 lacks along-shaft structure,
+and neither should be passed by loosening a gate. Built the same day:
+
+- Refine from a hand-set position now refines the rough peaks within 25 mm of it as well, and a rival with 70 % of the
+  points fails the seam (`SeamMatcher.refine`).
+- A manual seam with fewer than three pairs, or pairs within 30 mm of each other, is failed (unconfirmed), not "check":
+  it cannot be saved (`SeamMatcher.manual`).
+- Target leg Both needs both legs matched on their own, agreeing, and the whole-width match passing; otherwise failed
+  (`SeamMatcher.matchBothLegs`).
+- Held-back check: still every tenth patch by strength with fitted patches within half a patch excluded, and now the
+  gate is the median at 2 mm and the upper quarter at 4 mm, the worst reported (`holdOut`, `judge`). Kimi's stricter
+  independence was measured and not taken: excluding the fitted patches two steps away as well (which can share up to
+  half their width with a held one) took the 343 mm seam from 59 to 24 pairs and the single-leg phantom's position
+  error from 0.3 to 0.57 mm; excluding every patch that shares a pixel starved the fit (8 pairs) and failed the two-leg
+  phantoms; a few strongest-first held patches let the knee pass on the wrong layer with 5 held points where 16 had
+  refused it. So the check is largely, not wholly, independent; regional limits remain a follow-up.
+- The wheel turns the piece only with Shift held; a Flicker view alternates the two pieces twice a second; the points
+  that drove the fit are drawn on the aligned view.
+
+Not built, kept as follow-ups: an anatomical target region (condyles and plateau, excluding patella, skin and ruler)
+with ruler and annotation exclusion; a signed-gradient or local-contrast check at the matched displacement; an
+anatomy-aware or movable cut in a large overlap (`Stitch.seamY`); flicker at full resolution with a signed edge
+overlay and zoom; a separate unverified visual export without PixelSpacing for a seam that cannot be confirmed; the
+templating page reading the seam metadata before any cross-seam measurement. The gates were not loosened.
+
+### 15.2 The cut never goes through a sphere (Sami, 7 Nov 2026)
+
+Sami's rule: wherever a sphere is seen, the cut must not pass through it, nor through the medial or lateral femoral
+condyle or the greater trochanter; the sphere must show whole. Kimi's second review asked for the same (an
+anatomy-aware or movable cut, not the middle of the overlap). Built as `Cut`:
+
+- The cut row of each seam is chosen inside the overlap, 15 mm from its ends, where the bone outline runs straight: on
+  bone (Otsu threshold) in a 14 mm window, the vertical gradient over the horizontal one is smallest. A shaft's edges
+  are vertical, so the ratio is small (0.12 to 0.26 on the four-piece case); a head, condyle, trochanter or plateau has
+  a curved outline and a large ratio. Both pieces' pixels in the window count. Below 0.6 the cut is called "on straight
+  bone"; otherwise the note says the cut crosses a round bone outline and should be moved.
+- A bright round marker in either piece (a calibration ball, a prosthetic head) is found on the unmasked 2 mm copy at
+  three brightness levels (compact, round, standing out from its ring: the ball reached only 0.7 to 0.9 of the range on
+  this case while dense bone reached 1.0), and its rows plus 14 mm on each side are never cut. The marker was found on
+  three of the four pieces (0 to 26 mm from the top, where the stand holds it); the fourth shows none.
+- On the four-piece case at the machine's reference seams the cuts land at 121, 105 and 65 mm below the overlaps'
+  tops: below the knee joint on the proximal tibia for seam 2, on the tibial shaft for seam 3, on the thigh for seam 1.
+- The user can drag a seam line in the stitch preview to move the cut; the derivation text and the preview's hover
+  text say where each cut is and why. A cut set by hand is recorded as such.
+- Not built: recognising the trochanter or the condyles by shape; the straight-outline rule stands in for it. The
+  compositor still feathers 10 mm about the cut.
+
+### 15.3 Save as unverified draft (Sami, 7 Nov 2026)
+
+On the real case with target leg Both every seam read failed although the preview was right, and Save stayed off. Sami
+asked for a way to save the stitched X-ray anyway. Built, within Kimi's rule that an unconfirmed seam must not
+produce a measurable image: a second button, "Save as unverified draft...", enabled only while a seam reads failed.
+It names the failed seams and their first reason, warns what the image cannot be used for, and on OK writes the
+stitch with `Stitch.unverified`: the label's first line is "UNVERIFIED STITCH: seam N failed. Not for lengths, angles
+or templating.", the series description reads "Long leg stitched (UNVERIFIED draft, not for measurement)", the
+derivation text starts with UNVERIFIED, the private seam data carries `"unverified":true`, and the file has no
+PixelSpacing, so no viewer can measure in mm on it. The Template button refuses an image whose comments or series
+description contain UNVERIFIED. The ordinary save is unchanged and still needs every seam at "check".
+
+Also seen on that run: with target leg Both the strict rule of 15.1 (each leg on its own, agreeing, and the whole
+width) failed all three seams on the bilateral film even though the whole-width match had found the right place;
+target leg Left or Right with the whole image width lets the ankle seam pass. Whether Both should accept a passing
+whole-width match when one half merely lacks held-back points is an open tuning question.

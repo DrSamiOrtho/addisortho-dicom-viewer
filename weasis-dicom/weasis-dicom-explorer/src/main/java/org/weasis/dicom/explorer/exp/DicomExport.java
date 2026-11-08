@@ -21,6 +21,7 @@ import java.util.Hashtable;
 import java.util.List;
 import java.util.Set;
 import javax.swing.JButton;
+import javax.swing.JOptionPane;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.TreePath;
 import org.osgi.framework.BundleContext;
@@ -176,6 +177,11 @@ public class DicomExport extends AbstractWizardDialog {
         selectedPage.exportDICOM(treeModel, null);
       } catch (IOException e) {
         LOGGER.error("DICOM export failed", e);
+        JOptionPane.showMessageDialog(
+            this,
+            ExportOutcome.reason(e),
+            Messages.getString("DicomExport.exp_dicom"),
+            JOptionPane.ERROR_MESSAGE);
       }
     }
   }

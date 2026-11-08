@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.stream.Collectors;
+import org.weasis.dicom.explorer.library.StudyLibrary;
 
 /** Settings of the DICOM receiver, stored in a properties file of the bundle data folder. */
 public record ReceiveSettings(
@@ -67,7 +68,7 @@ public record ReceiveSettings(
 
   /** A plain folder of the home directory: Documents is often synchronised to a cloud service. */
   public static Path defaultStorageFolder() {
-    return Path.of(System.getProperty("user.home"), "AddisOrthoReceived");
+    return StudyLibrary.defaultRoot();
   }
 
   public long maxFileSizeMb() {

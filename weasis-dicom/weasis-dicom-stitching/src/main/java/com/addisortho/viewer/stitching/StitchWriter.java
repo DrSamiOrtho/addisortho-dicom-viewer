@@ -13,12 +13,17 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Predicate;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.ElementDictionary;
@@ -28,6 +33,7 @@ import org.dcm4che3.data.UID;
 import org.dcm4che3.data.VR;
 import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.util.UIDUtils;
+import org.weasis.dicom.codec.utils.DicomFileLabel;
 
 /**
  * Writes the stitch as a Secondary Capture in the pieces' patient and study (design section 7). The
@@ -35,7 +41,10 @@ import org.dcm4che3.util.UIDUtils;
  */
 final class StitchWriter {
 
-  static final String SOFTWARE = "Addis Ortho Viewer long-leg stitch 0.1 (phase 1, draft)";
+  // 0.2: gates measured against the bone, the two-legs check, padding 0 (7 Nov 2026)
+  // 0.4: a failed seam keeps no fitted rotation; cuts pulled to the middle of the overlap (7 Nov)
+  // 0.5: the tone blended over 60 mm at each seam, the detail still over 10 mm (7 Nov 2026)
+  static final String SOFTWARE = "Addis Ortho Viewer long-leg stitch 0.5 (draft)";
   static final String PRIVATE_CREATOR = "ADDIS ORTHO STITCH 1";
   static final int PRIVATE_DATA = 0x00711001;
   static final int SERIES_NUMBER = 903;
@@ -101,7 +110,9 @@ final class StitchWriter {
     a.setString(Tag.ContentTime, VR.TM, time);
     a.setString(Tag.InstanceCreationDate, VR.DA, now);
     a.setString(Tag.InstanceCreationTime, VR.TM, time);
+    a.setString(Tag.Manufacturer, VR.LO, "Addis Ortho Trading PLC"); // Type 2, General Equipment
     a.setString(Tag.SecondaryCaptureDeviceManufacturer, VR.LO, "Addis Ortho Trading PLC");
+    lossy(s, a);
     a.setString(Tag.SecondaryCaptureDeviceSoftwareVersions, VR.LO, SOFTWARE);
     a.setString(Tag.ImageComments, VR.LT, String.join(" ", s.labelLines()));
 
@@ -124,15 +135,14 @@ final class StitchWriter {
       if (magnified) {
         a.setString(Tag.PixelSpacingCalibrationType, VR.CS, "GEOMETRY");
       }
+      // LO holds 64 characters: the basis's long words were cut off before "not calibrated"
       a.setString(
           Tag.PixelSpacingCalibrationDescription,
           VR.LO,
-          trim(
-              s.pieces.get(0).spacing.basis().words
-                  + "; not calibrated to the patient plane; stitched draft",
-              64));
+          "Stitched draft; piece 1's spacing; not at the patient plane");
     }
 
+    sourceAcquisitionDate(s, a);
     copyIfAllAgree(s, a, Tag.PatientOrientation, VR.CS);
     if (!a.contains(Tag.PatientOrientation)) {
       a.setNull(Tag.PatientOrientation, VR.CS); // Type 2C: present, empty when not known
@@ -191,6 +201,7 @@ final class StitchWriter {
   static String seamData(Stitch s, Compositor c) {
     StringBuilder sb = new StringBuilder("{\"version\":1,\"software\":\"").append(SOFTWARE);
     sb.append("\",\"status\":\"draft, ").append(s.method().word).append(", not reviewed\"");
+    sb.append(",\"unverified\":").append(s.unverified);
     sb.append(",\"leg\":\"").append(s.choices.leg().word).append('"');
     sb.append(",\"projection\":\"").append(s.choices.projection()).append('"');
     sb.append(",\"position\":\"").append(s.choices.position()).append('"');
@@ -228,7 +239,9 @@ final class StitchWriter {
           .append(']')
           .append(",\"spacing\":\"")
           .append(p.spacing.basis().name())
-          .append("\"}");
+          .append("\",\"imageDate\":")
+          .append(imageDateJson(p))
+          .append('}');
     }
     sb.append("],\"seams\":[");
     for (int i = 0; i < s.seams.size(); i++) {
@@ -240,6 +253,11 @@ final class StitchWriter {
           .append(c.seamRow(i) - (int) Math.ceil(Stitch.FEATHER_MM / 2 / c.mm))
           .append(',')
           .append(c.seamRow(i) + (int) Math.ceil(Stitch.FEATHER_MM / 2 / c.mm))
+          .append(']')
+          .append(",\"toneRows\":[")
+          .append(c.seamRow(i) - (int) Math.ceil(c.toneHalfMm(i) / c.mm))
+          .append(',')
+          .append(c.seamRow(i) + (int) Math.ceil(c.toneHalfMm(i) / c.mm))
           .append(']')
           .append(",\"method\":\"")
           .append(m.method().word)
@@ -258,6 +276,57 @@ final class StitchWriter {
           .append('}');
     }
     return sb.append("]}").toString();
+  }
+
+  /**
+   * The day the pieces were taken, when they all say the same one. The stitch was made today, and
+   * that is its Content Date; it must never read as the day of the X-ray. Pieces taken on different
+   * days give no single date, and {@link #seamData} lists each.
+   */
+  private static void sourceAcquisitionDate(Stitch s, Attributes a) {
+    Set<LocalDate> days = new HashSet<>();
+    for (Piece p : s.pieces) {
+      Optional<DicomFileLabel.ImageDate> date = DicomFileLabel.imageDate(p.header);
+      if (date.isEmpty() || !date.get().acquired()) {
+        return;
+      }
+      days.add(date.get().day());
+    }
+    if (days.size() == 1) {
+      a.setString(
+          Tag.AcquisitionDate,
+          VR.DA,
+          days.iterator().next().format(DateTimeFormatter.BASIC_ISO_DATE));
+    }
+  }
+
+  private static String imageDateJson(Piece p) {
+    return DicomFileLabel.imageDate(p.header).map(d -> "\"" + d.label() + "\"").orElse("null");
+  }
+
+  /** LossyImageCompression is Type 1C: 01 when any piece was lossy, with its ratios and methods. */
+  private static void lossy(Stitch s, Attributes a) {
+    List<String> ratios = new ArrayList<>();
+    List<String> methods = new ArrayList<>();
+    boolean any = false;
+    for (Piece p : s.pieces) {
+      if ("01".equals(p.header.getString(Tag.LossyImageCompression))) {
+        any = true;
+        String[] r = p.header.getStrings(Tag.LossyImageCompressionRatio);
+        String[] m = p.header.getStrings(Tag.LossyImageCompressionMethod);
+        if (r != null && m != null && r.length == m.length) {
+          ratios.addAll(Arrays.asList(r));
+          methods.addAll(Arrays.asList(m));
+        }
+      }
+    }
+    if (any) {
+      a.setString(Tag.LossyImageCompression, VR.CS, "01");
+      if (!ratios.isEmpty()) {
+        a.setString(Tag.LossyImageCompressionRatio, VR.DS, ratios.toArray(String[]::new));
+        a.setString(Tag.LossyImageCompressionMethod, VR.CS, methods.toArray(String[]::new));
+      }
+    }
   }
 
   private static void copyIfAllAgree(Stitch s, Attributes a, int tag, VR vr) {

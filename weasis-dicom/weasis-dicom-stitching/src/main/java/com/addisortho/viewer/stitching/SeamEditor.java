@@ -15,14 +15,18 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
+import java.awt.Rectangle;
 import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.geom.Ellipse2D;
+import java.awt.geom.Line2D;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.ButtonGroup;
@@ -37,11 +41,13 @@ import javax.swing.JTextArea;
 import javax.swing.JToggleButton;
 import javax.swing.KeyStroke;
 import javax.swing.SwingWorker;
+import javax.swing.Timer;
 
 /**
  * Inspects one seam and lets the user correct it (design sections 4 and 5.4): a checkerboard or
- * difference of the two pieces over the overlap, nudges and turns from the keyboard, and matching
- * points picked in the two pieces.
+ * difference of the two pieces over the overlap, the lower piece dragged with the mouse or nudged
+ * and turned from the keyboard, the automatic match refined from the position set by hand, and
+ * matching points picked in the two pieces.
  */
 final class SeamEditor extends JDialog {
 
@@ -50,19 +56,37 @@ final class SeamEditor extends JDialog {
   private static final double CHECK_MM = 10;
   private static final Color UPPER = new Color(0xA8FF30);
   private static final Color LOWER = new Color(0xFF8A30);
+  private static final int WHOLE_DELAY_MS = 250;
 
   private final Piece upper;
   private final Piece lower;
+  private final int index;
+  // the whole stitch with this seam replaced by the one given; null when there is none to show
+  private final Function<Seam, Stitch> whole;
   private Seam seam;
   private Seam result;
   private final List<Rigid.Pair> pairs = new ArrayList<>();
   private double[] pendingUpper;
 
   private final ImagePanel aligned = new ImagePanel(null);
+  // the whole stitched leg, redrawn a moment after each move or refit (Sami, 8 Nov 2026)
+  private final ImagePanel wholeView = new ImagePanel(null);
+  private final Timer wholeTimer = new Timer(WHOLE_DELAY_MS, e -> renderWhole());
+  private int wholeGeneration;
   private final ImagePanel upperView = new ImagePanel(this::clickUpper);
   private final ImagePanel lowerView = new ImagePanel(this::clickLower);
   private final JRadioButton checker =
       new JRadioButton(Messages.getString("SeamEditor.checker"), true);
+  private final JRadioButton flicker = new JRadioButton(Messages.getString("SeamEditor.flicker"));
+  // flicker: the aligned view alternates between the two pieces twice a second
+  private boolean flickerUpper;
+  private final Timer flickerTimer =
+      new Timer(
+          500,
+          e -> {
+            flickerUpper = !flickerUpper;
+            renderAligned();
+          });
   private final JToggleButton pick = new JToggleButton(Messages.getString("SeamEditor.pick"));
   private final JTextArea status = new JTextArea(4, 60);
   private final JLabel pairCount = new JLabel();
@@ -72,24 +96,44 @@ final class SeamEditor extends JDialog {
   private double[] lowerBox;
 
   SeamEditor(Window owner, int index, Piece upper, Piece lower, Seam seam, SeamMatcher.Band band) {
+    this(owner, index, upper, lower, seam, band, null);
+  }
+
+  /**
+   * @param whole the whole stitch with seam {@code index} replaced by the seam given, drawn beside
+   *     the overlap and redrawn after each move; null to show the overlap only
+   */
+  SeamEditor(
+      Window owner,
+      int index,
+      Piece upper,
+      Piece lower,
+      Seam seam,
+      SeamMatcher.Band band,
+      Function<Seam, Stitch> whole) {
     super(
         owner,
         Messages.getString("SeamEditor.title").formatted(index + 1),
         ModalityType.APPLICATION_MODAL);
     this.upper = upper;
     this.lower = lower;
+    this.index = index;
+    this.whole = whole;
     this.seam = seam;
+    wholeTimer.setRepeats(false);
     if (seam.method() == Seam.Method.MANUAL) {
       pairs.addAll(seam.pairs());
     }
 
-    JTextArea help = text(Messages.getString("SeamEditor.help"), 2);
+    JTextArea help = text(Messages.getString("SeamEditor.help"), 3);
     JRadioButton diff = new JRadioButton(Messages.getString("SeamEditor.difference"));
     ButtonGroup mode = new ButtonGroup();
     mode.add(checker);
     mode.add(diff);
+    mode.add(flicker);
     checker.addActionListener(e -> renderAligned());
     diff.addActionListener(e -> renderAligned());
+    flicker.addActionListener(e -> renderAligned());
 
     JButton clear = new JButton(Messages.getString("SeamEditor.clear"));
     clear.addActionListener(
@@ -126,6 +170,32 @@ final class SeamEditor extends JDialog {
             }
           }.execute();
         });
+    JButton refine = new JButton(Messages.getString("SeamEditor.refine"));
+    refine.setToolTipText(Messages.getString("SeamEditor.refineTip"));
+    refine.addActionListener(
+        e -> {
+          refine.setEnabled(false);
+          Rigid from = this.seam.transform();
+          new SwingWorker<Seam, Void>() {
+            @Override
+            protected Seam doInBackground() {
+              return SeamMatcher.refine(upper.match(), lower.match(), band, from);
+            }
+
+            @Override
+            protected void done() {
+              refine.setEnabled(true);
+              try {
+                setSeam(get());
+              } catch (Exception ex) {
+                status.setText(String.valueOf(ex.getCause() == null ? ex : ex.getCause()));
+              }
+            }
+          }.execute();
+        });
+    aligned.setOnDrag((dx, dy) -> move(dx * GRID, dy * GRID, 0));
+    aligned.setOnWheel(notches -> move(0, 0, 0.1 * notches));
+    aligned.setToolTipText(Messages.getString("SeamEditor.dragTip"));
     JButton apply = new JButton(Messages.getString("SeamEditor.apply"));
     apply.addActionListener(
         e -> {
@@ -138,10 +208,12 @@ final class SeamEditor extends JDialog {
     JPanel tools = new JPanel(new FlowLayout(FlowLayout.LEFT));
     tools.add(checker);
     tools.add(diff);
+    tools.add(flicker);
     tools.add(pick);
     tools.add(clear);
     tools.add(fit);
     tools.add(auto);
+    tools.add(refine);
     tools.add(pairCount);
 
     JPanel views = new JPanel(new GridLayout(1, 2, 6, 0));
@@ -154,6 +226,13 @@ final class SeamEditor extends JDialog {
     JPanel centre = new JPanel(new BorderLayout(0, 6));
     centre.add(aligned, BorderLayout.CENTER);
     centre.add(views, BorderLayout.SOUTH);
+    JPanel middle = new JPanel(new BorderLayout(6, 0));
+    middle.add(centre, BorderLayout.CENTER);
+    if (whole != null) {
+      wholeView.setPreferredSize(new Dimension(300, 480));
+      wholeView.setToolTipText(Messages.getString("SeamEditor.wholeTip"));
+      middle.add(titled(wholeView, Messages.getString("SeamEditor.whole")), BorderLayout.EAST);
+    }
 
     status.setEditable(false);
     status.setLineWrap(true);
@@ -172,13 +251,28 @@ final class SeamEditor extends JDialog {
     JPanel root = new JPanel(new BorderLayout(0, 6));
     root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
     root.add(north, BorderLayout.NORTH);
-    root.add(centre, BorderLayout.CENTER);
+    root.add(middle, BorderLayout.CENTER);
     root.add(bottom, BorderLayout.SOUTH);
     setContentPane(root);
     bindKeys(root);
     setSeam(seam);
     pack();
+    // most of the screen, and resizable: the aligned view takes the space, so a seam can be
+    // judged and corrected on a large screen (Sami, 7 Nov 2026)
+    Rectangle screen =
+        (owner != null ? owner.getGraphicsConfiguration() : getGraphicsConfiguration()).getBounds();
+    setSize(
+        Math.max(getWidth(), (int) (screen.width * 0.9)),
+        Math.max(getHeight(), (int) (screen.height * 0.9)));
     setLocationRelativeTo(owner);
+  }
+
+  @Override
+  public void dispose() {
+    flickerTimer.stop();
+    wholeTimer.stop();
+    wholeGeneration++;
+    super.dispose();
   }
 
   /** The seam the user chose, empty when cancelled. */
@@ -200,6 +294,62 @@ final class SeamEditor extends JDialog {
     status.setCaretPosition(0);
     renderAligned();
     renderPairs();
+    if (whole != null) {
+      wholeTimer.restart(); // one render a moment after the last move, off the interface thread
+    }
+  }
+
+  // the whole stitch at 2 mm with this seam as it stands, the seams drawn, this one brighter
+  private void renderWhole() {
+    Seam s = seam;
+    int generation = ++wholeGeneration;
+    new SwingWorker<Object[], Void>() {
+      @Override
+      protected Object[] doInBackground() {
+        Stitch stitch = whole.apply(s);
+        Gray g = new Compositor(stitch).preview(MatchImage.COARSE_MM, false).normalized();
+        double[] b = stitch.bounds();
+        double[] ys = new double[stitch.seams.size()];
+        boolean[] failed = new boolean[ys.length];
+        for (int i = 0; i < ys.length; i++) {
+          ys[i] = (stitch.seamY(i) - b[1]) / g.mm();
+          failed[i] = stitch.seams.get(i).status() == Seam.Status.FAILED;
+        }
+        return new Object[] {ImagePanel.gray(g.data(), g.width(), g.height()), ys, failed};
+      }
+
+      @Override
+      protected void done() {
+        if (generation != wholeGeneration) {
+          return; // a later move superseded this picture
+        }
+        try {
+          Object[] r = get();
+          BufferedImage img = (BufferedImage) r[0];
+          double[] ys = (double[]) r[1];
+          boolean[] failed = (boolean[]) r[2];
+          wholeView.setImage(
+              img,
+              (g2, scale) -> {
+                for (int i = 0; i < ys.length; i++) {
+                  g2.setColor(failed[i] ? Color.RED : UPPER);
+                  g2.setStroke(
+                      new BasicStroke(
+                          i == index ? 2f : 1f,
+                          BasicStroke.CAP_BUTT,
+                          BasicStroke.JOIN_BEVEL,
+                          1f,
+                          new float[] {6, 4},
+                          0));
+                  double y = ys[i] * scale;
+                  g2.draw(new Line2D.Double(0, y, img.getWidth() * scale, y));
+                }
+              });
+        } catch (Exception ex) {
+          status.append("\n" + (ex.getCause() == null ? ex : ex.getCause()));
+        }
+      }
+    }.execute();
   }
 
   private void renderAligned() {
@@ -216,6 +366,14 @@ final class SeamEditor extends JDialog {
     h = Math.max(1, h);
     float[] v = new float[w * h];
     boolean check = checker.isSelected();
+    boolean flick = flicker.isSelected();
+    if (flick != flickerTimer.isRunning()) {
+      if (flick) {
+        flickerTimer.start();
+      } else {
+        flickerTimer.stop();
+      }
+    }
     int cell = (int) Math.round(CHECK_MM / GRID);
     for (int y = 0; y < h; y++) {
       double py = upperBox[1] + (y + 0.5) * GRID;
@@ -224,8 +382,8 @@ final class SeamEditor extends JDialog {
         float a = u.sample(px, py);
         double[] q = toLower.apply(px, py);
         float b = l.sample(q[0], q[1]);
-        if (check) {
-          boolean useUpper = ((x / cell + y / cell) & 1) == 0;
+        if (check || flick) {
+          boolean useUpper = flick ? flickerUpper : ((x / cell + y / cell) & 1) == 0;
           float pickV = useUpper ? a : b;
           v[y * w + x] = Float.isNaN(pickV) ? (useUpper ? b : a) : pickV;
         } else {
@@ -234,7 +392,22 @@ final class SeamEditor extends JDialog {
         }
       }
     }
-    aligned.setImage(ImagePanel.gray(v, w, h), null);
+    // the points that drove the fit are drawn where they lie, so the user sees which structure
+    // the match used (Kimi, second review: "these pixels drove the match")
+    List<Rigid.Pair> drove = seam.pairs();
+    aligned.setImage(
+        ImagePanel.grayMarked(v, w, h),
+        drove.isEmpty()
+            ? null
+            : (g, s) -> {
+              g.setColor(UPPER);
+              g.setStroke(new BasicStroke(1.5f));
+              for (Rigid.Pair p : drove) {
+                double x = (p.tx() - upperBox[0]) / GRID * s;
+                double y = (p.ty() - upperBox[1]) / GRID * s;
+                g.draw(new Ellipse2D.Double(x - 4, y - 4, 8, 8));
+              }
+            });
   }
 
   private void renderPairs() {

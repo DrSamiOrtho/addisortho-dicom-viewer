@@ -50,6 +50,12 @@ import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.PluginOpeningStrategy;
+import org.weasis.dicom.explorer.index.FindPatientDialog;
+import org.weasis.dicom.explorer.library.StoreNaming;
+import org.weasis.dicom.explorer.library.StoredInstance;
+import org.weasis.dicom.explorer.library.StoredStudy;
+import org.weasis.dicom.explorer.library.StudyLibrary;
+import org.weasis.dicom.explorer.library.StudyStore;
 import org.weasis.dicom.explorer.main.DicomExplorer;
 import org.weasis.dicom.explorer.main.StudyPane;
 
@@ -96,6 +102,7 @@ public class ReceiveService implements ReceiveListener {
     batchTimer.scheduleWithFixedDelay(
         this::loadPending, BATCH_INTERVAL_MS, BATCH_INTERVAL_MS, TimeUnit.MILLISECONDS);
     instance = this;
+    FindPatientDialog.registerReceive(Messages.getString("receive.title"), this::statusLine);
     lifecycle.execute(this::restart);
   }
 
@@ -126,6 +133,26 @@ public class ReceiveService implements ReceiveListener {
         });
   }
 
+  /** The state of the receiver, in words. */
+  public String statusText() {
+    ReceiveSettings current = settings;
+    if (startError != null) {
+      return Messages.getString("receive.status.failed").formatted(Messages.getString(startError));
+    }
+    if (!isRunning()) {
+      return Messages.getString("receive.status.off");
+    }
+    if (current.allowedSenders().isEmpty()) {
+      return Messages.getString("receive.status.no.senders");
+    }
+    return Messages.getString("receive.status.running")
+        .formatted(current.aeTitle(), current.port());
+  }
+
+  private String statusLine() {
+    return Messages.getString("receive.title") + ": " + statusText();
+  }
+
   public boolean isRunning() {
     DicomReceiver r = receiver;
     return r != null && r.isRunning();
@@ -137,11 +164,9 @@ public class ReceiveService implements ReceiveListener {
   }
 
   /** A store of the current storage folder, also when the receiver is off. */
-  public ReceivedStudyStore store() {
-    DicomReceiver r = receiver;
-    return r != null
-        ? r.store()
-        : new ReceivedStudyStore(settings.storageFolder(), settings.includeNameInFileNames());
+  public StudyStore store() {
+    return StudyLibrary.getInstance()
+        .useRoot(settings.storageFolder(), settings.includeNameInFileNames());
   }
 
   private void restart() {
@@ -150,7 +175,7 @@ public class ReceiveService implements ReceiveListener {
     if (!settings.enabled()) {
       return;
     }
-    DicomReceiver newReceiver = new DicomReceiver(settings, this);
+    DicomReceiver newReceiver = new DicomReceiver(settings, this, store());
     try {
       newReceiver.start();
       receiver = newReceiver;
@@ -169,7 +194,7 @@ public class ReceiveService implements ReceiveListener {
   }
 
   @Override
-  public void onStored(ReceivedInstance instance) {
+  public void onStored(StoredInstance instance) {
     synchronized (batchLock) {
       pendingByStudy
           .computeIfAbsent(instance.studyUid(), k -> new ArrayList<>())
@@ -287,7 +312,7 @@ public class ReceiveService implements ReceiveListener {
   }
 
   /** Loads a kept study from the storage folder, for example after a restart, and shows it. */
-  public void showStudyFolder(ReceivedStudy received) {
+  public void showStudyFolder(StoredStudy received) {
     Optional<DicomExplorer> explorer = explorer();
     if (explorer.isEmpty()) {
       return;
@@ -306,7 +331,7 @@ public class ReceiveService implements ReceiveListener {
     for (MediaSeriesGroup patient : model.getChildren(MediaSeriesGroupNode.rootNode)) {
       for (MediaSeriesGroup study : model.getChildren(patient)) {
         Object uid = study.getTagValue(TagD.getUID(Level.STUDY));
-        if (uid instanceof String text && studyKey.equals(ReceiveNaming.studyKey(text))) {
+        if (uid instanceof String text && studyKey.equals(StoreNaming.studyKey(text))) {
           return Optional.of(study);
         }
       }
@@ -320,13 +345,13 @@ public class ReceiveService implements ReceiveListener {
    *
    * @param whenDone told on the event thread whether every folder was deleted
    */
-  public void deleteStudies(List<ReceivedStudy> studies, Consumer<Boolean> whenDone) {
-    ReceivedStudyStore store = store();
+  public void deleteStudies(List<StoredStudy> studies, Consumer<Boolean> whenDone) {
+    StudyStore store = store();
     Optional<DicomExplorer> explorer = explorer();
     DicomModel.LOADING_EXECUTOR.execute(
         () -> {
           boolean deleted = true;
-          for (ReceivedStudy study : studies) {
+          for (StoredStudy study : studies) {
             forgetArrivals(study.studyKey());
             explorer.ifPresent(view -> closeStudy(view.getDataExplorerModel(), study.studyKey()));
             try {
@@ -348,10 +373,10 @@ public class ReceiveService implements ReceiveListener {
 
   private void forgetArrivals(String studyKey) {
     synchronized (batchLock) {
-      pendingByStudy.keySet().removeIf(uid -> studyKey.equals(ReceiveNaming.studyKey(uid)));
+      pendingByStudy.keySet().removeIf(uid -> studyKey.equals(StoreNaming.studyKey(uid)));
     }
     synchronized (receivedByStudy) {
-      receivedByStudy.keySet().removeIf(uid -> studyKey.equals(ReceiveNaming.studyKey(uid)));
+      receivedByStudy.keySet().removeIf(uid -> studyKey.equals(StoreNaming.studyKey(uid)));
     }
   }
 }

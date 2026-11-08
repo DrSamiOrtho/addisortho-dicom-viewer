@@ -172,7 +172,8 @@ class PageFilesTest {
       assertTrue(lib.contains("\"id\":\"" + id + "\""), id);
     }
     // r44 (31 Oct 2026): the live range files, with the bipolar and the sizes from Chunli's DWGs;
-    // Quick page since 3 Nov 2026 (r44a, q7); Addis Ortho PFNA since 6 Nov 2026 (r44f), Nebula stays out
+    // Quick page since 3 Nov 2026 (r44a, q7); Addis Ortho PFNA since 6 Nov 2026 (r44f), Nebula
+    // stays out
     assertTrue(lib.contains("\"id\":\"chunli-bipolar\""));
     assertTrue(html.contains("href=\"quick.html\""));
     assertTrue(p.get("quick.html") != null && p.get("quick.js") != null);
@@ -182,8 +183,9 @@ class PageFilesTest {
     }
     // My cases and the patient on the result since 7 Nov 2026 (r44g)
     assertNotNull(p.get("cases.js"));
-    assertEquals("r44h", p.release());
-    // The live bipolar data since 7 Nov 2026 (r44h): catalogue codes, size 40 on 3181-22400, no size 55
+    assertEquals("r46", p.release());
+    // The live bipolar data since 7 Nov 2026 (r44h): catalogue codes, size 40 on 3181-22400, no
+    // size 55
     assertTrue(lib.contains("\"code\":\"3181-22400\"") && !lib.contains("\"code\":\"3181-28400\""));
   }
 }

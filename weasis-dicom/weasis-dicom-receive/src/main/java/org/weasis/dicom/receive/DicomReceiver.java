@@ -18,7 +18,6 @@ import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
-import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -47,6 +46,8 @@ import org.dcm4che3.net.service.DicomServiceRegistry;
 import org.dcm4che3.util.UIDUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.weasis.dicom.explorer.library.StoreNaming;
+import org.weasis.dicom.explorer.library.StudyStore;
 
 /**
  * The DICOM Storage SCP. It answers C-ECHO and C-STORE from the allowed senders only.
@@ -87,7 +88,7 @@ public class DicomReceiver {
 
   private final ReceiveSettings settings;
   private final ReceiveListener listener;
-  private final ReceivedStudyStore store;
+  private final StudyStore store;
 
   private Device device;
   private ExecutorService executor;
@@ -97,16 +98,16 @@ public class DicomReceiver {
     this(
         settings,
         listener,
-        new ReceivedStudyStore(settings.storageFolder(), settings.includeNameInFileNames()));
+        new StudyStore(settings.storageFolder(), settings.includeNameInFileNames()));
   }
 
-  DicomReceiver(ReceiveSettings settings, ReceiveListener listener, ReceivedStudyStore store) {
+  public DicomReceiver(ReceiveSettings settings, ReceiveListener listener, StudyStore store) {
     this.settings = settings;
     this.listener = listener;
     this.store = store;
   }
 
-  public ReceivedStudyStore store() {
+  public StudyStore store() {
     return store;
   }
 
@@ -223,7 +224,7 @@ public class DicomReceiver {
       InetAddress remote = as.getSocket().getInetAddress();
       if (!isAllowed(rq.getCallingAET(), remote)) {
         String sender =
-            ReceiveNaming.safeForLog(rq.getCallingAET()) + " / " + remote.getHostAddress();
+            StoreNaming.safeForLog(rq.getCallingAET()) + " / " + remote.getHostAddress();
         LOGGER.warn("Rejected association from {}", sender);
         listener.onProblem(ReceiveProblem.SENDER_REJECTED, sender);
         throw new AAssociateRJ(
@@ -254,7 +255,7 @@ public class DicomReceiver {
         commit(temp, dataset, sopUid);
       } catch (RuntimeException e) {
         // Without a response, the library would drop the whole association.
-        LOGGER.error("Unexpected failure on image {}: {}", sopUid, e.getClass().getName());
+        LOGGER.error("Unexpected failure on an image: {}", e.getClass().getName());
         throw new DicomServiceException(Status.ProcessingFailure, "Unexpected failure");
       } finally {
         deleteQuietly(temp);
@@ -293,7 +294,7 @@ public class DicomReceiver {
         out.writeFileMetaInformation(fmi);
         data.copyTo(out);
       } catch (FileTooLargeException e) {
-        LOGGER.warn("Refused image {}: above the size limit", sopUid);
+        LOGGER.warn("Refused an image: above the size limit");
         listener.onProblem(ReceiveProblem.FILE_TOO_LARGE, "");
         throw new DicomServiceException(Status.OutOfResources, "Above the size limit");
       } catch (LocalWriteException e) {
@@ -332,6 +333,9 @@ public class DicomReceiver {
       } catch (IOException | RuntimeException | OutOfMemoryError e) {
         throw refuseNotDicom("Cannot parse the data set");
       }
+      if (!StudyStore.isComplete(temp)) {
+        throw refuseNotDicom("The pixel data is incomplete");
+      }
       if (!sopUid.equals(dataset.getString(Tag.SOPInstanceUID))) {
         throw refuseNotDicom("SOP Instance UID missing or different from the request");
       }
@@ -351,18 +355,25 @@ public class DicomReceiver {
     private void commit(Path temp, Attributes dataset, String sopUid) throws IOException {
       String studyUid = dataset.getString(Tag.StudyInstanceUID);
       String seriesUid = dataset.getString(Tag.SeriesInstanceUID);
-      Optional<ReceivedInstance> stored;
+      StudyStore.Commit commit;
       try {
-        stored = store.commit(temp, dataset, studyUid, seriesUid, sopUid);
+        commit = store.commit(temp, dataset, studyUid, seriesUid, sopUid);
       } catch (IOException | RuntimeException e) {
         IOException cause = e instanceof IOException io ? io : new IOException();
         throw refuseFolderProblem(cause);
       }
-      if (stored.isPresent()) {
-        LOGGER.debug("Stored image {} of study {}", sopUid, studyUid);
-        listener.onStored(stored.get());
-      } else {
-        LOGGER.info("Image {} was already stored, the first copy is kept", sopUid);
+      switch (commit.outcome()) {
+        case STORED -> {
+          LOGGER.debug("Stored an image");
+          listener.onStored(commit.instance());
+        }
+        case ALREADY_HELD -> LOGGER.info("An image was already stored, the first copy is kept");
+        case CONFLICT -> {
+          LOGGER.warn("An image clashes with a stored image and was quarantined");
+          listener.onProblem(ReceiveProblem.CONFLICT, "");
+          throw new DicomServiceException(
+              Status.ProcessingFailure, "Conflicts with a stored image");
+        }
       }
     }
 

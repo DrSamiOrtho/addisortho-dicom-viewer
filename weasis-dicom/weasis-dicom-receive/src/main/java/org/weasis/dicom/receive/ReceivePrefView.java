@@ -24,6 +24,7 @@ import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JTable;
 import javax.swing.JTextField;
+import javax.swing.JToggleButton;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingWorker;
 import javax.swing.table.DefaultTableModel;
@@ -33,6 +34,8 @@ import org.weasis.core.api.gui.util.AbstractItemDialogPage;
 import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.ui.pref.PreferenceDialog;
 import org.weasis.core.util.FileUtil;
+import org.weasis.dicom.explorer.library.StoredStudy;
+import org.weasis.dicom.explorer.library.StudyStore;
 
 /** Preferences page of the receiver: settings, allowed senders, and the kept studies. */
 public class ReceivePrefView extends AbstractItemDialogPage {
@@ -61,6 +64,8 @@ public class ReceivePrefView extends AbstractItemDialogPage {
           0);
   private final JTable sendersTable = new JTable(sendersModel);
   private final JLabel status = new JLabel();
+  private final JLabel addresses = new JLabel();
+  private final JLabel testResult = new JLabel(" ");
   private final JLabel total = new JLabel();
   private final DefaultTableModel studiesModel =
       new DefaultTableModel(
@@ -76,7 +81,7 @@ public class ReceivePrefView extends AbstractItemDialogPage {
         }
       };
   private final JTable studiesTable = new JTable(studiesModel);
-  private List<ReceivedStudy> studies = List.of();
+  private List<StoredStudy> studies = List.of();
 
   public ReceivePrefView() {
     super(Messages.getString("receive.title"), 608);
@@ -100,24 +105,69 @@ public class ReceivePrefView extends AbstractItemDialogPage {
   private JPanel buildSettingsPanel() {
     JPanel panel = GuiUtils.getVerticalBoxLayoutPanel();
     panel.setBorder(GuiUtils.getTitledBorder(Messages.getString("receive.title")));
+    panel.add(GuiUtils.getFlowLayoutPanel(new JLabel(Messages.getString("receive.setup.hint"))));
     panel.add(GuiUtils.getFlowLayoutPanel(ITEM_SEPARATOR_SMALL, ITEM_SEPARATOR, enabled));
     panel.add(row("receive.ae.title", aeTitle));
     panel.add(row("receive.port", port));
-    panel.add(row("receive.listen.address", listenAddress));
+    panel.add(
+        GuiUtils.getFlowLayoutPanel(
+            new JLabel(Messages.getString("receive.setup.address") + ": "), addresses));
+    JButton test = new JButton(Messages.getString("receive.setup.test"));
+    test.addActionListener(e -> testConnection());
+    panel.add(
+        GuiUtils.getFlowLayoutPanel(
+            new JLabel(Messages.getString("receive.status") + ": "), status, test));
+    panel.add(GuiUtils.getFlowLayoutPanel(testResult));
+
+    JPanel advanced = GuiUtils.getVerticalBoxLayoutPanel();
+    advanced.add(row("receive.listen.address", listenAddress));
     JButton browse = new JButton(Messages.getString("receive.browse"));
     browse.addActionListener(e -> chooseFolder());
-    panel.add(
+    advanced.add(
         GuiUtils.getFlowLayoutPanel(
             new JLabel(Messages.getString("receive.folder")), folder, browse));
-    panel.add(row("receive.max.associations", maxAssociations));
-    panel.add(row("receive.max.file", maxFileMb));
-    panel.add(GuiUtils.getFlowLayoutPanel(ITEM_SEPARATOR_SMALL, ITEM_SEPARATOR, includeName));
-    panel.add(
+    advanced.add(row("receive.max.associations", maxAssociations));
+    advanced.add(row("receive.max.file", maxFileMb));
+    advanced.add(GuiUtils.getFlowLayoutPanel(ITEM_SEPARATOR_SMALL, ITEM_SEPARATOR, includeName));
+    advanced.add(
         GuiUtils.getFlowLayoutPanel(new JLabel(Messages.getString("receive.include.name.hint"))));
-    panel.add(
-        GuiUtils.getFlowLayoutPanel(
-            new JLabel(Messages.getString("receive.status") + ": "), status));
+    advanced.setVisible(false);
+    JToggleButton showAdvanced = new JToggleButton(Messages.getString("receive.setup.advanced"));
+    showAdvanced.addActionListener(
+        e -> {
+          advanced.setVisible(showAdvanced.isSelected());
+          revalidate();
+        });
+    panel.add(GuiUtils.getFlowLayoutPanel(showAdvanced));
+    panel.add(advanced);
     return panel;
+  }
+
+  private void testConnection() {
+    int portToTest = (Integer) port.getValue();
+    testResult.setText(Messages.getString("receive.setup.testing"));
+    new SwingWorker<Boolean, Void>() {
+      @Override
+      protected Boolean doInBackground() {
+        return ReceiveNetwork.isListening("127.0.0.1", portToTest);
+      }
+
+      @Override
+      protected void done() {
+        boolean listening;
+        try {
+          listening = get();
+        } catch (Exception e) {
+          if (e instanceof InterruptedException) {
+            Thread.currentThread().interrupt();
+          }
+          listening = false;
+        }
+        testResult.setText(
+            Messages.getString(listening ? "receive.setup.ok" : "receive.setup.none")
+                .formatted(portToTest));
+      }
+    }.execute();
   }
 
   private static JPanel row(String labelKey, java.awt.Component field) {
@@ -150,11 +200,9 @@ public class ReceivePrefView extends AbstractItemDialogPage {
     show.addActionListener(e -> showSelected());
     JButton open = new JButton(Messages.getString("receive.open.folder"));
     open.addActionListener(e -> openFolder());
-    JButton delete = new JButton(Messages.getString("receive.delete"));
-    delete.addActionListener(e -> deleteSelected());
     JButton refresh = new JButton(Messages.getString("receive.refresh"));
     refresh.addActionListener(e -> refreshStudies());
-    panel.add(GuiUtils.getFlowLayoutPanel(show, open, delete, refresh));
+    panel.add(GuiUtils.getFlowLayoutPanel(show, open, refresh));
     return panel;
   }
 
@@ -234,26 +282,15 @@ public class ReceivePrefView extends AbstractItemDialogPage {
   }
 
   private void refreshStatus() {
-    Optional<ReceiveService> service = ReceiveService.get();
-    if (service.isEmpty()) {
-      status.setText(Messages.getString("receive.status.off"));
-      return;
-    }
-    ReceiveService s = service.get();
-    ReceiveSettings current = s.settings();
-    if (s.startError().isPresent()) {
-      status.setText(
-          Messages.getString("receive.status.failed")
-              .formatted(Messages.getString(s.startError().get())));
-    } else if (!s.isRunning()) {
-      status.setText(Messages.getString("receive.status.off"));
-    } else if (current.allowedSenders().isEmpty()) {
-      status.setText(Messages.getString("receive.status.no.senders"));
-    } else {
-      status.setText(
-          Messages.getString("receive.status.running")
-              .formatted(current.aeTitle(), current.port()));
-    }
+    status.setText(
+        ReceiveService.get()
+            .map(ReceiveService::statusText)
+            .orElseGet(() -> Messages.getString("receive.status.off")));
+    List<String> found = ReceiveNetwork.localAddresses();
+    addresses.setText(
+        found.isEmpty()
+            ? Messages.getString("receive.setup.no.address")
+            : String.join(", ", found));
   }
 
   private void refreshStudies() {
@@ -261,10 +298,10 @@ public class ReceivePrefView extends AbstractItemDialogPage {
     if (service.isEmpty()) {
       return;
     }
-    ReceivedStudyStore store = service.get().store();
-    new SwingWorker<List<ReceivedStudy>, Void>() {
+    StudyStore store = service.get().store();
+    new SwingWorker<List<StoredStudy>, Void>() {
       @Override
-      protected List<ReceivedStudy> doInBackground() throws IOException {
+      protected List<StoredStudy> doInBackground() throws IOException {
         return store.listStudies();
       }
 
@@ -283,11 +320,11 @@ public class ReceivePrefView extends AbstractItemDialogPage {
     }.execute();
   }
 
-  private void showStudies(List<ReceivedStudy> list) {
+  private void showStudies(List<StoredStudy> list) {
     studies = list;
     studiesModel.setRowCount(0);
     long bytes = 0;
-    for (ReceivedStudy study : list) {
+    for (StoredStudy study : list) {
       bytes += study.sizeBytes();
       studiesModel.addRow(
           new Object[] {
@@ -301,8 +338,8 @@ public class ReceivePrefView extends AbstractItemDialogPage {
             .formatted(list.size(), FileUtil.humanReadableByte(bytes, false)));
   }
 
-  private List<ReceivedStudy> selectedStudies() {
-    List<ReceivedStudy> selected = new ArrayList<>();
+  private List<StoredStudy> selectedStudies() {
+    List<StoredStudy> selected = new ArrayList<>();
     for (int row : studiesTable.getSelectedRows()) {
       selected.add(studies.get(studiesTable.convertRowIndexToModel(row)));
     }
@@ -314,7 +351,7 @@ public class ReceivePrefView extends AbstractItemDialogPage {
   }
 
   private void openFolder() {
-    List<ReceivedStudy> selected = selectedStudies();
+    List<StoredStudy> selected = selectedStudies();
     ReceiveService.get()
         .ifPresent(
             s ->
@@ -323,34 +360,6 @@ public class ReceivePrefView extends AbstractItemDialogPage {
                     selected.isEmpty()
                         ? s.settings().storageFolder()
                         : selected.getFirst().folder()));
-  }
-
-  private void deleteSelected() {
-    List<ReceivedStudy> selected = selectedStudies();
-    Optional<ReceiveService> service = ReceiveService.get();
-    if (selected.isEmpty() || service.isEmpty()) {
-      return;
-    }
-    int answer =
-        JOptionPane.showConfirmDialog(
-            this,
-            Messages.getString("receive.delete.confirm").formatted(selected.size()),
-            Messages.getString("receive.delete"),
-            JOptionPane.OK_CANCEL_OPTION,
-            JOptionPane.WARNING_MESSAGE);
-    if (answer != JOptionPane.OK_OPTION) {
-      return;
-    }
-    service
-        .get()
-        .deleteStudies(
-            selected,
-            deleted -> {
-              if (!deleted) {
-                showError(Messages.getString("receive.delete.failed"));
-              }
-              refreshStudies();
-            });
   }
 
   private void removeSelectedSenders() {

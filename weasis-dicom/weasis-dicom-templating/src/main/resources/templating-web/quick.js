@@ -1080,7 +1080,7 @@ const ktNow = () => { const id = Q.choice['tka-femur']; return (KNEE_TYPES_Q.fin
 
 // ---------------------------------------------------------------- tumour sets (q5)
 // Sami, 31 Oct 2026: "ADD TUMORS", "All tumour sets". The full planner's rules (r22-r44), ported: the resection comes only from
-// the surgeon's MRI or CT extent and margin; the stack is reconstructionMm (body + 2.25 mm gap at each taper junction +
+// the surgeon's MRI or CT extent and margin; the stack is reconstructionMm (body + the gap at each taper junction (PHR: Chunli's minus-3 rule, r46) +
 // extension) + the stem's collar, measured from the joint line (DFR, PTR) or from the 0 head centre's level on the body axis
 // (PFR, PHR; tumOrigin), against the GT / tuberosity tip tapped on the film. Every body length and collar within 5 mm of the
 // plan is listed, closest first; none is chosen for the surgeon. Placed, not sized. Diaphyseal: measurement only (r39).
@@ -1270,7 +1270,8 @@ function tumRowsQ() {
     }
     const s = stemRec(it); R.push(['Stem', s ? `${stemWord(s)}: ${fmm(s.diameterMm)} mm, ${fmm((s.drawnLengthMm || 0) - (L.c || 0))} mm beyond its collar as drawn; check the canal with the Length tool` : 'not chosen: choose the universal stem', s ? '' : 'warn']);
     if (f.humHeads) R.push(['Head', it.head ? `${it.head} mm humeral head (which fits the tumour upper end is not confirmed by Chunli)` : 'not chosen', 'warn']);
-    if (Number.isFinite(z.junctionGapMm)) R.push(['Taper junctions', `${z.junctions} junction${z.junctions > 1 ? 's' : ''} taken as ${z.junctionGapMm} mm open each after impaction${f.tumour === 'phr' ? " (Chunli's Ø24 figure, taken for this Ø22 system: not confirmed)" : ' (Chunli)'}: the stack can sit up to about ${fmm(z.junctions * 0.25)} mm longer or shorter; check with the trial`, 'warn']);
+    if (z.lengthRule) R.push(['Taper junctions', `Chunli's rule (Kevin, 4 Nov 2026): the marked lengths minus ${fmm(z.lengthRule.perJunctionMm)} mm ${z.junctions > 1 ? `at each of its ${z.junctions} junctions` : 'at its one junction'}, from the top of the upper end; Chunli's joined gap of ${z.junctionGapMm} mm differs by about 0.3 mm a junction, so the stack can sit up to about ${fmm(z.junctions * 0.3)} mm longer or shorter; check with the trial`, 'warn']);   // r46: the PHR
+    else if (Number.isFinite(z.junctionGapMm)) R.push(['Taper junctions', `${z.junctions} junction${z.junctions > 1 ? 's' : ''} taken as ${z.junctionGapMm} mm open each after impaction${f.tumour === 'phr' ? " (Chunli's Ø24 figure, taken for this Ø22 system: not confirmed)" : ' (Chunli)'}: the stack can sit up to about ${fmm(z.junctions * 0.25)} mm longer or shorter; check with the trial`, 'warn']);
     for (const a of f.assumptions || []) R.push(['Assumed (not confirmed by Chunli)', a, 'warn']);
   }
   const pt = Q.items.find(it => it.role === 'partner'), bd = tumBodies().find(it => !isGtBody(Q.fam[it.fam]));

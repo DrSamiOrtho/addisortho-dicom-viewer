@@ -12,10 +12,12 @@ package org.weasis.core.ui.editor.image;
 import com.formdev.flatlaf.util.SystemFileChooser;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
+import java.text.MessageFormat;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import org.weasis.core.Messages;
 import org.weasis.core.api.gui.util.GuiUtils;
@@ -113,7 +115,14 @@ public class ChannelHistogramPanel extends JPanel {
     SystemFileChooser saveFC = new SystemFileChooser();
     int ret = saveFC.showSaveDialog(this);
     if (ret == SystemFileChooser.APPROVE_OPTION) {
-      jPanelHistogram.saveHistogramInCSV(saveFC.getSelectedFile());
+      if (!jPanelHistogram.saveHistogramInCSV(saveFC.getSelectedFile())) {
+        JOptionPane.showMessageDialog(
+            this,
+            MessageFormat.format(
+                Messages.getString("histogram.not.saved"), saveFC.getSelectedFile()),
+            Messages.getString("save"),
+            JOptionPane.ERROR_MESSAGE);
+      }
     }
   }
 

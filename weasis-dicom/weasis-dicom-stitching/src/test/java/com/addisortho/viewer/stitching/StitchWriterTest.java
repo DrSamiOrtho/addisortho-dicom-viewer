@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -22,6 +23,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
@@ -29,6 +33,9 @@ import org.dcm4che3.data.VR;
 import org.dcm4che3.io.DicomInputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.weasis.dicom.explorer.library.StoredInstance;
+import org.weasis.dicom.explorer.library.StudyCatalog;
+import org.weasis.dicom.explorer.library.StudyStore;
 
 class StitchWriterTest {
 
@@ -92,6 +99,95 @@ class StitchWriterTest {
     return new Built(s, cuts, leg);
   }
 
+  private static void acquired(Stitch s, String... days) {
+    for (int i = 0; i < s.pieces.size(); i++) {
+      s.pieces.get(i).header.setString(Tag.AcquisitionDate, VR.DA, days[i]);
+    }
+  }
+
+  @Test
+  void theStitchCarriesTheDayOfTheXrayNotTheDayItWasMade() throws IOException {
+    Stitch s = build().stitch();
+    acquired(s, "20260115", "20260115", "20260115");
+    Attributes a = StitchWriter.write(s, dir.resolve("a.dcm"), (done, total) -> true);
+    assertEquals("20260115", a.getString(Tag.AcquisitionDate));
+  }
+
+  @Test
+  void piecesFromDifferentDaysGiveNoSingleDateAndEachIsRecorded() throws IOException {
+    Stitch s = build().stitch();
+    acquired(s, "20260115", "20260116", "20260115");
+    Attributes a = StitchWriter.write(s, dir.resolve("a.dcm"), (done, total) -> true);
+    assertNull(a.getString(Tag.AcquisitionDate));
+    String seams = a.getString(StitchWriter.PRIVATE_CREATOR, StitchWriter.PRIVATE_DATA);
+    assertTrue(seams.contains("\"imageDate\":\"2026-01-16\""), seams);
+  }
+
+  private StudyStore store() throws IOException {
+    return new StudyStore(dir.resolve("library"), true);
+  }
+
+  @Test
+  void aSavedStitchIsInTheStoreAndSurvivesARestartWithItsPixels() throws IOException {
+    Stitch s = build().stitch();
+
+    StoredInstance saved = StitchService.save(store(), s, (done, total) -> true).instance();
+
+    assertTrue(saved.file().startsWith(dir.resolve("library")));
+    Attributes read;
+    try (DicomInputStream in = new DicomInputStream(saved.file().toFile())) {
+      read = in.readDataset();
+    }
+    assertEquals(
+        read.getInt(Tag.Rows, 0) * read.getInt(Tag.Columns, 0) * 2,
+        read.getBytes(Tag.PixelData).length);
+
+    StudyCatalog afterRestart = new StudyCatalog(dir.resolve("library/.catalog/studies.tsv"));
+    afterRestart.load();
+    afterRestart.reconcile(dir.resolve("library"));
+    assertEquals(1, afterRestart.studies().size());
+    assertEquals(1, afterRestart.studies().getFirst().imageCount());
+  }
+
+  @Test
+  void savingAgainKeepsTheEarlierVersion() throws IOException {
+    Stitch s = build().stitch();
+    StudyStore store = store();
+
+    StoredInstance first = StitchService.save(store, s, (done, total) -> true).instance();
+    StoredInstance second = StitchService.save(store, s, (done, total) -> true).instance();
+
+    assertNotEquals(first.file(), second.file());
+    assertTrue(Files.isRegularFile(first.file()));
+    assertTrue(Files.isRegularFile(second.file()));
+  }
+
+  @Test
+  void aCancelledSaveLeavesNothing() throws IOException {
+    Stitch s = build().stitch();
+    StudyStore store = store();
+
+    assertThrows(
+        CancellationException.class, () -> StitchService.save(store, s, (done, total) -> false));
+
+    try (var left = Files.list(dir.resolve("library/.incoming"))) {
+      assertEquals(0, left.count());
+    }
+    assertEquals(0, store.listStudies().size());
+  }
+
+  @Test
+  void aFailureToOpenKeepsTheSavedFileAndTellsTheUser() throws Exception {
+    StoredInstance saved =
+        StitchService.save(store(), build().stitch(), (done, total) -> true).instance();
+    CountDownLatch told = new CountDownLatch(1);
+
+    StitchService.openLoaded(null, null, told::countDown);
+
+    assertTrue(told.await(30, TimeUnit.SECONDS), "the user is told it did not open");
+    assertTrue(Files.isRegularFile(saved.file()), "the saved stitch stays");
+  }
+
   @Test
   void writesADraftSecondaryCaptureThatMatchesThePhantom() throws IOException {
     Built b = build();
@@ -124,7 +220,9 @@ class StitchWriterTest {
         read.getString(Tag.PixelSpacingCalibrationType), "PixelSpacing as stated is not GEOMETRY");
     assertEquals("LEG", read.getString(Tag.BodyPartExamined));
     assertEquals("NO", read.getString(Tag.BurnedInAnnotation));
-    assertEquals(65535, read.getInt(Tag.PixelPaddingValue, 0));
+    assertEquals(
+        0, read.getInt(Tag.PixelPaddingValue, -1), "empty areas black, also without padding");
+    assertEquals("Addis Ortho Trading PLC", read.getString(Tag.Manufacturer));
     assertEquals(
         "113090", read.getNestedDataset(Tag.DerivationCodeSequence).getString(Tag.CodeValue));
     assertEquals(3, read.getSequence(Tag.SourceImageSequence).size());
@@ -152,19 +250,40 @@ class StitchWriterTest {
     for (int r = 200; r < rows - 200; r += 7) {
       for (int c = cols / 4; c < cols * 3 / 4; c += 5) {
         int v = px.get(r * cols + c) & 0xffff;
-        if (v == 65535) {
-          continue;
-        }
         double[] q =
             frameToCanvas.apply(c0.originX + (c + 0.5) * 0.3, c0.originY + (r + 0.5) * 0.3);
         float truth = b.phantom().canvas.sample(q[0], q[1]);
         if (!Float.isNaN(truth)) {
+          assertTrue(v != 0, "a real pixel is never stored as the padding value");
           pairs.add(new double[] {truth, v});
         }
       }
     }
     assertTrue(pairs.size() > 1000);
     assertTrue(correlation(pairs) > 0.97, "correlation " + correlation(pairs));
+  }
+
+  /** Saved although a seam failed: no scale, the warning first on the label, said in every text. */
+  @Test
+  void anUnverifiedStitchCarriesNoScaleAndSaysSo() throws IOException {
+    Built b = build();
+    List<Seam> seams = new ArrayList<>(b.stitch().seams);
+    seams.set(1, Seam.failed(seams.get(1).transform(), Seam.Method.AUTOMATIC, List.of("test")));
+    Stitch s = new Stitch(b.stitch().pieces, seams, b.stitch().choices, null, true);
+    assertTrue(s.anyFailed());
+    assertFalse(s.hasScale());
+    assertEquals("seam 2", s.failedSeams());
+    assertTrue(
+        s.labelLines().get(0).startsWith("UNVERIFIED STITCH: seam 2 failed"),
+        s.labelLines().toString());
+    assertTrue(s.seriesDescription().contains("UNVERIFIED"));
+    assertTrue(s.derivation().startsWith("UNVERIFIED (seam 2 failed)"), s.derivation());
+    assertTrue(s.noScaleReason().orElseThrow().contains("unverified"));
+    assertTrue(StitchWriter.seamData(s, new Compositor(s)).contains("\"unverified\":true"));
+    // the ordinary stitch of the same pieces keeps its scale and says nothing of the kind
+    Stitch ok = new Stitch(b.stitch().pieces, b.stitch().seams, b.stitch().choices);
+    assertTrue(ok.hasScale());
+    assertTrue(StitchWriter.seamData(ok, new Compositor(ok)).contains("\"unverified\":false"));
   }
 
   @Test

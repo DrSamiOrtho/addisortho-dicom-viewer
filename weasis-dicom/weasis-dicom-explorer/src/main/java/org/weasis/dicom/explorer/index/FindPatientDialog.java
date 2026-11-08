@@ -15,11 +15,13 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Window;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
@@ -30,8 +32,10 @@ import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JList;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.JTextField;
@@ -41,8 +45,17 @@ import javax.swing.Timer;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.AbstractTableModel;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.InvalidSyntaxException;
+import org.weasis.core.api.gui.util.AppProperties;
+import org.weasis.core.ui.pref.PreferenceDialog;
+import org.weasis.core.ui.util.AoDesign;
+import org.weasis.core.ui.util.ColorLayerUI;
 import org.weasis.dicom.explorer.DicomModel;
+import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.Messages;
+import org.weasis.dicom.explorer.exp.DicomExportFactory;
+import org.weasis.dicom.explorer.imp.ImportToolBar;
 
 /**
  * Finds a patient among the DICOM studies on this computer: in the saved folders (Telegram
@@ -60,18 +73,37 @@ public final class FindPatientDialog extends JDialog {
   private final JTable table = new JTable(tableModel);
   private final JLabel status = new JLabel(" ");
   private final JButton openButton = new JButton(Messages.getString("index.open"));
-  private final JButton keepButton = new JButton(Messages.getString("index.keep"));
-  private final JButton cancelScan = new JButton(Messages.getString("index.cancelScan"));
+  private final JButton exportButton = new JButton(Messages.getString("index.export"));
+  private final JButton sendButton = new JButton(Messages.getString("index.send"));
+  private final JMenuItem keepItem = new JMenuItem(Messages.getString("index.keep"));
+  private final JMenuItem cancelScan = new JMenuItem(Messages.getString("index.cancelScan"));
+  private final JLabel receiveStatus = new JLabel();
+  private Component parentComponent;
   private final Timer debounce = new Timer(200, _ -> refresh());
   private final Runnable listener = this::refresh;
   private List<StudyEntry> temporary = List.of();
   private Path temporaryFolder;
+
+  private static volatile String receivePage;
+  private static volatile Supplier<String> receiveState = () -> "";
+
+  /**
+   * Called by the receive module, which this one cannot see.
+   *
+   * @param pageTitle its page in the preferences
+   * @param state its current state, in words
+   */
+  public static void registerReceive(String pageTitle, Supplier<String> state) {
+    receivePage = pageTitle;
+    receiveState = state;
+  }
 
   /** Shows the window, one for the whole viewer. */
   public static void show(Component parent, DicomModel model) {
     if (open == null || !open.isDisplayable()) {
       open = new FindPatientDialog(SwingUtilities.getWindowAncestor(parent), model);
     }
+    open.parentComponent = parent;
     open.setVisible(true);
     open.toFront();
     open.query.requestFocusInWindow();
@@ -130,37 +162,66 @@ public final class FindPatientDialog extends JDialog {
     JScrollPane scroll = new JScrollPane(table);
     scroll.setPreferredSize(new Dimension(960, 380));
 
-    JButton once = new JButton(Messages.getString("index.once"));
+    JMenuItem once = new JMenuItem(Messages.getString("index.once"));
     once.setToolTipText(Messages.getString("index.once.tip"));
     once.addActionListener(_ -> searchOnce());
-    keepButton.setToolTipText(Messages.getString("index.keep.tip"));
-    keepButton.addActionListener(_ -> keepTemporaryFolder());
-    JButton folders = new JButton(Messages.getString("index.folders"));
+    keepItem.setToolTipText(Messages.getString("index.keep.tip"));
+    keepItem.addActionListener(_ -> keepTemporaryFolder());
+    JMenuItem folders = new JMenuItem(Messages.getString("index.folders"));
     folders.addActionListener(_ -> editFolders());
-    JButton rescan = new JButton(Messages.getString("index.rescan"));
+    JMenuItem rescan = new JMenuItem(Messages.getString("index.rescan"));
     rescan.setToolTipText(Messages.getString("index.rescan.tip"));
     rescan.addActionListener(_ -> service.rescanAll());
     cancelScan.addActionListener(_ -> service.cancel());
-    JButton clear = new JButton(Messages.getString("index.clear"));
+    JMenuItem clear = new JMenuItem(Messages.getString("index.clear"));
     clear.setToolTipText(Messages.getString("index.clear.tip"));
     clear.addActionListener(_ -> clearIndex());
-    openButton.addActionListener(_ -> openSelected());
+    JPopupMenu moreMenu = new JPopupMenu();
+    moreMenu.add(once);
+    moreMenu.add(keepItem);
+    moreMenu.addSeparator();
+    moreMenu.add(folders);
+    moreMenu.add(rescan);
+    moreMenu.add(cancelScan);
+    moreMenu.addSeparator();
+    moreMenu.add(clear);
+    JButton more = new JButton(Messages.getString("index.more"));
+    more.addActionListener(_ -> moreMenu.show(more, 0, more.getHeight()));
 
-    JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEADING));
+    JButton importButton = new JButton(Messages.getString("index.import"));
+    importButton.setMnemonic(KeyEvent.VK_I);
+    importButton.addActionListener(
+        _ -> ImportToolBar.showAction(parentComponent, model, null, false));
+    openButton.setMnemonic(KeyEvent.VK_O);
+    openButton.addActionListener(_ -> openSelected());
+    exportButton.setMnemonic(KeyEvent.VK_E);
+    exportButton.addActionListener(_ -> share(Messages.getString("LocalExport.local_dev")));
+    sendButton.setMnemonic(KeyEvent.VK_S);
+    sendButton.addActionListener(_ -> share(Messages.getString("index.send.page")));
+    sendButton.setVisible(sendIsInstalled()); // the Lite editions have no send page
+    JButton receiveButton = new JButton(Messages.getString("index.receive"));
+    receiveButton.setMnemonic(KeyEvent.VK_R);
+    receiveButton.addActionListener(_ -> openReceive());
+    receiveButton.setVisible(receivePage != null); // the Lite editions may not have the receiver
+
+    JPanel actions =
+        new JPanel(new FlowLayout(FlowLayout.LEADING, AoDesign.GAP, AoDesign.GAP_SMALL));
     actions.add(openButton);
-    actions.add(once);
-    actions.add(keepButton);
-    actions.add(Box.createHorizontalStrut(12));
-    actions.add(folders);
-    actions.add(rescan);
-    actions.add(cancelScan);
-    actions.add(clear);
+    actions.add(importButton);
+    actions.add(receiveButton);
+    actions.add(Box.createHorizontalStrut(AoDesign.GAP_LARGE));
+    actions.add(exportButton);
+    actions.add(sendButton);
+    actions.add(Box.createHorizontalStrut(AoDesign.GAP_LARGE));
+    actions.add(more);
     JPanel bottom = new JPanel();
     bottom.setLayout(new BoxLayout(bottom, BoxLayout.Y_AXIS));
     bottom.setBorder(BorderFactory.createEmptyBorder(0, 6, 8, 6));
     bottom.add(actions);
     JPanel statusRow = new JPanel(new FlowLayout(FlowLayout.LEADING));
     statusRow.add(status);
+    statusRow.add(Box.createHorizontalStrut(AoDesign.GAP_LARGE));
+    statusRow.add(receiveStatus);
     bottom.add(statusRow);
 
     JPanel content = new JPanel(new BorderLayout());
@@ -168,6 +229,7 @@ public final class FindPatientDialog extends JDialog {
     content.add(scroll, BorderLayout.CENTER);
     content.add(bottom, BorderLayout.SOUTH);
     setContentPane(content);
+    getRootPane().setDefaultButton(openButton); // the one primary action, in the brand green
     pack();
     setLocationRelativeTo(owner);
 
@@ -247,13 +309,17 @@ public final class FindPatientDialog extends JDialog {
       }
     }
     status.setText(text);
+    receiveStatus.setText(receiveState.get());
     cancelScan.setEnabled(s.running());
     updateButtons();
   }
 
   private void updateButtons() {
-    openButton.setEnabled(table.getSelectedRow() >= 0);
-    keepButton.setEnabled(temporaryFolder != null && !temporary.isEmpty());
+    boolean selected = table.getSelectedRow() >= 0;
+    openButton.setEnabled(selected);
+    exportButton.setEnabled(selected);
+    sendButton.setEnabled(selected);
+    keepItem.setEnabled(temporaryFolder != null && !temporary.isEmpty());
   }
 
   private StudyEntry selected() {
@@ -269,6 +335,42 @@ public final class FindPatientDialog extends JDialog {
     if (s != null) {
       PatientIndexService.open(s, model);
     }
+  }
+
+  private boolean sendIsInstalled() {
+    BundleContext context = AppProperties.getBundleContext(getClass());
+    try {
+      return context != null
+          && !context
+              .getServiceReferences(
+                  DicomExportFactory.class,
+                  "(component.name=org.weasis.dicom.send.SendDicomFactory)")
+              .isEmpty();
+    } catch (InvalidSyntaxException e) {
+      return false;
+    }
+  }
+
+  /** Brings the study into the viewer's list, without a viewer, then opens the page to share it. */
+  private void share(String page) {
+    StudyEntry s = selected();
+    if (s == null) {
+      return;
+    }
+    PatientIndexService.load(s, model, OpeningViewer.NONE);
+    // the loader is single-threaded: this runs once the study is in the list
+    DicomModel.LOADING_EXECUTOR.execute(
+        () ->
+            SwingUtilities.invokeLater(
+                () -> ImportToolBar.showAction(parentComponent, model, page, true)));
+  }
+
+  private void openReceive() {
+    Window window = SwingUtilities.getWindowAncestor(parentComponent);
+    PreferenceDialog dialog = new PreferenceDialog(window);
+    dialog.showPage(receivePage);
+    ColorLayerUI.showCenterScreen(dialog, ColorLayerUI.createTransparentLayerUI(parentComponent));
+    refresh();
   }
 
   private Path chooseFolder() {

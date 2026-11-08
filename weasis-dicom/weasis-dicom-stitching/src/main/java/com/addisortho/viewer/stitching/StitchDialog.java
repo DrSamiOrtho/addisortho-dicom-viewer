@@ -21,7 +21,6 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Line2D;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -52,6 +51,8 @@ import javax.swing.table.DefaultTableCellRenderer;
 import org.dcm4che3.data.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.weasis.dicom.explorer.library.StoredInstance;
+import org.weasis.dicom.explorer.library.StudyStore;
 
 /**
  * The stitch window (design section 4): the user ticks and orders the pieces and confirms the
@@ -86,15 +87,45 @@ final class StitchDialog extends JDialog {
   private final JButton lineUp = new JButton(Messages.getString("StitchDialog.lineUp"));
   private final JButton inspect = new JButton(Messages.getString("StitchDialog.inspect"));
   private final JButton save = new JButton(Messages.getString("StitchDialog.save"));
+  private final JButton saveUnverified =
+      new JButton(Messages.getString("StitchDialog.saveUnverified"));
   private final JButton cancel = new JButton(Messages.getString("StitchDialog.cancel"));
   private final JProgressBar progress = new JProgressBar();
   private final JLabel state = new JLabel(" ");
-  private final ImagePanel preview = new ImagePanel(null);
+  private final ImagePanel preview = new ImagePanel(this::previewPressed);
+  // the cut rows the user dragged, per seam, in the upper piece's mm; NaN: automatic
+  private double[] cuts = new double[0];
+  // while a seam line is dragged in the preview: which seam, and the preview's mm per pixel
+  private int draggedSeam = -1;
+  private double[] previewSeamPx = new double[0];
+  private double previewMm = 1;
   private final JLabel previewCaption = new JLabel(" ");
   private SwingWorker<Void, Loaded> pictures;
   private boolean showingStitch;
 
   private List<Piece> chosen = List.of();
+
+  // a press on a seam line of the stitch preview picks it up; a drag then moves its cut
+  private void previewPressed(double px, double py) {
+    draggedSeam = -1;
+    if (!showingStitch) {
+      return;
+    }
+    for (int i = 0; i < previewSeamPx.length; i++) {
+      if (Math.abs(previewSeamPx[i] - py) <= 8) {
+        draggedSeam = i;
+      }
+    }
+  }
+
+  private void previewDragged(double dx, double dy) {
+    if (draggedSeam < 0 || draggedSeam >= seams.size() || busy()) {
+      return;
+    }
+    cuts[draggedSeam] = stitch().cut(draggedSeam).yMm() + dy * previewMm;
+    showPreview();
+  }
+
   private List<Seam> seams = List.of();
   private SwingWorker<?, ?> running;
   // background work still executing (a cancelled worker is "done" before its loop has stopped)
@@ -138,6 +169,7 @@ final class StitchDialog extends JDialog {
     band.addItem(SeamMatcher.Band.RIGHT_HALF);
 
     setContentPane(layoutContent());
+    preview.setOnDrag(this::previewDragged);
     wire();
     refresh();
     setPreferredSize(new Dimension(1100, 760));
@@ -250,6 +282,21 @@ final class StitchDialog extends JDialog {
     pieceTable.getColumnModel().getColumn(2).setPreferredWidth(300);
     pieceTable.getColumnModel().getColumn(3).setPreferredWidth(240);
     seamTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+    // the notes column is cut short; the full reasons, one per line, show on hover
+    seamTable
+        .getColumnModel()
+        .getColumn(5)
+        .setCellRenderer(
+            new DefaultTableCellRenderer() {
+              @Override
+              public java.awt.Component getTableCellRendererComponent(
+                  JTable t, Object value, boolean sel, boolean focus, int row, int col) {
+                super.getTableCellRendererComponent(t, value, sel, focus, row, col);
+                setToolTipText(row < seams.size() ? reasonsHtml(seams.get(row)) : null);
+                return this;
+              }
+            });
+    seamTable.getColumnModel().getColumn(5).setPreferredWidth(360);
 
     up.addActionListener(e -> moveSelected(-1));
     down.addActionListener(e -> moveSelected(1));
@@ -341,6 +388,7 @@ final class StitchDialog extends JDialog {
     JButton close = new JButton(Messages.getString("StitchDialog.close"));
     close.addActionListener(e -> dispose());
     buttons.add(cancel);
+    buttons.add(saveUnverified);
     buttons.add(save);
     buttons.add(close);
     south.add(buttons, BorderLayout.SOUTH);
@@ -360,7 +408,8 @@ final class StitchDialog extends JDialog {
     band.addActionListener(e -> discardSeams());
     lineUp.addActionListener(e -> lineUp());
     inspect.addActionListener(e -> inspectSelected());
-    save.addActionListener(e -> save());
+    save.addActionListener(e -> save(stitch()));
+    saveUnverified.addActionListener(e -> saveUnverified());
     cancel.addActionListener(
         e -> {
           if (running != null) {
@@ -418,6 +467,7 @@ final class StitchDialog extends JDialog {
     generation++;
     seams = List.of();
     chosen = List.of();
+    cuts = new double[0];
     seamModel.fireTableDataChanged();
     showSelectedPiece();
     refresh();
@@ -436,11 +486,9 @@ final class StitchDialog extends JDialog {
     }
     boolean lined = !seams.isEmpty() && seams.size() == chosen.size() - 1;
     inspect.setEnabled(!busy && lined && seamTable.getSelectedRow() >= 0);
-    save.setEnabled(
-        !busy
-            && lined
-            && confirmed()
-            && seams.stream().noneMatch(s -> s.status() == Seam.Status.FAILED));
+    boolean anyFailed = seams.stream().anyMatch(s -> s.status() == Seam.Status.FAILED);
+    save.setEnabled(!busy && lined && confirmed() && !anyFailed);
+    saveUnverified.setEnabled(!busy && lined && confirmed() && anyFailed);
     cancel.setEnabled(busy);
     if (!busy && lined && seams.stream().anyMatch(s -> s.status() == Seam.Status.FAILED)) {
       state.setText(Messages.getString("StitchDialog.failedSeams"));
@@ -462,6 +510,7 @@ final class StitchDialog extends JDialog {
   private void lineUp() {
     List<Piece> pieces = ticked();
     SeamMatcher.Band on = (SeamMatcher.Band) band.getSelectedItem();
+    boolean bothLegs = leg.getSelectedItem() == Stitch.Leg.BOTH && on == SeamMatcher.Band.WHOLE;
     int job = generation;
     running =
         new SwingWorker<List<Seam>, String>() {
@@ -487,7 +536,10 @@ final class StitchDialog extends JDialog {
               publish(
                   Messages.getString("StitchDialog.matching").formatted(i + 1, pieces.size() - 1));
               setProgress(100 * (pieces.size() + i) / (2 * pieces.size() - 1));
-              out.add(SeamMatcher.match(pieces.get(i).match(), pieces.get(i + 1).match(), on));
+              MatchImage up = pieces.get(i).match();
+              MatchImage down = pieces.get(i + 1).match();
+              out.add(
+                  bothLegs ? SeamMatcher.matchBothLegs(up, down) : SeamMatcher.match(up, down, on));
             }
             return out;
           }
@@ -507,6 +559,8 @@ final class StitchDialog extends JDialog {
             try {
               chosen = pieces;
               seams = new ArrayList<>(get());
+              cuts = new double[seams.size()];
+              Arrays.fill(cuts, Double.NaN);
               state.setText(" ");
               seamModel.fireTableDataChanged();
               if (!seams.isEmpty()) {
@@ -543,7 +597,12 @@ final class StitchDialog extends JDialog {
             chosen.get(i),
             chosen.get(i + 1),
             seams.get(i),
-            (SeamMatcher.Band) band.getSelectedItem());
+            (SeamMatcher.Band) band.getSelectedItem(),
+            s -> {
+              List<Seam> trial = new ArrayList<>(seams);
+              trial.set(i, s);
+              return new Stitch(chosen, trial, choices(), cuts);
+            });
     editor.setVisible(true);
     editor
         .result()
@@ -557,7 +616,7 @@ final class StitchDialog extends JDialog {
   }
 
   private Stitch stitch() {
-    return new Stitch(chosen, seams, choices());
+    return new Stitch(chosen, seams, choices(), cuts);
   }
 
   private void showPreview() {
@@ -571,6 +630,14 @@ final class StitchDialog extends JDialog {
     for (int i = 0; i < ys.length; i++) {
       ys[i] = (s.seamY(i) - b[1]) / g.mm();
     }
+    previewSeamPx = ys;
+    previewMm = g.mm();
+    StringBuilder cutWords = new StringBuilder();
+    for (int i = 0; i < ys.length; i++) {
+      cutWords.append(i == 0 ? "" : " ").append("Seam %d: %s.".formatted(i + 1, s.cut(i).note()));
+    }
+    preview.setToolTipText(
+        "<html><body style='width:360px'>" + html(cutWords.toString()) + "</body></html>");
     preview.setImage(
         ImagePanel.gray(g.data(), g.width(), g.height()),
         (g2, scale) -> {
@@ -590,12 +657,37 @@ final class StitchDialog extends JDialog {
         .ifPresent(r -> state.setText(Messages.getString("StitchDialog.noScale").formatted(r)));
   }
 
-  private void save() {
-    Stitch s = stitch();
+  // a failed seam may still be saved for viewing: the user is told what failed and what the
+  // saved image cannot be used for, and the image says so itself (burned in, no scale)
+  private void saveUnverified() {
+    Stitch s = new Stitch(chosen, seams, choices(), cuts, true);
+    // one HTML string without newlines: JOptionPane splits a message at newlines into separate
+    // labels, and only a label that starts with <html> is laid out as HTML (7 Nov 2026: the
+    // reasons came out as raw text, the box grew wider than the screen, and OK fell off it)
+    StringBuilder why = new StringBuilder();
+    for (int i = 0; i < seams.size(); i++) {
+      if (seams.get(i).status() == Seam.Status.FAILED) {
+        why.append("<br>")
+            .append(html("Seam %d: %s".formatted(i + 1, seams.get(i).reasons().get(0))));
+      }
+    }
+    int answer =
+        JOptionPane.showConfirmDialog(
+            this,
+            Messages.getString("StitchDialog.unverifiedConfirm").formatted(why),
+            Messages.getString("StitchDialog.saveUnverified"),
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE);
+    if (answer == JOptionPane.OK_OPTION) {
+      save(s);
+    }
+  }
+
+  private void save(Stitch s) {
     running =
-        new SwingWorker<Path, Void>() {
+        new SwingWorker<StudyStore.SavedDerived, Void>() {
           @Override
-          protected Path doInBackground() throws Exception {
+          protected StudyStore.SavedDerived doInBackground() throws Exception {
             active.incrementAndGet();
             try {
               return StitchService.save(
@@ -614,14 +706,21 @@ final class StitchDialog extends JDialog {
           protected void done() {
             progress.setValue(0);
             try {
-              Path file = get();
-              String uid = seriesUid(file);
-              StitchService.loadAndOpen(study.model(), file, uid);
-              state.setText(Messages.getString("StitchDialog.saved"));
+              StudyStore.SavedDerived result = get();
+              StoredInstance saved = result.instance();
+              // Only now is it saved: the file is on the disk, read back and in the catalog.
+              state.setText(
+                  Messages.getString(
+                          s.unverified ? "StitchDialog.savedUnverified" : "StitchDialog.saved")
+                      + (result.catalogSaved()
+                          ? ""
+                          : " " + Messages.getString("StitchDialog.catalogPending")));
+              StitchService.loadAndOpen(
+                  study.model(), saved.file(), saved.seriesUid(), StitchDialog.this::notOpened);
             } catch (CancellationException e) {
               state.setText(" ");
             } catch (Exception e) {
-              fail(e);
+              saveFailed(e);
             }
             refresh();
           }
@@ -637,11 +736,25 @@ final class StitchDialog extends JDialog {
     refresh();
   }
 
-  private static String seriesUid(Path file) throws java.io.IOException {
-    try (var in = new org.dcm4che3.io.DicomInputStream(file.toFile())) {
-      in.setIncludeBulkData(org.dcm4che3.io.DicomInputStream.IncludeBulkData.NO);
-      return in.readDataset().getString(Tag.SeriesInstanceUID);
-    }
+  private void notOpened() {
+    JOptionPane.showMessageDialog(
+        this,
+        Messages.getString("StitchDialog.savedNotOpened"),
+        Messages.getString("StitchDialog.title"),
+        JOptionPane.WARNING_MESSAGE);
+  }
+
+  /** The stitch stays in this dialog, so the user can free some space and press Save again. */
+  private void saveFailed(Exception e) {
+    Throwable cause = e.getCause() == null ? e : e.getCause();
+    // Its message can hold a path with the patient's name: for the user, not for the log.
+    LOGGER.error("The stitch could not be saved: {}", cause.getClass().getSimpleName());
+    state.setText(" ");
+    JOptionPane.showMessageDialog(
+        this,
+        Messages.getString("StitchDialog.saveFailed").formatted(cause.getMessage()),
+        Messages.getString("StitchDialog.title"),
+        JOptionPane.ERROR_MESSAGE);
   }
 
   private void fail(Exception e) {
@@ -708,6 +821,16 @@ final class StitchDialog extends JDialog {
       rows.get(r).use = Boolean.TRUE.equals(v);
       discardSeams();
     }
+  }
+
+  private static String reasonsHtml(Seam s) {
+    StringBuilder b = new StringBuilder("<html><body style='width:420px'>");
+    for (String r : s.reasons()) {
+      b.append("&bull; ")
+          .append(r.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+          .append("<br>");
+    }
+    return b.append("</body></html>").toString();
   }
 
   private final class SeamModel extends AbstractTableModel {

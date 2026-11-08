@@ -22,7 +22,8 @@ import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
-import org.weasis.core.api.gui.util.AppProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.weasis.core.api.media.data.MediaSeries;
 import org.weasis.core.api.media.data.MediaSeriesGroup;
 import org.weasis.core.api.media.data.TagW;
@@ -33,11 +34,14 @@ import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
+import org.weasis.dicom.explorer.library.StudyLibrary;
+import org.weasis.dicom.explorer.library.StudyStore;
 import org.weasis.opencv.data.PlanarImage;
 
 /** The viewer side: which images of the study can be pieces, and saving the stitch into it. */
 final class StitchService {
 
+  private static final Logger LOGGER = LoggerFactory.getLogger(StitchService.class);
   static final Set<String> MODALITIES = Set.of("CR", "DX", "DR", "RG");
   static final double LONG_MM = 600;
 
@@ -170,32 +174,57 @@ final class StitchService {
     }
   }
 
-  /** Writes the stitch to the viewer's temporary folder. */
-  static Path save(Stitch s, Compositor.Progress progress) throws IOException {
-    Path dir = AppProperties.buildAccessibleTempDirectory("stitching");
-    Path file = Files.createTempFile(dir, "stitch-", ".dcm");
-    try {
-      StitchWriter.write(s, file, progress);
-    } catch (IOException | RuntimeException e) {
-      Files.deleteIfExists(file);
-      throw e;
-    }
-    return file;
+  /** Saves the stitch for good in the study library of this computer. */
+  static StudyStore.SavedDerived save(Stitch s, Compositor.Progress progress) throws IOException {
+    return save(StudyLibrary.getInstance().store(), s, progress);
   }
 
-  /** Loads the saved stitch into the study, then opens it in a viewer. */
-  static void loadAndOpen(DicomModel model, Path file, String seriesUid) {
+  /**
+   * Writes the stitch into {@code store}. When this returns it is on the disk, read back and in the
+   * catalog, whatever then becomes of opening it.
+   */
+  static StudyStore.SavedDerived save(StudyStore store, Stitch s, Compositor.Progress progress)
+      throws IOException {
+    return store.saveDerived(file -> writeComplete(s, file, progress));
+  }
+
+  private static void writeComplete(Stitch s, Path file, Compositor.Progress progress)
+      throws IOException {
+    Attributes header = StitchWriter.write(s, file, progress);
+    long pixels = (long) header.getInt(Tag.Rows, 0) * header.getInt(Tag.Columns, 0) * 2;
+    if (pixels == 0 || Files.size(file) < pixels) {
+      throw new IOException("the stitch was not written completely");
+    }
+  }
+
+  /**
+   * Loads the saved stitch into the study, then opens it in a viewer. The saved file is never
+   * touched here: if this fails, the stitch is still saved and {@code notOpened} tells the user.
+   */
+  static void loadAndOpen(DicomModel model, Path file, String seriesUid, Runnable notOpened) {
     DicomModel.LOADING_EXECUTOR.execute(
         new LoadLocalDicom(new File[] {file.toFile()}, false, model, OpeningViewer.NONE));
     // the loader is single-threaded: this runs once the file is in the model
     DicomModel.LOADING_EXECUTOR.execute(
-        () -> {
-          if (model.getSeriesNode(seriesUid) instanceof DicomSeries series) {
-            SwingUtilities.invokeLater(
-                () ->
-                    ViewerPluginBuilder.openInDefaultViewer(
-                        series, model, ViewerOpenOptions.defaults()));
-          }
-        });
+        () -> openLoaded(model.getSeriesNode(seriesUid), model, notOpened));
+  }
+
+  /**
+   * @param loaded the series the loader made of the saved file, or null when it made none
+   */
+  static void openLoaded(Object loaded, DicomModel model, Runnable notOpened) {
+    if (loaded instanceof DicomSeries series) {
+      SwingUtilities.invokeLater(
+          () -> {
+            try {
+              ViewerPluginBuilder.openInDefaultViewer(series, model, ViewerOpenOptions.defaults());
+            } catch (RuntimeException e) {
+              LOGGER.error("Cannot open the saved stitch: {}", e.getClass().getSimpleName());
+              notOpened.run();
+            }
+          });
+    } else {
+      SwingUtilities.invokeLater(notOpened);
+    }
   }
 }

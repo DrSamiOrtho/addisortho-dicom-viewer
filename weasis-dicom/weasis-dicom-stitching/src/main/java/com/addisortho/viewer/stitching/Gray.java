@@ -187,6 +187,99 @@ record Gray(int width, int height, double mm, float[] data) {
     return new Gray(width, height, mm, out);
   }
 
+  /**
+   * Values above the given percentile of the finite values set to it: a metal implant, shutter or
+   * lead-marker edge then weighs no more than a strong cortex edge in the correlation.
+   */
+  Gray clippedAbove(double percentile) {
+    float[] finite = finiteValues();
+    float[] out = data.clone();
+    if (finite.length == 0) {
+      return new Gray(width, height, mm, out);
+    }
+    Arrays.sort(finite);
+    float top = finite[Math.min(finite.length - 1, (int) (finite.length * percentile))];
+    for (int i = 0; i < out.length; i++) {
+      if (out[i] > top) {
+        out[i] = top;
+      }
+    }
+    return new Gray(width, height, mm, out);
+  }
+
+  /**
+   * Gaussian blur of {@code sigma} pixels, separable; NaN pixels carry no weight, so a value next
+   * to padding is the average of its real neighbours, and a pixel whose neighbourhood is less than
+   * a fifth real stays NaN.
+   */
+  Gray blurred(double sigma) {
+    int r = (int) Math.ceil(3 * sigma);
+    double[] k = new double[2 * r + 1];
+    for (int i = -r; i <= r; i++) {
+      k[i + r] = Math.exp(-i * i / (2 * sigma * sigma));
+    }
+    float[] v = new float[data.length];
+    float[] w = new float[data.length];
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        double sv = 0;
+        double sw = 0;
+        for (int i = -r; i <= r; i++) {
+          int xx = x + i;
+          if (xx < 0 || xx >= width) {
+            continue;
+          }
+          float d = data[y * width + xx];
+          if (!Float.isNaN(d)) {
+            sv += k[i + r] * d;
+            sw += k[i + r];
+          }
+        }
+        v[y * width + x] = (float) sv;
+        w[y * width + x] = (float) sw;
+      }
+    }
+    double full = 0;
+    for (double kk : k) {
+      full += kk;
+    }
+    float[] out = new float[data.length];
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        double sv = 0;
+        double sw = 0;
+        for (int i = -r; i <= r; i++) {
+          int yy = y + i;
+          if (yy < 0 || yy >= height) {
+            continue;
+          }
+          sv += k[i + r] * v[yy * width + x];
+          sw += k[i + r] * w[yy * width + x];
+        }
+        out[y * width + x] = sw < 0.2 * full * full ? Float.NaN : (float) (sv / sw);
+      }
+    }
+    return new Gray(width, height, mm, out);
+  }
+
+  /** NaN spread by {@code cells} in every direction: the edge of a shutter or film border goes. */
+  Gray dilateNaN(int cells) {
+    float[] out = data.clone();
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        if (!Float.isNaN(data[y * width + x])) {
+          continue;
+        }
+        for (int j = Math.max(0, y - cells); j <= Math.min(height - 1, y + cells); j++) {
+          for (int i = Math.max(0, x - cells); i <= Math.min(width - 1, x + cells); i++) {
+            out[j * width + i] = Float.NaN;
+          }
+        }
+      }
+    }
+    return new Gray(width, height, mm, out);
+  }
+
   /** Separable area weights from a source axis to a target axis, both starting at 0 mm. */
   private record Weights(int[] first, int[] last, float[][] w) {
 

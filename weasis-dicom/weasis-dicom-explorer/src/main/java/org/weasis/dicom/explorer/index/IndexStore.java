@@ -157,7 +157,7 @@ public final class IndexStore {
     Files.writeString(foldersFile(), json.toString(), StandardCharsets.UTF_8);
   }
 
-  private static void userOnly(Path file) {
+  public static void userOnly(Path file) {
     try {
       Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------")); // NON-NLS
     } catch (IOException | UnsupportedOperationException e) {
@@ -165,14 +165,14 @@ public final class IndexStore {
     }
   }
 
-  static String escape(String s) {
+  public static String escape(String s) {
     if (s == null) {
       return "\\0";
     }
     return s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r");
   }
 
-  static String unescape(String s) {
+  public static String unescape(String s) {
     StringBuilder out = new StringBuilder(s.length());
     for (int i = 0; i < s.length(); i++) {
       char c = s.charAt(i);

@@ -13,9 +13,12 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
+import javax.swing.JOptionPane;
 import javax.swing.JProgressBar;
 import javax.swing.UIManager;
 import javax.swing.tree.DefaultMutableTreeNode;
@@ -28,6 +31,7 @@ import org.weasis.core.api.explorer.ObservableEvent;
 import org.weasis.core.api.gui.util.AbstractItemDialogPage;
 import org.weasis.core.api.gui.util.AppProperties;
 import org.weasis.core.api.gui.util.GuiExecutor;
+import org.weasis.core.api.gui.util.WinUtil;
 import org.weasis.core.api.media.data.MediaElement;
 import org.weasis.core.api.media.data.MediaSeries;
 import org.weasis.core.api.media.data.Series;
@@ -36,6 +40,7 @@ import org.weasis.core.api.media.data.TagW;
 import org.weasis.core.api.util.ThreadUtil;
 import org.weasis.core.ui.model.GraphicModel;
 import org.weasis.core.ui.tp.raven.spinner.SpinnerProgress;
+import org.weasis.core.ui.util.SavedFile;
 import org.weasis.core.util.FileUtil;
 import org.weasis.core.util.LangUtil;
 import org.weasis.dicom.codec.DicomElement;
@@ -45,6 +50,7 @@ import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols;
 import org.weasis.dicom.explorer.LoadLocalDicom;
+import org.weasis.dicom.explorer.Messages;
 import org.weasis.dicom.param.DicomProgress;
 
 public class ExportDicomView extends AbstractItemDialogPage implements ExportDicom {
@@ -93,7 +99,7 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
 
           @Override
           protected Boolean doInBackground() throws Exception {
-            return sendDicomFiles(model, this);
+            return recordSent(sendDicomFiles(model, this));
           }
 
           @Override
@@ -101,9 +107,37 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
             dicomModel.firePropertyChange(
                 new ObservableEvent(
                     ObservableEvent.BasicAction.LOADING_STOP, dicomModel, null, this));
+            if (reported || isCancelled()) {
+              return;
+            }
+            reported = true; // ExplorerTask.cancel() runs done() again on a finished task
+            Optional<Throwable> error = LocalExport.failure(this);
+            if (error.isPresent()) {
+              LOGGER.error("Cannot send DICOM: {}", error.get().getClass().getSimpleName());
+              showResult(
+                  MessageFormat.format(
+                      Messages.getString("ExportDicomView.failed"),
+                      ExportOutcome.reason(error.get())),
+                  JOptionPane.ERROR_MESSAGE);
+            } else if (sent) {
+              showResult(
+                  Messages.getString("ExportDicomView.sent"), JOptionPane.INFORMATION_MESSAGE);
+            }
+          }
+
+          private boolean reported;
+          private volatile boolean sent;
+
+          private boolean recordSent(boolean ok) {
+            sent = ok;
+            return ok;
           }
         };
     executor.execute(task);
+  }
+
+  private void showResult(String message, int type) {
+    JOptionPane.showMessageDialog(WinUtil.getValidComponent(this), message, getTitle(), type);
   }
 
   private boolean sendDicomFiles(CheckTreeModel model, ExplorerTask<Boolean, String> t) {
@@ -117,9 +151,28 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
         FileUtil.createTempDir(AppProperties.buildAccessibleTempDirectory("tmp", "pr"))
             .toFile(); // NON-NLS
     try {
-      writeDicom(t, exportDir, prTempStorage, model);
+      ExportOutcome prepared = new ExportOutcome();
+      writeDicom(t, exportDir, prTempStorage, model, prepared);
 
       if (t.isCancelled()) {
+        return false;
+      }
+      if (prepared.written() == 0 && prepared.failed() == 0) {
+        GuiExecutor.execute(
+            () ->
+                showResult(
+                    Messages.getString("ExportDicomView.nothing"), JOptionPane.WARNING_MESSAGE));
+        return false;
+      }
+      if (prepared.failed() > 0) {
+        GuiExecutor.execute(
+            () ->
+                showResult(
+                    MessageFormat.format(
+                        Messages.getString("ExportDicomView.not_prepared"),
+                        prepared.failed(),
+                        prepared.firstProblem()),
+                    JOptionPane.ERROR_MESSAGE));
         return false;
       }
 
@@ -159,12 +212,20 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
     return dicomProgress;
   }
 
+  /**
+   * @return true only when a transfer really completed; false after a failure or a cancellation,
+   *     and on this page, which has no destination of its own
+   */
   protected boolean exportAction(List<String> files, DicomProgress dicomProgress) {
-    return true;
+    return false;
   }
 
   private void writeDicom(
-      ExplorerTask<Boolean, String> task, File writeDir, File prTempDir, CheckTreeModel model) {
+      ExplorerTask<Boolean, String> task,
+      File writeDir,
+      File prTempDir,
+      CheckTreeModel model,
+      ExportOutcome outcome) {
     synchronized (this) {
       ArrayList<String> uids = new ArrayList<>();
       TreePath[] paths = model.getCheckingPaths();
@@ -185,14 +246,14 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
           }
 
           String path = LocalExport.buildPath(img, false, false, node, null);
-          saveFile(writeDir, img, iuid, path);
+          saveFile(writeDir, img, iuid, path, outcome);
         } else if (node.getUserObject() instanceof DicomElement dcm) {
           String iuid = TagD.getTagValue((TagReadable) dcm, Tag.SOPInstanceUID, String.class);
 
           String path = LocalExport.buildPath((MediaElement) dcm, false, false, node, null);
-          saveFile(writeDir, dcm, iuid, path);
+          saveFile(writeDir, dcm, iuid, path, outcome);
         } else if (node.getUserObject() instanceof MediaSeries<?> s) {
-          String prFile = saveOtherMediaSeries(writeDir, s, node);
+          String prFile = saveOtherMediaSeries(writeDir, s, node, outcome);
           if (prFile != null) {
             File pr = new File(prFile);
             try {
@@ -210,7 +271,7 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
   }
 
   private static String saveOtherMediaSeries(
-      File writeDir, MediaSeries<?> s, DefaultMutableTreeNode node) {
+      File writeDir, MediaSeries<?> s, DefaultMutableTreeNode node, ExportOutcome outcome) {
     if (LangUtil.nullToFalse((Boolean) s.getTagValue(TagW.ObjectToSave))) {
       Series<?> series = (Series<?>) s.getTagValue(CheckTreeModel.SourceSeriesForPR);
       if (series != null) {
@@ -219,8 +280,15 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
           GraphicModel grModel = (GraphicModel) dcm.getTagValue(TagW.PresentationModel);
           if (grModel != null && grModel.hasSerializableGraphics()) {
             String path = LocalExport.buildPath(dcm, false, false, node, null);
-            return LocalExport.buildAndWritePR(
-                dcm, false, new File(writeDir, path), null, node, seriesInstanceUID);
+            String prFile =
+                LocalExport.buildAndWritePR(
+                    dcm, false, new File(writeDir, path), null, node, seriesInstanceUID);
+            if (prFile == null) {
+              outcome.failed("presentation state", new IOException("It could not be written"));
+            } else {
+              outcome.saved();
+            }
+            return prFile;
           }
         }
       }
@@ -228,10 +296,17 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
     return null;
   }
 
-  private void saveFile(File writeDir, DicomElement dcm, String iuid, String path) {
-    File destinationDir = new File(writeDir, path);
-    destinationDir.mkdirs();
-    DicomExportParameters dicomExportParameters = new DicomExportParameters(null, true, null, 0, 0);
-    dcm.saveToFile(new File(destinationDir, iuid), dicomExportParameters);
+  private static void saveFile(
+      File writeDir, DicomElement dcm, String iuid, String path, ExportOutcome outcome) {
+    DicomExportParameters parameters = new DicomExportParameters(null, true, null, 0, 0);
+    try {
+      SavedFile.write(
+          new File(new File(writeDir, path), iuid).toPath(),
+          staged -> dcm.saveToFile(staged.toFile(), parameters) != null);
+      outcome.saved();
+    } catch (IOException | RuntimeException e) {
+      LOGGER.error("Cannot prepare a file to send: {}", e.getClass().getSimpleName());
+      outcome.failed(LocalExport.makeFileIDs(iuid), e);
+    }
   }
 }

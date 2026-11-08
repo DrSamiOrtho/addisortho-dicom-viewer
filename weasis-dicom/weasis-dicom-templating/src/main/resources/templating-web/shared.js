@@ -5,7 +5,7 @@
 // To change a shared fact: edit it HERE, bump SHARED_REV, run `node tests/sync_test.mjs`, rebuild (stage_quick_sync.py or
 // build_standalone.sh): both pages pick it up with a new ?v= stamp, so a phone never mixes an old page with a new shared.js.
 
-export const SHARED_REV = '2026-11-05.2';
+export const SHARED_REV = '2026-11-08.1';
 
 // ---- sides, scanner classes, makers' default families --------------------------------------------------------------------
 export const SIDE = { R: 'right', L: 'left' };
@@ -34,6 +34,10 @@ export const DIA_TYPES = {
 export const fmm = x => (Number.isFinite(x) ? String(Math.round(x * 100) / 100) : '–');
 export const tumBodyLen = z => (Number.isFinite(z.bodyLengthMm) ? z.bodyLengthMm : z.reconstructionMm - (z.extensionMm || 0));
 export const tumParts = (z, c) => {
+  // r46 (8 Nov 2026): a size with Chunli's length rule (the PHR: Kevin, 4 Nov 2026) shows the marked lengths minus 3 per
+  // connection, from the top of the upper end, less the top's height above the head centre: the same sum as reconstructionMm + c
+  const r = z.lengthRule;
+  if (r && Array.isArray(r.markedMm)) return `${r.markedMm.map(fmm).join(' + ')} + collar ${c === null || c === undefined ? 'c' : c} - ${z.junctions} x ${fmm(r.perJunctionMm)} (Chunli's rule) - ${fmm(r.topAboveHeadCentreMm)} (top above the head centre)`;
   const g = Number.isFinite(z.junctionGapMm) ? ` + gap ${z.junctionGapMm}` : '';
   return `${fmm(tumBodyLen(z))}${g}${z.extensionMm ? ` + extension ${z.extensionMm}${g}` : ''} + collar ${c === null || c === undefined ? 'c' : c}`;
 };

@@ -14,17 +14,27 @@ package com.addisortho.viewer.stitching;
  * masked. The output's grey values never come from these.
  *
  * @param coarse 2 mm grid, normalised and masked
+ * @param full the 2 mm grid normalised but not masked: a saturated ball's flat interior is masked
+ *     in {@code coarse}, and {@link Cut} must see it whole
  * @param coarseGrad gradient magnitude of {@code coarse}
- * @param fine 0.5 mm grid, normalised, masked where {@code coarse} is
- * @param fineGrad gradient magnitude of {@code fine}
+ * @param fine 1 mm grid, normalised, masked where {@code coarse} is: the fine match's signal. On a
+ *     real DR film the 0.5 mm gradient magnitude is quantum noise that the other piece does not
+ *     repeat, so patches never correlated (the 7 Nov 2026 four-piece case: median patch score 0.23
+ *     at the true position); the intensity at 1 mm correlates at 0.8 to 0.99.
  */
-record MatchImage(Gray coarse, Gray coarseGrad, Gray fine, Gray fineGrad) {
+record MatchImage(Gray coarse, Gray full, Gray coarseGrad, Gray fine) {
 
   static final double COARSE_MM = 2.0;
-  static final double FINE_MM = 0.5;
+  static final double FINE_MM = 1.0;
 
   /** Flat-region threshold on the 2 mm grid, as a fraction of the 0..1 range. */
   private static final double FLAT_STD = 0.0015;
+
+  /** Cells (2 mm each) the flat mask grows by. */
+  private static final int MASK_GROW_CELLS = 2;
+
+  /** Gradient magnitude is clipped at this percentile so metal edges do not dominate. */
+  private static final double GRADIENT_CLIP = 0.95;
 
   /**
    * @param values modality values, row-major
@@ -40,7 +50,9 @@ record MatchImage(Gray coarse, Gray coarseGrad, Gray fine, Gray fineGrad) {
         v[i] = -values[i];
       }
     }
-    Gray coarse = Gray.resample(v, w, h, colMm, rowMm, COARSE_MM).normalized().maskFlat(FLAT_STD);
+    // the masked border grows by 4 mm so a shutter or film edge cannot be what matches
+    Gray full = Gray.resample(v, w, h, colMm, rowMm, COARSE_MM).normalized();
+    Gray coarse = full.maskFlat(FLAT_STD).dilateNaN(MASK_GROW_CELLS);
     Gray fine = Gray.resample(v, w, h, colMm, rowMm, FINE_MM).normalized();
     float[] f = fine.data();
     for (int y = 0; y < fine.height(); y++) {
@@ -50,7 +62,8 @@ record MatchImage(Gray coarse, Gray coarseGrad, Gray fine, Gray fineGrad) {
         }
       }
     }
-    return new MatchImage(coarse, coarse.gradientMagnitude(), fine, fine.gradientMagnitude());
+    return new MatchImage(
+        coarse, full, coarse.gradientMagnitude().clippedAbove(GRADIENT_CLIP), fine);
   }
 
   double widthMm() {

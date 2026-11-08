@@ -9,6 +9,7 @@
  */
 package org.weasis.dicom.viewer2d;
 
+import java.awt.BorderLayout;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.beans.PropertyChangeEvent;
@@ -19,6 +20,7 @@ import java.util.Optional;
 import javax.swing.Action;
 import javax.swing.Icon;
 import javax.swing.JComponent;
+import javax.swing.JLabel;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JSeparator;
@@ -77,6 +79,7 @@ import org.weasis.core.ui.editor.image.ZoomToolBar;
 import org.weasis.core.ui.editor.image.dockable.MeasureTool;
 import org.weasis.core.ui.editor.image.dockable.MiniTool;
 import org.weasis.core.ui.pref.LauncherToolBar;
+import org.weasis.core.ui.util.AoDesign;
 import org.weasis.core.ui.util.ColorLayerUI;
 import org.weasis.core.ui.util.DefaultAction;
 import org.weasis.core.ui.util.PrintDialog;
@@ -91,6 +94,7 @@ import org.weasis.dicom.codec.PresentationStateReader;
 import org.weasis.dicom.codec.SpecialElementRegion;
 import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.codec.TagD.Level;
+import org.weasis.dicom.codec.utils.DicomFileLabel;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.DicomViewerPlugin;
 import org.weasis.dicom.explorer.exp.ExportToolBar;
@@ -136,6 +140,8 @@ public class View2dContainer extends DicomViewerPlugin implements PropertyChange
 
   public static final SeriesViewerUI UI = new SeriesViewerUI(View2dContainer.class);
 
+  private final JLabel contextStrip = AoDesign.strip();
+
   public View2dContainer() {
     this(VIEWS_1x1, null, View2dFactory.NAME, ResourceUtil.getIcon(OtherIcon.XRAY), null);
   }
@@ -143,6 +149,7 @@ public class View2dContainer extends DicomViewerPlugin implements PropertyChange
   public View2dContainer(
       MigLayoutModel layoutModel, String uid, String pluginName, Icon icon, String tooltips) {
     super(EventManager.getInstance(), layoutModel, uid, pluginName, icon, tooltips);
+    add(contextStrip, BorderLayout.NORTH);
 
     SynchView syncView = SynchView.DEFAULT_STACK;
     synchView.resetSynchData();
@@ -387,6 +394,7 @@ public class View2dContainer extends DicomViewerPlugin implements PropertyChange
   @Override
   public void setSelectedImagePaneFromFocus(ViewCanvas<DicomImageElement> viewCanvas) {
     setSelectedImagePane(viewCanvas);
+    updateContext();
     if (viewCanvas != null && viewCanvas.getSeries() instanceof DicomSeries series) {
       DicomSeries.startPreloading(
           series,
@@ -463,6 +471,22 @@ public class View2dContainer extends DicomViewerPlugin implements PropertyChange
       return;
     }
     super.addSeries(sequence);
+    updateContext();
+  }
+
+  /** Says whose images are open and when they were taken, above the views. */
+  private void updateContext() {
+    if (contextStrip == null) {
+      return; // called by the parent's constructor, before this class's fields exist
+    }
+    ViewCanvas<DicomImageElement> pane = getSelectedViewCanvas();
+    DicomImageElement image =
+        pane == null || pane.getSeries() == null
+            ? null
+            : pane.getSeries().getMedia(MediaSeries.MEDIA_POSITION.FIRST, null, null);
+    String line =
+        image == null ? "" : DicomFileLabel.contextLine(image.getMediaReader().getDicomObject());
+    contextStrip.setText(line.isEmpty() ? " " : line);
   }
 
   public SeriesViewerUI getSeriesViewer() {

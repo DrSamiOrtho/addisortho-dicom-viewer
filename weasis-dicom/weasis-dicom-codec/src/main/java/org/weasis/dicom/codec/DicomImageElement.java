@@ -51,6 +51,7 @@ import org.weasis.dicom.codec.display.OverlayOp;
 import org.weasis.dicom.codec.display.ShutterOp;
 import org.weasis.dicom.codec.display.WindowAndPresetsOp;
 import org.weasis.dicom.codec.geometry.GeometryOfSlice;
+import org.weasis.dicom.codec.utils.DicomFileLabel;
 import org.weasis.dicom.codec.utils.Ultrasound;
 import org.weasis.dicom.param.AttributeEditorContext;
 import org.weasis.opencv.data.ImageCV;
@@ -547,11 +548,21 @@ public class DicomImageElement extends ImageElement implements DicomElement {
   }
 
   @Override
+  public String suggestedFileName(boolean withPatient) {
+    try {
+      String label = DicomFileLabel.imageLabel(getMediaReader().getDicomObject(), withPatient);
+      return label.isEmpty() ? null : label;
+    } catch (RuntimeException e) {
+      LOGGER.warn("Cannot read the header to name a picture", e);
+      return null;
+    }
+  }
+
+  @Override
   public Attributes saveToFile(File output, DicomExportParameters params) {
     boolean hasTransformation = params.dicomEditors() != null && !params.dicomEditors().isEmpty();
     if (!hasTransformation && params.syntax() == null) {
-      super.saveToFile(output);
-      return new Attributes();
+      return super.saveToFile(output) ? new Attributes() : null;
     }
 
     DicomMetaData metaData = getMediaReader().getDicomMetaData();
