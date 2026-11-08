@@ -342,6 +342,33 @@ class DicomReceiverTest {
   }
 
   @Test
+  void anImageWithLessPixelDataThanItDeclaresIsRefused() throws Exception {
+    start();
+    Attributes shortImage = image("1.2.3.1");
+    shortImage.setInt(Tag.BitsAllocated, VR.US, 16);
+    shortImage.setInt(Tag.SamplesPerPixel, VR.US, 1);
+    shortImage.setBytes(Tag.PixelData, VR.OW, new byte[4]);
+    try (TestScu scu = new TestScu(XRAY, AE, port)) {
+      assertEquals(Status.CannotUnderstand, scu.store(shortImage));
+    }
+    assertTrue(storedFiles().isEmpty());
+    assertEquals(List.of(ReceiveProblem.NOT_DICOM), problems);
+  }
+
+  @Test
+  void anIdentifierReusedInAnotherStudyIsRefusedAndKeptAside() throws Exception {
+    start();
+    Attributes reused = image("1.2.3.1");
+    reused.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3.999");
+    try (TestScu scu = new TestScu(XRAY, AE, port)) {
+      assertEquals(Status.Success, scu.store(image("1.2.3.1")));
+      assertEquals(Status.ProcessingFailure, scu.store(reused));
+    }
+    assertEquals(1, storedFiles().size());
+    assertEquals(List.of(ReceiveProblem.CONFLICT), problems);
+  }
+
+  @Test
   void theSameImageSentAgainIsAcceptedAndNotCountedTwice() throws Exception {
     start();
     try (TestScu scu = new TestScu(XRAY, AE, port)) {

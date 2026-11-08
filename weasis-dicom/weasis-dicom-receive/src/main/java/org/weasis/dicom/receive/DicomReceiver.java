@@ -255,7 +255,7 @@ public class DicomReceiver {
         commit(temp, dataset, sopUid);
       } catch (RuntimeException e) {
         // Without a response, the library would drop the whole association.
-        LOGGER.error("Unexpected failure on image {}: {}", sopUid, e.getClass().getName());
+        LOGGER.error("Unexpected failure on an image: {}", e.getClass().getName());
         throw new DicomServiceException(Status.ProcessingFailure, "Unexpected failure");
       } finally {
         deleteQuietly(temp);
@@ -294,7 +294,7 @@ public class DicomReceiver {
         out.writeFileMetaInformation(fmi);
         data.copyTo(out);
       } catch (FileTooLargeException e) {
-        LOGGER.warn("Refused image {}: above the size limit", sopUid);
+        LOGGER.warn("Refused an image: above the size limit");
         listener.onProblem(ReceiveProblem.FILE_TOO_LARGE, "");
         throw new DicomServiceException(Status.OutOfResources, "Above the size limit");
       } catch (LocalWriteException e) {
@@ -333,6 +333,9 @@ public class DicomReceiver {
       } catch (IOException | RuntimeException | OutOfMemoryError e) {
         throw refuseNotDicom("Cannot parse the data set");
       }
+      if (!StudyStore.isComplete(temp)) {
+        throw refuseNotDicom("The pixel data is incomplete");
+      }
       if (!sopUid.equals(dataset.getString(Tag.SOPInstanceUID))) {
         throw refuseNotDicom("SOP Instance UID missing or different from the request");
       }
@@ -361,13 +364,12 @@ public class DicomReceiver {
       }
       switch (commit.outcome()) {
         case STORED -> {
-          LOGGER.debug("Stored image {} of study {}", sopUid, studyUid);
+          LOGGER.debug("Stored an image");
           listener.onStored(commit.instance());
         }
-        case ALREADY_HELD ->
-            LOGGER.info("Image {} was already stored, the first copy is kept", sopUid);
+        case ALREADY_HELD -> LOGGER.info("An image was already stored, the first copy is kept");
         case CONFLICT -> {
-          LOGGER.warn("Image {} clashes with a stored image and was quarantined", sopUid);
+          LOGGER.warn("An image clashes with a stored image and was quarantined");
           listener.onProblem(ReceiveProblem.CONFLICT, "");
           throw new DicomServiceException(
               Status.ProcessingFailure, "Conflicts with a stored image");

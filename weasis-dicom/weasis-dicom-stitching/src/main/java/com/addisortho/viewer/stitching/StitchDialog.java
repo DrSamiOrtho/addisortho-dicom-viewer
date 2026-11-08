@@ -52,6 +52,7 @@ import org.dcm4che3.data.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.weasis.dicom.explorer.library.StoredInstance;
+import org.weasis.dicom.explorer.library.StudyStore;
 
 /**
  * The stitch window (design section 4): the user ticks and orders the pieces and confirms the
@@ -684,9 +685,9 @@ final class StitchDialog extends JDialog {
 
   private void save(Stitch s) {
     running =
-        new SwingWorker<StoredInstance, Void>() {
+        new SwingWorker<StudyStore.SavedDerived, Void>() {
           @Override
-          protected StoredInstance doInBackground() throws Exception {
+          protected StudyStore.SavedDerived doInBackground() throws Exception {
             active.incrementAndGet();
             try {
               return StitchService.save(
@@ -705,11 +706,15 @@ final class StitchDialog extends JDialog {
           protected void done() {
             progress.setValue(0);
             try {
-              StoredInstance saved = get();
+              StudyStore.SavedDerived result = get();
+              StoredInstance saved = result.instance();
               // Only now is it saved: the file is on the disk, read back and in the catalog.
               state.setText(
                   Messages.getString(
-                      s.unverified ? "StitchDialog.savedUnverified" : "StitchDialog.saved"));
+                          s.unverified ? "StitchDialog.savedUnverified" : "StitchDialog.saved")
+                      + (result.catalogSaved()
+                          ? ""
+                          : " " + Messages.getString("StitchDialog.catalogPending")));
               StitchService.loadAndOpen(
                   study.model(), saved.file(), saved.seriesUid(), StitchDialog.this::notOpened);
             } catch (CancellationException e) {

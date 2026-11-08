@@ -121,8 +121,8 @@ public final class StudyCatalog {
 
   /** Replaces the saved catalog in one step, so a crash leaves the old one or the new one. */
   public void save() throws IOException {
-    List<CatalogStudy> rows = studies();
     synchronized (saveLock) {
+      List<CatalogStudy> rows = studies(); // inside the lock: a later save always holds later data
       Files.createDirectories(file.getParent());
       Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
       try (BufferedWriter w = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)) {
@@ -240,6 +240,14 @@ public final class StudyCatalog {
    * and only of the folders that differ.
    */
   public Reconciled reconcile(Path root) throws IOException {
+    return reconcile(root, new Object());
+  }
+
+  /**
+   * @param intakeLock held while one folder is compared and rebuilt, so that an image stored in the
+   *     meantime is not overwritten by an older reading. {@link StudyStore#commit} takes the same
+   */
+  public Reconciled reconcile(Path root, Object intakeLock) throws IOException {
     Map<String, CatalogStudy> byFolder = new LinkedHashMap<>();
     for (CatalogStudy row : studies()) {
       byFolder.put(row.folder(), row);
@@ -256,11 +264,13 @@ public final class StudyCatalog {
             continue;
           }
           present.add(name);
-          List<Path> images = images(folder);
-          CatalogStudy row = byFolder.get(name);
-          if (row == null || row.imageCount() != images.size()) {
-            rebuild(folder, images, row);
-            rebuilt++;
+          synchronized (intakeLock) {
+            List<Path> images = images(folder);
+            CatalogStudy row = currentRow(name);
+            if (row == null || row.imageCount() != images.size()) {
+              rebuild(folder, images, row);
+              rebuilt++;
+            }
           }
         }
       }
@@ -279,6 +289,15 @@ public final class StudyCatalog {
       changed.run();
     }
     return new Reconciled(rebuilt, removed);
+  }
+
+  private synchronized CatalogStudy currentRow(String folder) {
+    for (CatalogStudy row : byUid.values()) {
+      if (folder.equals(row.folder())) {
+        return row;
+      }
+    }
+    return null;
   }
 
   private static List<Path> images(Path folder) throws IOException {

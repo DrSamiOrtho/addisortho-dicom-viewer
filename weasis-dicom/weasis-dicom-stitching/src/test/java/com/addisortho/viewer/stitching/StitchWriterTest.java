@@ -131,7 +131,7 @@ class StitchWriterTest {
   void aSavedStitchIsInTheStoreAndSurvivesARestartWithItsPixels() throws IOException {
     Stitch s = build().stitch();
 
-    StoredInstance saved = StitchService.save(store(), s, (done, total) -> true);
+    StoredInstance saved = StitchService.save(store(), s, (done, total) -> true).instance();
 
     assertTrue(saved.file().startsWith(dir.resolve("library")));
     Attributes read;
@@ -154,8 +154,8 @@ class StitchWriterTest {
     Stitch s = build().stitch();
     StudyStore store = store();
 
-    StoredInstance first = StitchService.save(store, s, (done, total) -> true);
-    StoredInstance second = StitchService.save(store, s, (done, total) -> true);
+    StoredInstance first = StitchService.save(store, s, (done, total) -> true).instance();
+    StoredInstance second = StitchService.save(store, s, (done, total) -> true).instance();
 
     assertNotEquals(first.file(), second.file());
     assertTrue(Files.isRegularFile(first.file()));
@@ -178,7 +178,8 @@ class StitchWriterTest {
 
   @Test
   void aFailureToOpenKeepsTheSavedFileAndTellsTheUser() throws Exception {
-    StoredInstance saved = StitchService.save(store(), build().stitch(), (done, total) -> true);
+    StoredInstance saved =
+        StitchService.save(store(), build().stitch(), (done, total) -> true).instance();
     CountDownLatch told = new CountDownLatch(1);
 
     StitchService.openLoaded(null, null, told::countDown);

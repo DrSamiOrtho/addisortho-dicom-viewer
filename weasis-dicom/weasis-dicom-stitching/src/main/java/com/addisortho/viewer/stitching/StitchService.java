@@ -34,7 +34,6 @@ import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
-import org.weasis.dicom.explorer.library.StoredInstance;
 import org.weasis.dicom.explorer.library.StudyLibrary;
 import org.weasis.dicom.explorer.library.StudyStore;
 import org.weasis.opencv.data.PlanarImage;
@@ -176,7 +175,7 @@ final class StitchService {
   }
 
   /** Saves the stitch for good in the study library of this computer. */
-  static StoredInstance save(Stitch s, Compositor.Progress progress) throws IOException {
+  static StudyStore.SavedDerived save(Stitch s, Compositor.Progress progress) throws IOException {
     return save(StudyLibrary.getInstance().store(), s, progress);
   }
 
@@ -184,7 +183,7 @@ final class StitchService {
    * Writes the stitch into {@code store}. When this returns it is on the disk, read back and in the
    * catalog, whatever then becomes of opening it.
    */
-  static StoredInstance save(StudyStore store, Stitch s, Compositor.Progress progress)
+  static StudyStore.SavedDerived save(StudyStore store, Stitch s, Compositor.Progress progress)
       throws IOException {
     return store.saveDerived(file -> writeComplete(s, file, progress));
   }

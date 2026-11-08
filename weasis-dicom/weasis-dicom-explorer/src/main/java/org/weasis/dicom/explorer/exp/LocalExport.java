@@ -1309,7 +1309,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
       }
       outcome.saved();
     } catch (IOException | RuntimeException e) {
-      LOGGER.error("Cannot export DICOM file {}: {}", iuid, e.getClass().getSimpleName());
+      LOGGER.error("Cannot export a DICOM file: {}", e.getClass().getSimpleName());
       outcome.failed(iuid, e);
     }
   }

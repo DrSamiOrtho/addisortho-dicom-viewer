@@ -45,12 +45,16 @@ import javax.swing.Timer;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.AbstractTableModel;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.InvalidSyntaxException;
+import org.weasis.core.api.gui.util.AppProperties;
 import org.weasis.core.ui.pref.PreferenceDialog;
 import org.weasis.core.ui.util.AoDesign;
 import org.weasis.core.ui.util.ColorLayerUI;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.Messages;
+import org.weasis.dicom.explorer.exp.DicomExportFactory;
 import org.weasis.dicom.explorer.imp.ImportToolBar;
 
 /**
@@ -194,6 +198,7 @@ public final class FindPatientDialog extends JDialog {
     exportButton.addActionListener(_ -> share(Messages.getString("LocalExport.local_dev")));
     sendButton.setMnemonic(KeyEvent.VK_S);
     sendButton.addActionListener(_ -> share(Messages.getString("index.send.page")));
+    sendButton.setVisible(sendIsInstalled()); // the Lite editions have no send page
     JButton receiveButton = new JButton(Messages.getString("index.receive"));
     receiveButton.setMnemonic(KeyEvent.VK_R);
     receiveButton.addActionListener(_ -> openReceive());
@@ -329,6 +334,20 @@ public final class FindPatientDialog extends JDialog {
     }
     if (s != null) {
       PatientIndexService.open(s, model);
+    }
+  }
+
+  private boolean sendIsInstalled() {
+    BundleContext context = AppProperties.getBundleContext(getClass());
+    try {
+      return context != null
+          && !context
+              .getServiceReferences(
+                  DicomExportFactory.class,
+                  "(component.name=org.weasis.dicom.send.SendDicomFactory)")
+              .isEmpty();
+    } catch (InvalidSyntaxException e) {
+      return false;
     }
   }
 

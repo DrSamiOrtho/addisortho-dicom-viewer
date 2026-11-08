@@ -11,9 +11,9 @@ package org.weasis.dicom.explorer.library;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.function.BooleanSupplier;
 import java.util.stream.Stream;
@@ -106,9 +106,15 @@ final class LibraryImport {
         outOfSpace = true;
         return;
       }
-      Files.copy(file, temp, StandardCopyOption.COPY_ATTRIBUTES);
+      // Into a file of our own: a copy of a disc's file would inherit its read-only permission.
+      try (OutputStream out = store.openTempFile(temp)) {
+        Files.copy(file, out);
+      }
       Attributes copied = usableHeader(temp);
       String sop = source.getString(Tag.SOPInstanceUID);
+      if (copied != null && !StudyStore.isComplete(temp)) {
+        throw new IOException("The image file is incomplete");
+      }
       if (copied == null
           || Files.size(temp) != Files.size(file)
           || !sop.equals(copied.getString(Tag.SOPInstanceUID))) {

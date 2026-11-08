@@ -113,6 +113,23 @@ class DicomFileLabelTest {
   }
 
   @Test
+  void aStudyDateDoesNotJoinARangeOfTimedFrames() {
+    Attributes a = header();
+    a.remove(Tag.AcquisitionDate);
+    Sequence groups = a.newSequence(Tag.PerFrameFunctionalGroupsSequence, 2);
+    groups.add(new Attributes()); // the first frame has no timing
+    Attributes content = new Attributes();
+    content.setString(Tag.FrameAcquisitionDateTime, VR.DT, "20260113000100");
+    Attributes group = new Attributes();
+    group.newSequence(Tag.FrameContentSequence, 1).add(content);
+    groups.add(group);
+
+    assertEquals(
+        "John Doe MRN 00123 2026-01-13",
+        DicomFileLabel.folderLabel("John Doe", "00123", DicomFileLabel.imageDates(a)));
+  }
+
+  @Test
   void anUnreadableAcquisitionDateFallsThroughToTheStudyDate() {
     Attributes a = header();
     a.setString(Tag.AcquisitionDate, VR.DA, "00000000");

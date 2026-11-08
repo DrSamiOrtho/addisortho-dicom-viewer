@@ -114,7 +114,7 @@ public final class StudyLibrary {
 
   private void reconcile(StudyStore opened, StudyCatalog studies) {
     try {
-      StudyCatalog.Reconciled result = studies.reconcile(opened.root());
+      StudyCatalog.Reconciled result = studies.reconcile(opened.root(), opened);
       LOGGER.info("Library reconciled: {} rebuilt, {} removed", result.rebuilt(), result.removed());
     } catch (IOException | RuntimeException e) {
       LOGGER.error("Cannot reconcile the study library: {}", e.getClass().getSimpleName());

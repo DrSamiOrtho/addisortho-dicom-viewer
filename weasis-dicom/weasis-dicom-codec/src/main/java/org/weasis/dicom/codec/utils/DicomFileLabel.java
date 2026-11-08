@@ -94,7 +94,7 @@ public final class DicomFileLabel {
    */
   public static List<ImageDate> imageDates(Attributes header) {
     List<ImageDate> dates = new ArrayList<>();
-    imageDate(header).ifPresent(dates::add);
+    imageDate(header).filter(ImageDate::acquired).ifPresent(dates::add);
     Sequence frames =
         header == null ? null : header.getSequence(Tag.PerFrameFunctionalGroupsSequence);
     if (frames != null) {
@@ -106,6 +106,9 @@ public final class DicomFileLabel {
           dates.add(new ImageDate(day, true));
         }
       }
+    }
+    if (dates.isEmpty()) {
+      imageDate(header).ifPresent(dates::add); // the Study Date, only when nothing better exists
     }
     return dates;
   }
