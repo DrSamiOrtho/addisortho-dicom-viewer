@@ -9,6 +9,7 @@ layout (binding = 2) uniform sampler2D lightingMap;
 layout (binding = 4) uniform usampler3D segTexture;
 layout (binding = 5) uniform sampler2D segColorMap;
 layout (binding = 6) uniform sampler3D segOccTexture;
+layout (binding = 7) uniform sampler3D keptTexture;
 
 #include "voxelUniforms.glsl"
 

@@ -122,6 +122,17 @@ public final class VolumeSmoother {
     return out;
   }
 
+  /**
+   * The in-plane pass alone, for a caller that keeps its own window of slices (see TextureField);
+   * the result then goes through {@link #combineTaps}. Not thread-safe.
+   */
+  public float[] filterInPlane(short[] src) {
+    if (src.length != width * height) {
+      throw new IllegalArgumentException("Slice size mismatch");
+    }
+    return filterInPlane(src, null);
+  }
+
   private float[] filterInPlane(short[] src, float[] reuse) {
     float[] dst = reuse != null ? reuse : new float[width * height];
     int r = kernelXY.length / 2;
@@ -159,6 +170,17 @@ public final class VolumeSmoother {
     for (int k = -r; k <= r; k++) {
       int zz = Math.clamp(z + k, 0, last);
       taps[k + r] = ring[zz % ring.length];
+    }
+    return combineTaps(taps);
+  }
+
+  /**
+   * The across-slices pass alone: {@code taps} are the in-plane filtered slices from {@code z -
+   * radiusZ} to {@code z + radiusZ}, edge slices repeated as the streaming does.
+   */
+  public short[] combineTaps(float[][] taps) {
+    if (taps.length != kernelZ.length) {
+      throw new IllegalArgumentException("Expected " + kernelZ.length + " slices");
     }
     short[] out = new short[width * height];
     rows(

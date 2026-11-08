@@ -131,7 +131,9 @@ class TemplatingServerTest {
   void servesThePageFilesWithItsSecurityHeaders() throws Exception {
     HttpResponse<byte[]> r = get(base + "templating/");
     assertEquals(200, r.statusCode());
-    assertEquals("<!doctype html><title>t</title>\n", text(r));
+    assertEquals(
+        "<!doctype html><html lang=\"en\" data-mode=\"viewer\" data-release=\"r1\"><title>t</title>\n",
+        text(r));
     assertEquals("text/html; charset=utf-8", r.headers().firstValue("Content-Type").orElse(""));
     assertEquals(TemplatingServer.CSP, r.headers().firstValue("Content-Security-Policy").orElse(""));
     assertEquals("no-store", r.headers().firstValue("Cache-Control").orElse(""));

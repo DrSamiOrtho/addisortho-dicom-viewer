@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-mode="viewer">
+<html lang="en" data-mode="viewer" data-release="r28">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -26,7 +26,6 @@
   header .sp { display: none; }
   header .slot:empty { display: none; }
   header .slot { display: flex; gap: 6px; flex: 0 0 auto; }
-  #openBtn .sm { display: none; }
   .badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #fff; color: var(--green); font-weight: 600; white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .badge.bad { background: #ffe1e1; color: var(--bad); }
   .badge.warn { background: #fff0cc; color: var(--warn); }
@@ -149,6 +148,16 @@
   .dlg .fields { display: grid; gap: 8px; }
   .dlg .fields label { display: grid; gap: 3px; font-size: 13px; color: #234; }
   .dlg .fields input { font: inherit; padding: 8px; border: 1px solid #9bb; border-radius: 4px; min-height: 44px; }
+  /* the knee's plan-values question (Sami, 16 Oct 2026): phone-friendly, 44 px targets, scrolls inside the box */
+  .pvq .pvbox { max-width: min(560px, 94vw); overflow-y: auto; }
+  .pvq .pvqrow { display: grid; gap: 3px; padding: 6px 0; border-bottom: 1px solid #e3eceb; }
+  .pvq .pvqrow label { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; font-weight: 600; color: #034537; }
+  .pvq .pvqin { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; }
+  .pvq input, .pvq select, .pvq button { min-height: 44px; font: inherit; }
+  .pvq input[type=number] { width: 6.5em; padding: 6px 8px; border: 1px solid #9bb; border-radius: 4px; }
+  .pvq select { max-width: 100%; }
+  .pvq .pvqbtn button { min-width: 44px; padding: 8px 14px; }
+  .pvq .pvqmsg:empty { display: none; }
   /* the implant choice card (13 Oct 2026): families as rows to tap, the best geometric match marked, ranges without
      template files greyed and not selectable */
   .choice { width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin: 6px 0; font-size: 13px; }
@@ -162,6 +171,48 @@
   .choice .ch-o .best { font-size: 11px; font-weight: 600; background: var(--green); color: var(--lime); padding: 1px 6px; border-radius: 9px; white-space: nowrap; }
   .choice .ch-o.pend { color: #667; background: #eef1f0; border-style: dashed; cursor: not-allowed; padding-left: 8px; font-size: 12px; }
   #pendNote:empty { display: none; }
+  /* the knee case (14 Oct 2026, contract section 12): the films as a segmented control, the film's card, the case card,
+     and in the patient list a patient's cases under one row with each case's films */
+  .kctabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; margin: 0 0 6px; }
+  .kctabs button { font-size: 12px; padding: 4px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: #fff; color: var(--green); border: 1px solid #9bb; }
+  .kctabs button.on { background: var(--green); color: #fff; border-color: var(--green); box-shadow: inset 0 -3px 0 var(--lime); }
+  .kctabs button.st-add, .kctabs button.st-reopen { border-style: dashed; color: #456; }
+  .kctabs button.st-reopen { color: var(--warn); }
+  .kcfilm, .kcvals, .kcpf { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; margin: 6px 0; font-size: 13px; }
+  .kch { font-weight: 600; color: var(--green); margin-bottom: 3px; }
+  .kcfilm label, .kcvals label, .kcpf label, details.kccase > label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 3px 0; }
+  .kcpf input[type=text] { flex: 1 1 140px; font: inherit; padding: 3px 6px; border: 1px solid #9bb; border-radius: 3px; }
+  .kcoffer button { font-size: 12px; }
+  /* the patient list by hospital (15 Oct 2026): a heading per hospital, a row per patient, that patient's cases and films under it */
+  li.hgrp { margin: 10px 0 4px; }
+  li.hgrp .hhead { font-size: 14px; color: var(--green); margin: 0 0 2px; padding-bottom: 2px; border-bottom: 2px solid var(--green); }
+  #open ul.hpats { list-style: none; padding: 0; margin: 0; }
+  li.pgrp { border: 1px solid var(--green); border-radius: 4px; margin: 6px 0; background: #f7fbf9; padding: 4px; }
+  li.pgrp .phead { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; padding: 4px 6px; width: 100%; text-align: left; background: transparent; border: 0; color: #000; min-height: 44px; }
+  li.pgrp .phead::before { content: '▾'; color: var(--green); }
+  li.pgrp .phead[aria-expanded=false]::before { content: '▸'; }
+  li.pgrp .pcount, li.pgrp .prec { font-size: 12px; color: #456; }
+  li.pgrp .psum { font-size: 12px; color: var(--green); } li.pgrp .pdate { font-size: 12px; color: #456; margin-left: auto; white-space: nowrap; }
+  li.pgrp .pdup, .cnow { font-size: 11px; padding: 1px 7px; border-radius: 10px; background: #fff0cc; color: var(--warn); font-weight: 600; white-space: nowrap; }
+  .cnow { background: var(--green); color: #fff; } li.case.cmark { border-color: var(--green); border-width: 2px; }
+  .cact button.cdel, .dlg button.cdel { color: var(--bad); border-color: var(--bad); }
+  .dlg ul.dlgfacts { margin: 4px 0 10px; padding-left: 18px; font-size: 13px; color: #234; overflow-wrap: anywhere; }
+  #open ul.pcases { list-style: none; padding: 0 0 0 8px; margin: 0; }
+  li.case.sub { margin: 4px 0; }
+  .cfilms { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 12px; color: #678; padding: 0 10px 6px; flex-basis: 100%; }
+  .cfilm.on { color: var(--green); font-weight: 600; }
+  button.cfilm { background: #fff; border: 1px solid var(--green); border-radius: 4px; padding: 2px 8px; font: inherit; min-height: 32px; }
+  @media (pointer: coarse) { button.cfilm, li.pgrp .phead { min-height: 44px; min-width: 44px; } }
+  .ident { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; margin: 6px 0; font-size: 13px; }
+  .ident label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 3px 0; }
+  .ident input[type=text] { flex: 1 1 10em; min-width: 0; }
+  /* existing implants and the revision record (revision and conversion, 15 Oct 2026) */
+  .exist, .rev { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; margin: 6px 0; font-size: 13px; }
+  .exist label, .rev label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 3px 0; }
+  ul.exlist { list-style: none; padding: 0; margin: 4px 0; }
+  ul.exlist li { padding: 3px 0; border-top: 1px solid #eef2f0; }
+  ul.exlist li .row { margin-top: 2px; }
+  ul.lm li select.refsel { font-size: 12px; max-width: 9.5em; flex: 0 1 auto; }
   #pendNote ul { margin: 4px 0; padding-left: 18px; }
   footer { font-size: 12px; background: #fff0cc; color: #5a3d00; padding: 3px 14px; border-top: 1px solid #e8d49a; }
   kbd { font: 11px ui-monospace, monospace; border: 1px solid #aab; border-bottom-width: 2px; border-radius: 3px; padding: 0 3px; background: #fff; }
@@ -257,14 +308,15 @@
     header label { font-size: 0; gap: 0; min-width: 44px; }   /* never narrower than its 44 px list */
     header select { font-size: 12px; padding: 4px 2px; max-width: 30vw; min-height: 34px; min-width: 44px; }
     header button { font-size: 12px; padding: 4px 6px; min-height: 34px; }
-    #openBtn .lg { display: none; } #openBtn .sm { display: inline; }
     header .slot button.projsave { width: var(--icon); padding: 0; } header .slot .lg { display: none; }
     header .slot button.autostat { display: none; }   /* no room for words: the dot below, the words in the live region */
     header .slot button.projsave[data-st]::after { content: ''; position: absolute; top: 3px; right: 3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; background: #8aa; }
     header .slot button.projsave[data-st=saved]::after { background: var(--green); }
     header .slot button.projsave[data-st=offline]::after { background: #d08a00; }
     header .slot button.projsave[data-st=fail]::after, header .slot button.projsave[data-st=conflict]::after { background: var(--bad); }
-    #calBadge { font-size: 0; width: 12px; height: 12px; padding: 0; border-radius: 50%; flex: 0 0 12px; }
+    /* the calibration dot sits on the logo's corner, out of the row (15 Oct 2026: the logo kept, every control 44 px, 375 px wide) */
+    header { position: relative; }
+    #calBadge { font-size: 0; width: 12px; height: 12px; padding: 0; border-radius: 50%; flex: none; position: absolute; left: 2px; bottom: 3px; border: 1px solid #fff; }
     main { flex-direction: column; }
     body:not(.has-img) #pcol { display: none; }   /* no film yet: the open card has the whole screen */
     #stage { flex: 1 1 auto; min-height: 96px; }
@@ -325,10 +377,15 @@
     .steps button .nm { display: inline; }
     .steps button.cur { flex: 1 1 auto; }
   }
+  /* the narrowest phones (under 381 px): Open, Save project, Undo, Redo and Fit all on screen at 44 px with the logo kept
+     (Sami, 15 Oct 2026: "keep the logo"): the plan and side lists and Open are short (Hip, R, O) */
+  @media (max-width: 380px) { header { gap: 2px; padding-left: max(4px, env(safe-area-inset-left)); padding-right: max(4px, env(safe-area-inset-right)); } header img.logo { height: 20px; } header select { max-width: 24vw; } }
+  @media (max-width: 370px) { header { gap: 1px; padding-left: max(3px, env(safe-area-inset-left)); padding-right: max(3px, env(safe-area-inset-right)); } header img.logo { height: 15px; } }   /* 360 px phones: the logo smaller, still there */
   /* fingers: 44 px targets (Astra, 13 Oct) */
   @media (pointer: coarse) {
     :root { --icon: 44px; }
     button, select, input[type=number], .steps button, header select, header button { min-height: 44px; }
+    header select { min-width: 44px; }   /* the short lists (R, L, B; Hip): never narrower than a finger (15 Oct 2026) */
     button { min-width: 44px; }
     .steps button { min-width: 44px; }
     ul.lm li { min-height: 44px; padding: 4px 6px; }
@@ -352,12 +409,15 @@
   <img class="logo" src="brand/logo-lime.png" alt="Addis Ortho" width="67" height="33"><b>X-ray templating</b>
   <span class="study" id="study"></span>
   <span class="sp"></span>
-  <label>Plan <select id="wf" aria-label="Plan"></select></label>
-  <label>Side <select id="side" aria-label="Surgery side"><option value="R">Right</option><option value="L">Left</option></select></label>
-  <button id="openBtn" aria-label="Open file" title="Open a DICOM, PNG or JPEG file, or a saved project (.aotp), from this computer"><span class="lg">Open file…</span><span class="sm" aria-hidden="true">Open</span></button>
+  <!-- short labels (Sami, 15 Oct 2026: "make room for others and keep the logo. you can keep hip/knee/bipolar narrower, side
+       R/L/B, open just O"): the plan's full name is each option's title, the words "Plan" and "Side" are for screen readers -->
+  <label><span class="sr-only">Plan</span><select id="wf" aria-label="Plan" title="Plan"></select></label>
+  <label><span class="sr-only">Side</span><select id="side" aria-label="Surgery side" title="Surgery side: R right, L left (B bilateral: not available)"><option value="R" title="Right">R</option><option value="L" title="Left">L</option><option value="B" title="Bilateral: not available (plan each side as its own case)" disabled>B</option></select></label>
+  <button id="openBtn" aria-label="Open" title="Open">O</button>
   <!-- Save project (projects.js, round 6) -->
   <span class="slot" id="projSlot"></span>
   <button id="undoBtn" class="icon" aria-label="Undo" title="Undo the last change (Ctrl/⌘+Z)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+  <button id="redoBtn" class="icon" aria-label="Redo" title="Redo what Undo took back (Ctrl/⌘+Shift+Z, Ctrl+Y)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
   <button id="fitBtn" class="icon" aria-label="Fit to window" title="Fit the X-ray to the window (F)" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
   <button id="panelBtn" title="Show or hide the side panel" aria-controls="pcol">Panel</button>
   <input type="file" id="file2" accept=".dcm,.dicom,.aotp,application/dicom,application/zip,image/png,image/jpeg,image/webp,image/*" hidden>

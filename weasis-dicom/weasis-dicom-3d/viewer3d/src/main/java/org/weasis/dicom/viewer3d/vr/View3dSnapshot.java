@@ -19,7 +19,9 @@ import java.awt.datatransfer.Transferable;
 import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Date;
@@ -29,8 +31,11 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.imageio.ImageIO;
 import javax.swing.Action;
+import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.slf4j.Logger;
@@ -43,6 +48,7 @@ import org.weasis.core.api.media.data.MediaSeriesGroup;
 import org.weasis.core.api.media.data.TagW;
 import org.weasis.core.api.util.ResourceUtil;
 import org.weasis.core.api.util.ResourceUtil.ActionIcon;
+import org.weasis.core.ui.editor.image.ViewTransferHandler;
 import org.weasis.core.ui.util.DefaultAction;
 import org.weasis.dicom.codec.DcmMediaReader;
 import org.weasis.dicom.codec.DicomImageElement;
@@ -73,11 +79,31 @@ public final class View3dSnapshot {
       }
       return image;
     }
+
+    /** The frame with the viewer's footer below it, when that preference is on. */
+    public Frame withFooter() {
+      if (!ViewTransferHandler.isFooterEnabled()) {
+        return this;
+      }
+      BufferedImage image = ViewTransferHandler.addFooter(toImage(), AppProperties.WEASIS_NAME);
+      int[] pixels =
+          image.getRGB(0, 0, image.getWidth(), image.getHeight(), null, 0, image.getWidth());
+      byte[] out = new byte[pixels.length * 3];
+      for (int i = 0, j = 0; i < pixels.length; i++, j += 3) {
+        out[j] = (byte) (pixels[i] >> 16);
+        out[j + 1] = (byte) (pixels[i] >> 8);
+        out[j + 2] = (byte) pixels[i];
+      }
+      return new Frame(image.getWidth(), image.getHeight(), out);
+    }
   }
 
   private View3dSnapshot() {}
 
-  /** Export actions of the 3D view: save to the study and copy to the clipboard. */
+  /**
+   * Export actions of the 3D view: save to the study, copy to the clipboard, and the rotation
+   * video.
+   */
   public static List<Action> getExportActions(View3d view) {
     return List.of(
         new DefaultAction(
@@ -87,7 +113,11 @@ public final class View3dSnapshot {
         new DefaultAction(
             Messages.getString("3d.picture.copy"),
             ResourceUtil.getIcon(ActionIcon.EXPORT_CLIPBOARD),
-            _ -> copyToClipboard(view)));
+            _ -> copyToClipboard(view)),
+        new DefaultAction(
+            Messages.getString("view.video"),
+            ResourceUtil.getIcon(ActionIcon.EXPORT_IMAGE),
+            _ -> View3dVideoExport.export(view)));
   }
 
   /**
@@ -95,27 +125,56 @@ public final class View3dSnapshot {
    * view is not showing or has nothing rendered.
    */
   public static Optional<Frame> capture(View3d view) {
-    if (!view.hasValidContent()) {
-      return Optional.empty();
+    try (Reader reader = new Reader()) {
+      return reader.capture(view);
     }
-    AtomicReference<Frame> frame = new AtomicReference<>();
-    view.invoke(
-        true,
-        drawable -> {
-          GL gl = drawable.getGL();
-          int width = drawable.getSurfaceWidth();
-          int height = drawable.getSurfaceHeight();
-          if (width > 0 && height > 0) {
-            ByteBuffer rgba = Buffers.newDirectByteBuffer(width * height * 4);
-            GLPixelStorageModes storageModes = new GLPixelStorageModes();
-            storageModes.setPackAlignment(gl, 1);
-            gl.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, rgba);
-            storageModes.restore(gl);
-            frame.set(new Frame(width, height, toFlippedRgb(rgba, width, height)));
-          }
-          return true;
-        });
-    return Optional.ofNullable(frame.get());
+  }
+
+  /**
+   * Reads frames back from the GPU into buffers kept from one frame to the next, so a video export
+   * allocates them once and not once per frame. Each {@link Frame} it returns shares the reader's
+   * RGB array: convert it ({@link Frame#toImage()}) before the next capture. Not thread-safe.
+   */
+  public static final class Reader implements AutoCloseable {
+    private ByteBuffer rgba;
+    private byte[] rgb;
+
+    public Optional<Frame> capture(View3d view) {
+      if (!view.hasValidContent()) {
+        return Optional.empty();
+      }
+      AtomicReference<Frame> frame = new AtomicReference<>();
+      view.invoke(
+          true,
+          drawable -> {
+            GL gl = drawable.getGL();
+            int width = drawable.getSurfaceWidth();
+            int height = drawable.getSurfaceHeight();
+            if (width > 0 && height > 0) {
+              int bytes = width * height * 4;
+              if (rgba == null || rgba.capacity() != bytes) {
+                rgba = Buffers.newDirectByteBuffer(bytes);
+                rgb = new byte[width * height * 3];
+              }
+              rgba.clear();
+              GLPixelStorageModes storageModes = new GLPixelStorageModes();
+              storageModes.setPackAlignment(gl, 1);
+              gl.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, rgba);
+              storageModes.restore(gl);
+              toFlippedRgb(rgba, width, height, rgb);
+              frame.set(new Frame(width, height, rgb));
+            }
+            return true;
+          });
+      return Optional.ofNullable(frame.get());
+    }
+
+    /** Lets the buffers go. */
+    @Override
+    public void close() {
+      rgba = null;
+      rgb = null;
+    }
   }
 
   /**
@@ -123,7 +182,11 @@ public final class View3dSnapshot {
    * the top row first, dropping the alpha.
    */
   public static byte[] toFlippedRgb(ByteBuffer rgba, int width, int height) {
-    byte[] rgb = new byte[width * height * 3];
+    return toFlippedRgb(rgba, width, height, new byte[width * height * 3]);
+  }
+
+  /** As {@link #toFlippedRgb(ByteBuffer, int, int)}, into {@code rgb}, which it returns. */
+  static byte[] toFlippedRgb(ByteBuffer rgba, int width, int height, byte[] rgb) {
     for (int y = 0; y < height; y++) {
       int src = (height - 1 - y) * width * 4;
       int dst = y * width * 3;
@@ -136,13 +199,46 @@ public final class View3dSnapshot {
     return rgb;
   }
 
+  /** Saves the frame as a JPEG file chosen by the user. */
+  public static void saveJpeg(View3d view) {
+    Optional<Frame> frame = capture(view);
+    if (frame.isEmpty()) {
+      showError(view);
+      return;
+    }
+    JFileChooser chooser = new JFileChooser();
+    chooser.setFileFilter(
+        new FileNameExtensionFilter(Messages.getString("view.jpeg.files"), "jpg", "jpeg"));
+    chooser.setSelectedFile(Path.of("3d-view.jpg").toFile()); // NON-NLS
+    if (chooser.showSaveDialog(view) != JFileChooser.APPROVE_OPTION) {
+      return;
+    }
+    Path file = chooser.getSelectedFile().toPath();
+    String name = file.getFileName().toString().toLowerCase();
+    if (!name.endsWith(".jpg") && !name.endsWith(".jpeg")) { // NON-NLS
+      file = file.resolveSibling(file.getFileName() + ".jpg"); // NON-NLS
+    }
+    try {
+      if (!ImageIO.write(frame.get().toImage(), "jpg", Files.newOutputStream(file))) { // NON-NLS
+        throw new IOException("No JPEG writer");
+      }
+    } catch (IOException e) {
+      LOGGER.error("Cannot save the 3D picture to {}", file, e);
+      JOptionPane.showMessageDialog(
+          view,
+          Messages.getString("view.jpeg.error"),
+          Messages.getString("3d.viewer"),
+          JOptionPane.WARNING_MESSAGE);
+    }
+  }
+
   public static void copyToClipboard(View3d view) {
     Optional<Frame> frame = capture(view);
     if (frame.isEmpty()) {
       showError(view);
       return;
     }
-    BufferedImage image = frame.get().toImage();
+    BufferedImage image = ViewTransferHandler.withFooter(frame.get().toImage());
     Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new ImageSelection(image), null);
   }
 
@@ -161,7 +257,8 @@ public final class View3dSnapshot {
       return;
     }
     List<SourceInstance> instances = sourceInstances(series);
-    CompletableFuture.supplyAsync(() -> writeSeries(source, instances, frame.get()))
+    Frame withFooter = frame.get().withFooter();
+    CompletableFuture.supplyAsync(() -> writeSeries(source, instances, withFooter))
         .whenComplete(
             (picture, e) ->
                 GuiExecutor.execute(

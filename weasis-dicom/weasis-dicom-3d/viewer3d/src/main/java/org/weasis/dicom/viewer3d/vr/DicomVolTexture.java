@@ -60,6 +60,9 @@ public class DicomVolTexture extends VolumeTexture implements MediaSeriesGroup {
   /** Pre-filters the volume on upload and smooths its shading (see VolumeSmoother). */
   private volatile boolean smoothing;
 
+  private volatile boolean fullyLoaded;
+  private volatile boolean loadFailed;
+
   public DicomVolTexture(
       Vector3i size, Volume<?, ?> v, PixelFormat pixelFormat, PropertyChangeSupport changeSupport) {
     super(size, pixelFormat);
@@ -250,11 +253,32 @@ public class DicomVolTexture extends VolumeTexture implements MediaSeriesGroup {
   }
 
   public void notifyFullyLoaded() {
+    fullyLoaded = true;
     firePropertyChange(this, DicomVolTextureFactory.FULLY_LOADED, this);
+  }
+
+  /** {@code true} once every slice of the volume is loaded and uploaded. */
+  public boolean isFullyLoaded() {
+    return fullyLoaded;
   }
 
   public void notifyPartiallyLoaded() {
     firePropertyChange(this, DicomVolTextureFactory.PARTIALLY_LOADED, this);
+  }
+
+  /** The upload stopped before the last slice: what is shown is only part of the volume. */
+  public void notifyLoadFailed() {
+    loadFailed = true;
+    firePropertyChange(this, DicomVolTextureFactory.LOAD_FAILED, this);
+  }
+
+  /** {@code true} when the last upload stopped short; cleared when an upload starts again. */
+  public boolean isLoadFailed() {
+    return loadFailed;
+  }
+
+  void clearLoadFailed() {
+    loadFailed = false;
   }
 
   public boolean isReadyForDisplay() {

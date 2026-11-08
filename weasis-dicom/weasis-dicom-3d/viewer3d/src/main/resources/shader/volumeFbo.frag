@@ -21,6 +21,7 @@ uniform sampler2D lightingMap;  // unit 2 — set from Java
 uniform usampler3D segTexture;  // unit 4 — set from Java
 uniform sampler2D segColorMap;  // unit 5 — set from Java
 uniform sampler3D segOccTexture; // unit 6 — set from Java
+uniform sampler3D keptTexture;   // unit 7 — set from Java
 
 #include "voxelUniforms330.glsl"
 

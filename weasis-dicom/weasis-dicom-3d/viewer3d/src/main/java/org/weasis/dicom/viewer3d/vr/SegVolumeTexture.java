@@ -77,6 +77,9 @@ public final class SegVolumeTexture {
   private boolean needsColorUpdate = true;
   private byte[] pendingColorLut;
 
+  /** The last LUT the visibility was taken from, see {@link #getColorLut()}. */
+  private volatile byte[] currentColorLut;
+
   /**
    * Storage width the texture was allocated with, captured in {@link #init(GL2ES2)} so that {@link
    * #uploadVolumeData(GL2ES2)} always transfers in the format the texture was created for.
@@ -105,6 +108,11 @@ public final class SegVolumeTexture {
   private volatile boolean destroyed;
 
   private volatile Runnable occupancyListener = () -> {};
+
+  // Addis Ortho: the slices of the volume changed since the last bind (live editing), first and
+  // last; first > last when none.
+  private int dirtyZ0 = Integer.MAX_VALUE;
+  private int dirtyZ1 = Integer.MIN_VALUE;
 
   /**
    * Creates a new SegVolumeTexture.
@@ -273,6 +281,85 @@ public final class SegVolumeTexture {
         (sizeZ + slicesPerBlock - 1) / slicesPerBlock);
   }
 
+  /**
+   * Addis Ortho: marks slices {@code z0} to {@code z1} of the volume as changed in memory; the next
+   * {@link #bind(GL2ES2)} uploads only them, and rebuilds the smooth surface there.
+   */
+  public synchronized void markDirtySlices(int z0, int z1) {
+    int sizeZ = segVolume.getSizeZ();
+    int a = Math.max(0, Math.min(z0, z1));
+    int b = Math.min(sizeZ - 1, Math.max(z0, z1));
+    if (a > b) {
+      return;
+    }
+    dirtyZ0 = Math.min(dirtyZ0, a);
+    dirtyZ1 = Math.max(dirtyZ1, b);
+  }
+
+  private synchronized int[] takeDirtySlices() {
+    if (dirtyZ0 > dirtyZ1) {
+      return null;
+    }
+    int[] dirty = {dirtyZ0, dirtyZ1};
+    dirtyZ0 = Integer.MAX_VALUE;
+    dirtyZ1 = Integer.MIN_VALUE;
+    return dirty;
+  }
+
+  /**
+   * Uploads volume slices {@code z0} to {@code z1} only, and their smooth-surface occupancy when it
+   * is built for the visibility in use. GL thread.
+   */
+  private void uploadSlices(GL2ES2 gl, int z0, int z1) {
+    int sizeX = segVolume.getSizeX();
+    int sizeY = segVolume.getSizeY();
+    int sizeZ = segVolume.getSizeZ();
+    if (segVolume.isShortMode() != shortStorage) {
+      // The volume changed its storage width: the texture must be made again.
+      init(gl);
+      uploadVolumeData(gl);
+      return;
+    }
+    // The texture holds the slices last first (see uploadVolumeData).
+    int texZ = sizeZ - 1 - z1;
+    int depth = z1 - z0 + 1;
+    int type = shortStorage ? GL.GL_UNSIGNED_SHORT : GL.GL_UNSIGNED_BYTE;
+    int sliceVoxels = sizeX * sizeY;
+    int sliceBytes = sliceVoxels * (shortStorage ? Short.BYTES : Byte.BYTES);
+    GLPixelStorageModes storageModes = new GLPixelStorageModes();
+    storageModes.setUnpackAlignment(gl, 1);
+    int slicesPerBlock = Math.max(1, Math.min(depth, MAX_UPLOAD_BLOCK_BYTES / sliceBytes));
+    ByteBuffer labels = Buffers.newDirectByteBuffer(slicesPerBlock * sliceBytes);
+    boolean[] visible = lutVisibleIds;
+    int occupancy = occupancyTextureId;
+    boolean occupancyFits =
+        smoothSurfaces && occupancy > 0 && Arrays.equals(occupancyVisibleIds, visible);
+    ByteBuffer occ =
+        occupancyFits ? Buffers.newDirectByteBuffer(slicesPerBlock * sliceVoxels) : null;
+    for (int t = texZ; t < texZ + depth; t += slicesPerBlock) {
+      int d = Math.min(slicesPerBlock, texZ + depth - t);
+      labels.clear();
+      exportSlices(labels, t, d);
+      labels.flip();
+      gl.glActiveTexture(GL.GL_TEXTURE0 + SEG_TEXTURE_UNIT);
+      gl.glBindTexture(GL2ES2.GL_TEXTURE_3D, segTextureId);
+      gl.glTexSubImage3D(
+          GL2ES2.GL_TEXTURE_3D, 0, 0, 0, t, sizeX, sizeY, d, GL2GL3.GL_RED_INTEGER, type, labels);
+      if (occ != null) {
+        labels.rewind();
+        occ.clear();
+        SegOccupancy.fill(labels, shortStorage, visible, occ, sizeX, sizeY, d);
+        occ.flip();
+        uploadOccupancy(gl, occupancy, t, sizeX, sizeY, d, occ);
+      }
+    }
+    storageModes.restore(gl);
+    gl.glActiveTexture(GL.GL_TEXTURE0);
+    if (smoothSurfaces && !occupancyFits) {
+      requestOccupancy(); // none yet, or built for another visibility: build it whole
+    }
+  }
+
   /** Appends {@code depth} slices starting at texture slice {@code texZ}, in texture Z order. */
   private void exportSlices(ByteBuffer buffer, int texZ, int depth) {
     int sizeZ = segVolume.getSizeZ();
@@ -366,6 +453,12 @@ public final class SegVolumeTexture {
     deleteRetiredTextures(gl);
     if (needsUpload) {
       uploadVolumeData(gl);
+      takeDirtySlices(); // the full upload holds them
+    } else {
+      int[] dirty = takeDirtySlices();
+      if (dirty != null) {
+        uploadSlices(gl, dirty[0], dirty[1]);
+      }
     }
     if (needsColorUpdate) {
       if (pendingColorLut != null) {
@@ -385,6 +478,17 @@ public final class SegVolumeTexture {
   /** Returns {@code true} if the 3D texture has been successfully allocated and uploaded. */
   public boolean isReady() {
     return segTextureId > 0 && !needsUpload;
+  }
+
+  /** Visibility by storage ID as the colour LUT the user set has it, for the CPU picking. */
+  public boolean[] getVisibleIds() {
+    return lutVisibleIds.clone();
+  }
+
+  /** The segment colour LUT the user set, RGBA bytes by storage ID, for the CPU picking. */
+  public byte[] getColorLut() {
+    byte[] lut = currentColorLut;
+    return lut == null ? new byte[0] : lut.clone();
   }
 
   /** Returns the scale factors for mapping between segVolume and DicomVolTexture coordinates. */
@@ -467,6 +571,7 @@ public final class SegVolumeTexture {
   }
 
   private synchronized void updateVisibility(byte[] colorLut) {
+    currentColorLut = colorLut;
     boolean[] visible = SegOccupancy.visibleIds(colorLut);
     if (!Arrays.equals(visible, lutVisibleIds)) {
       lutVisibleIds = visible;

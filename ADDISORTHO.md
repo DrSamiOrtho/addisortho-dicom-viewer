@@ -15,8 +15,11 @@ in the installer licence page (`weasis-distributions/src/main/resources-native/L
 the third-party notice template; the About box states "GNU GPL version 3" (`weasis.copyrights` in
 `weasis-distributions/etc/config/base.json`). Keep all of them in step.
 
-It is not a certified medical device. It is for image review and surgical planning support only;
-the first-launch disclaimer must be accepted before the viewer opens.
+It is not a certified medical device. It is for image review and surgical planning support only.
+The release notes say so. There is no first-launch disclaimer: the owner turned it off on
+2026-10-23 (`weasis.show.disclaimer` is `false` in `weasis-distributions/etc/config/base.json`), and
+the smoke test checks that no "First Time Launch" window opens. Upstream's dialog code and text are
+unchanged, so turning the setting back on shows upstream's wording.
 
 ## Branches and upstream
 
@@ -91,7 +94,7 @@ real Weasis on the same computer. Linux packaging is not maintained.
 2. Done. Help menu and leftover Weasis wording (see below).
 3. Done. `weasis-i18n-dist` is vendored (see below).
 4. Done. "Modified by Addis Ortho Trading PLC" lines (see below).
-5. Open. Smoke test both installers next to a real Weasis install: disclaimer, DICOMDIR from a CD,
+5. Open. Smoke test both installers next to a real Weasis install: no first-launch dialog, DICOMDIR from a CD,
    length and angle, About box (third-party link opens `THIRD-PARTY-NOTICES.txt`), Help menu (no
    update check, no bug report, no release notes), URL scheme, uninstall leaves Weasis untouched.
    `smoke-test.yml` automates most of it (not length and angle, nor a real Weasis next to it).
@@ -135,8 +138,27 @@ value is empty:
 
 `weasis-launcher/conf/base.json` still has upstream's values because its tests expect them. User
 visible strings now use the configured name (`weasis.name`): the shortcuts page title, the OAuth
-callback page and the Resource Monitor report. The dark theme is listed as "Flat Addis Ortho".
+callback page and the Resource Monitor report.
 Non-English translations come from `weasis-i18n-dist` and still say Weasis.
+
+### Look
+
+- Theme: the default dark theme, "Core Dark - Flat Addis Ortho", is `org.weasis.launcher.FlatWeasisTheme`
+  (the class name is the stored `weasis.theme` value, keep it). It extends FlatDarkLaf; every colour and
+  shape is in `weasis-launcher/src/main/resources/org/weasis/theme/FlatWeasisTheme.properties`. Surfaces
+  are near-black with a `#034537` cast, selection is white on `#034537`, and `#A8FF30` is only for small
+  accents (focus ring, tab underline, progress, slider). `controlDkShadow` and `windowBorder` are set
+  there because DockingFrames draws its tab outlines with them. Upstream's Monokai `Weasis.theme.json`
+  is removed. The light theme is upstream's FlatIntelliJ.
+- Start screen: `WelcomeLayerUI` (weasis-base-ui) is a `JLayer` around the docking area that paints the
+  wordmark (`svg/logo/AddisOrthoWordmark.svg`, the About logo without its black plate), "DICOM Viewer"
+  and a hint while the main working area holds no viewer. It only paints, so drops and clicks still
+  reach the working area. Image panes are never painted on: they stay neutral black.
+- Mark: on macOS the AO mark (`BrandMark`, `LogoIcon.SMALL`) sits at the left of the toolbar, as tall
+  as the toolbar buttons (it follows the button row, with or without text labels), because the menu
+  bar is in the screen and the title bar is native. Clicking it goes back to the start screen: after
+  a confirmation it closes every open viewer the way "Close All" does. On Windows FlatLaf shows the
+  frame icon in its title bar, so nothing is added there.
 
 ### Translations
 
@@ -177,8 +199,59 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
   Needs `jdk.httpserver` in the installer runtime (`launch-options.sh`) and `com.sun.net.httpserver` in both `base.json`.
 - `weasis-dicom/weasis-dicom-bones` (3D view tool panels):
   - **Bone STL**: one segment of a shown SEG as a binary STL, mm, DICOM LPS.
-  - **Bone select (region grow)**: seeded HU region grow (default 200-3000 HU) with closing, hole filling and optional
-    separation, written as a SEG (series 902) in the study; for knee bones and fragments without a licence.
+  - **Bones** (rebuilt again 23 Oct 2026: find all, click to select). A CT opens in 3D as the plain isolated bone;
+    Find the bones (or Show the bones, once found) finds every bone at once (`grow/AutoSplit`, run by `FindWorker`): bone at 200 HU closed and marrow-filled, dense bone at 300 HU, a Euclidean distance
+    transform in mm, and a watershed that keeps two parts apart only where the neck is under 0.45 of the thinner part's
+    depth, at least 1 mm shallower, with 0.2 cm³ above it; pieces under 1 cm³ join the bone they touch most or lie
+    within 10 mm of. A CT over 16 M voxels in the crop is worked on a 2x (or coarser) grid. The 3D view then shows
+    Bones in colour (`SegmentationTool.Type.BONES`: the CT itself, only inside visible segments, tinted with the
+    segment colour, `segTint` in `vrFunctions.glsl`). A click on a bone in 3D, on an MPR or plain 2D slice (`SeedPicker.fromSliceClick`: the slice's own
+    geometry, as the cross-hair) or in the list selects it
+    (Shift, Ctrl or Cmd adds); Hide, Show only, Show all, Join, Split, Name and Delete act on the selection. Hidden and
+    selected are colour-table styles (`View3d.setSegmentStyles`, static, keyed by SEG instance, so a rebuilt 3D view
+    keeps them), not cuts and not a SEG rewrite. Split takes two clicks on one bone and floods it from both, brightest CT
+    first (`AutoSplit.splitBetween` with the CT), so the cut follows the darkest surface between them: the fracture
+    line or joint space, even where the parts press together over a broad face. Every step is an `EditHistory`
+    entry of the 3D view, so Ctrl+Z walks through bone steps, cuts and crops together. Bones are immutable (`Bone`,
+    `grow/BoxMask`); the SEG (series 902, segments numbered in list order) is rewritten in the background only when
+    voxels, names or colours change (`SegWriteWorker`, one at a time). More tools keeps the region grow (New bone, with
+    the region, bone and side picker of `BoneNames`), Erase piece (`grow/BoneSplit`) and the grow settings. Keep only
+    this and Remove this left the 3D tool bar (still in the mouse button menus). Natural look (a Bones panel switch)
+    shows the bones as the CT shows bone (`SEG_MASK_INCLUDE`), hidden ones still hidden; untick for the colours.
   - **Make 3D bones**: runs the owner's TotalSegmentator pipeline (`planning/make_3d.sh`, free model: hip, shoulder,
     spine) where it is installed, and opens its results in the study.
 - `viewer3d`: Smooth surfaces for segments, a crop box, and "Save 3D picture to the study" / "Copy 3D picture".
+  A CT opened on the bone is also isolated (22 Oct 2026, `vr/BoneIsolation`, one undoable cut after the crop; the
+  crop panel's Isolate bone runs it on demand): a plaster cast, the table, the pad and the soft tissue go because
+  they touch the outside air (found slice by slice in 2D) and bone does not. What touches no air is sorted by real
+  size (anisotropic voxels, mm3): a piece of 1 cm3 or more is bone, one under 5 mm3 is noise, one in between stays
+  only when the gap to a kept piece is under 4 mm, edge to edge in true mm (exact distance transform on the piece
+  grown by one voxel), spreading piece to piece for at most 4 links (fragments, sesamoids, carpals and phalanges stay;
+  the specks in a pad, a table board and a side marker go; a fragment displaced over 4 mm or a paediatric ossification
+  centre is lost, Undo or Whole volume restores it). Each kept piece is hole-filled on its own, so two bones never
+  enclose pad between them; metal stays whole only when it touches a bone before the 2-voxel widening and has no air
+  contact, a fixator pin only inside the bone (23 Oct 2026, after GPT-6 Astra's review).
+- `viewer3d` 3D tools bar (14 Oct, evening): the mouse tools rotate, roll, pan, zoom, window/level, scalpel, keep only
+  this, remove this, length and arrow; the six anatomical orientations (keys 1 to 6); fit (Ctrl+0) and reset scene
+  (Ctrl+R); shading (Ctrl+S); copy (Ctrl+C), JPEG (Ctrl+E), quick movie (F2) and view-state snapshots (K, [ and ]).
+  The scalpel (S, or Alt + left drag with any tool) draws a closed area; Delete cuts inside it and Enter outside it,
+  through the whole depth, with Ctrl+Z / Ctrl+Y undo and redo and Ctrl+Alt+0 restoring the volume. Keep only this and
+  remove this pick the structure under a click (CPU ray march of the renderer's own transfer function) and grow it over
+  the shown voxels above the visible threshold, with a light separation option. The cuts live in `KeptMask`, one bit
+  per texture voxel on the CPU (`isKeptVolumeVoxel` is the API for the bones bundle) and one byte per voxel on the GPU
+  (unit 7), which every rendering mode and the segment overlays sample. Rotation and zoom centre on the crop box when
+  it is on. Keys of the 3D view are listed in `Shortcuts3d`; T is the roll (M pans), unlike the 2D viewer.
+
+## Brand footer and Help links (18 Oct 2026)
+
+- Footer: view pictures saved or copied from the screenshot dialog (view mode) and 3D pictures (copied or saved
+  to the study) get a thin strip below the picture, white on `#034537`, naming `weasis.name`. The templating
+  page's saved picture (PNG, DICOM, saved to the viewer) says "Templated with Addis Ortho Viewer" at the foot of
+  its report column. One switch turns all of them off: Preferences, General (`addisortho.picture.footer`,
+  default on; the viewer adds `footer=0` to the templating page's address when it is off). Image mode (raw
+  pixels) and the explorer's image export are not touched. The templating page's "leave out the patient's
+  name" switch is unchanged.
+- `app.js` in `templating-web` was patched here (BUILD.txt updated), so the change must also go into the
+  templating project's `web/app.js` before the next `sync-templating-web.sh`, or the sync drops it.
+- Help, Download page (`addisortho.help.download`) and Help, Support (Telegram) (`addisortho.help.support`) in
+  `weasis-distributions/etc/config/base.json`; each is hidden when empty.

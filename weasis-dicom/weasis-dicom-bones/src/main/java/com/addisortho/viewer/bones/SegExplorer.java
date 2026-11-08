@@ -36,6 +36,10 @@ import org.weasis.dicom.codec.seg.SegSpecialElement;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
+import org.weasis.dicom.viewer2d.View2d;
+import org.weasis.dicom.viewer2d.mpr.MprContainer;
+import org.weasis.dicom.viewer2d.mpr.MprController;
+import org.weasis.dicom.viewer2d.mpr.Volume;
 import org.weasis.dicom.viewer3d.ActionVol;
 import org.weasis.dicom.viewer3d.EventManager;
 import org.weasis.dicom.viewer3d.View3DContainer;
@@ -76,10 +80,14 @@ final class SegExplorer {
       remove(model, segSeriesUID, oldSopUID);
     }
     if (newFile == null) {
+      // An earlier version may still be on its way into the explorer: once the loads queued
+      // before now are done (one loading thread), take out whatever of the series is there.
+      DicomModel.LOADING_EXECUTOR.execute(
+          () -> GuiExecutor.execute(() -> removeAllBut(model, segSeriesUID, null)));
       return;
     }
     pendingModel = model;
-    pending = evt -> loaded(evt, ct, newSopUID);
+    pending = evt -> loaded(evt, model, ct, segSeriesUID, newSopUID);
     model.addPropertyChangeListener(pending);
     DicomModel.LOADING_EXECUTOR.execute(
         new LoadLocalDicom(new File[] {newFile.toFile()}, false, model, OpeningViewer.NONE));
@@ -106,7 +114,24 @@ final class SegExplorer {
     }
   }
 
-  private static String sopUID(HiddenSpecialElement element) {
+  /**
+   * Takes out of the explorer every instance of the series but {@code keepSopUID}: versions written
+   * in quick succession may land after the removal meant for them.
+   */
+  private static void removeAllBut(DicomModel model, String segSeriesUID, String keepSopUID) {
+    Set<HiddenSpecialElement> elements =
+        HiddenSeriesManager.getInstance().series2Elements.get(segSeriesUID);
+    if (elements == null) {
+      return;
+    }
+    for (HiddenSpecialElement element : List.copyOf(elements)) {
+      if (element instanceof SegSpecialElement && !Objects.equals(keepSopUID, sopUID(element))) {
+        model.removeHiddenSpecialElement(element);
+      }
+    }
+  }
+
+  static String sopUID(HiddenSpecialElement element) {
     String uid = TagD.getTagValue(element, Tag.SOPInstanceUID, String.class);
     if (uid == null && element.getMediaReader() instanceof DicomMediaIO reader) {
       uid = reader.getDicomObject().getString(Tag.SOPInstanceUID);
@@ -116,7 +141,11 @@ final class SegExplorer {
 
   // The explorer announces a segmentation once its contours are built (UPDATE, off the EDT).
   private void loaded(
-      PropertyChangeEvent evt, MediaSeries<DicomImageElement> ct, String sopInstanceUID) {
+      PropertyChangeEvent evt,
+      DicomModel model,
+      MediaSeries<DicomImageElement> ct,
+      String segSeriesUID,
+      String sopInstanceUID) {
     if (evt instanceof ObservableEvent e
         && e.getActionCommand() == ObservableEvent.BasicAction.UPDATE
         && e.getNewValue() instanceof SegSpecialElement seg
@@ -124,12 +153,16 @@ final class SegExplorer {
       GuiExecutor.execute(
           () -> {
             stopWaiting();
+            removeAllBut(model, segSeriesUID, sopInstanceUID);
             refreshViews(ct);
           });
     }
   }
 
-  /** Shows the segmentations of the CT in its 3D views and lists them in the Segmentation panel. */
+  /**
+   * Shows the segmentations of the CT in its 3D views, its MPR views and the slices of the 2D
+   * viewer, and lists them in the Segmentation panel.
+   */
   private static void refreshViews(MediaSeries<DicomImageElement> ct) {
     List<ViewerPlugin<?>> plugins = GuiUtils.getUICore().getViewerPlugins();
     List<ViewerPlugin<?>> copy;
@@ -137,8 +170,17 @@ final class SegExplorer {
       copy = List.copyOf(plugins);
     }
     EventManager manager = EventManager.getInstance();
+    String ctUID = TagD.getTagValue(ct, Tag.SeriesInstanceUID, String.class);
     for (ViewerPlugin<?> plugin : copy) {
+      if (plugin instanceof MprContainer mpr) {
+        // Live bones are drawn from memory: the file just loaded needs no rebuild of the MPR.
+        if (org.weasis.dicom.codec.seg.LiveSegmentation.of(ctUID).isEmpty()) {
+          refreshMpr(mpr, ctUID);
+        }
+        continue;
+      }
       if (!(plugin instanceof View3DContainer container)) {
+        refreshSlices(plugin, ctUID);
         continue;
       }
       for (ViewCanvas<DicomImageElement> canvas : container.getImagePanels()) {
@@ -146,7 +188,7 @@ final class SegExplorer {
             && view.getVolTexture() != null
             && ct.equals(view.getVolTexture().getSeries())) {
           if (view.getSegType() == SegmentationTool.Type.NONE) {
-            view.setSegType(SegmentationTool.Type.SEG_OVERLAY);
+            view.setSegType(BoneGrowTool.displayType());
           } else {
             view.updateSegmentation();
           }
@@ -160,10 +202,85 @@ final class SegExplorer {
                     a.setSelectedItemWithoutTriggerAction(
                         manager.getSelectedViewPane() instanceof View3d v
                             ? v.getSegType()
-                            : SegmentationTool.Type.SEG_OVERLAY));
+                            : BoneGrowTool.displayType()));
       }
       manager.fireSeriesViewerListeners(
           new SeriesViewerEvent(container, ct, null, EVENT.SELECT_VIEW));
+    }
+  }
+
+  /** The MPR of the CT builds its outlines again from the segmentation now in the explorer. */
+  private static void refreshMpr(MprContainer mpr, String ctUID) {
+    MprController controller = mpr.getMprController();
+    Volume<?, ?> volume = controller == null ? null : controller.getVolume();
+    if (volume == null || volume.getStack() == null) {
+      return;
+    }
+    String uid =
+        TagD.getTagValue(volume.getStack().getSeries(), Tag.SeriesInstanceUID, String.class);
+    if (ctUID != null && ctUID.equals(uid)) {
+      controller.buildSegElementsAsync(mpr);
+    }
+  }
+
+  /** The slices of the CT in a 2D viewer draw their outlines again. */
+  private static void refreshSlices(ViewerPlugin<?> plugin, String ctUID) {
+    if (!(plugin instanceof org.weasis.core.ui.editor.image.ImageViewerPlugin<?> viewer)) {
+      return;
+    }
+    for (ViewCanvas<?> canvas : viewer.getImagePanels()) {
+      if (canvas instanceof View2d view
+          && view.getSeries() != null
+          && ctUID != null
+          && ctUID.equals(
+              TagD.getTagValue(view.getSeries(), Tag.SeriesInstanceUID, String.class))) {
+        view.requestSegmentationUpdate();
+      }
+    }
+  }
+
+  /**
+   * The live bones of the CT changed in slices {@code z0} to {@code z1} of its image volume ({@code
+   * z0 > z1}: only their look): the MPR views draw them again, the 3D views upload those slices.
+   */
+  static void liveChanged(MediaSeries<DicomImageElement> ct, int z0, int z1) {
+    String ctUID = TagD.getTagValue(ct, Tag.SeriesInstanceUID, String.class);
+    if (ctUID == null) {
+      return;
+    }
+    List<ViewerPlugin<?>> plugins = GuiUtils.getUICore().getViewerPlugins();
+    List<ViewerPlugin<?>> copy;
+    synchronized (plugins) {
+      copy = List.copyOf(plugins);
+    }
+    for (ViewerPlugin<?> plugin : copy) {
+      if (plugin instanceof MprContainer mpr) {
+        MprController controller = mpr.getMprController();
+        Volume<?, ?> volume = controller == null ? null : controller.getVolume();
+        if (volume == null
+            || volume.getStack() == null
+            || !ctUID.equals(
+                TagD.getTagValue(
+                    volume.getStack().getSeries(), Tag.SeriesInstanceUID, String.class))) {
+          continue;
+        }
+        for (org.weasis.dicom.viewer2d.mpr.MprView.Plane plane :
+            org.weasis.dicom.viewer2d.mpr.MprView.Plane.values()) {
+          org.weasis.dicom.viewer2d.mpr.MprView view = mpr.getMprView(plane);
+          if (view != null) {
+            view.updateSegmentation();
+            view.repaint();
+          }
+        }
+      } else if (plugin instanceof View3DContainer container) {
+        for (ViewCanvas<DicomImageElement> canvas : container.getImagePanels()) {
+          if (canvas instanceof View3d view
+              && view.getVolTexture() != null
+              && ct.equals(view.getVolTexture().getSeries())) {
+            view.liveSegmentationChanged(z0, z1);
+          }
+        }
+      }
     }
   }
 }

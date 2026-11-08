@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.core.ui.editor.image;
 
 import java.awt.event.InputEvent;
@@ -636,11 +637,18 @@ public abstract class ImageViewerEventManager<E extends ImageElement> implements
       @SuppressWarnings("unchecked")
       ViewerToolBar<E> toolBar = view.getViewerToolBar();
       if (toolBar != null) {
-        String command =
+        // Skip the actions this viewer does not have (the 3D tools in a 2D viewer, and the
+        // reverse), as the button's popup does.
+        Feature<?> next =
             ViewerToolBar.getNextCommand(
-                    ViewerToolBar.actionsButtons, toolBar.getMouseLeft().getActionCommand())
-                .cmd();
-        changeLeftMouseAction(command);
+                ViewerToolBar.actionsButtons, toolBar.getMouseLeft().getActionCommand());
+        for (int i = 0; next != null && i < ViewerToolBar.actionsButtons.size(); i++) {
+          if (isActionEnabled(next)) {
+            changeLeftMouseAction(next.cmd());
+            return;
+          }
+          next = ViewerToolBar.getNextCommand(ViewerToolBar.actionsButtons, next.cmd());
+        }
       }
     }
   }

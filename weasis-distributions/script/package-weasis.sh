@@ -280,6 +280,8 @@ fi
 
 if [ "$PACKAGE" = "YES" ] ; then
   if [ "$machine" = "windows" ] ; then
+    # Addis Ortho brand bitmaps of the MSI pages, read by main.wxs through this variable.
+    export AO_MSI_UI_DIR="$RES\\msi"
     [ "$arc" = "aarch64" ]  && UPGRADE_UID="1d34dbc0-804b-491f-b9b7-cddec4b42771" || UPGRADE_UID="4179fa98-ca01-4739-b89e-92aff0702b48"
     $JPKGCMD --type "msi" --app-image "$IMAGE_PATH" --dest "$OUTPUT_PATH" --name "$NAME" --resource-dir "$RES/msi/${arc}" \
     --license-file "$INPUT_PATH\Licence.txt" --description "$DESCRIPTION" --win-upgrade-uuid "$UPGRADE_UID"  \

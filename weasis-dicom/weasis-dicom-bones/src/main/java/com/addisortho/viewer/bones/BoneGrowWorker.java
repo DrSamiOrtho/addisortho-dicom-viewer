@@ -9,36 +9,27 @@
 package com.addisortho.viewer.bones;
 
 import com.addisortho.viewer.bones.BoneExportWorker.Problem;
+import com.addisortho.viewer.bones.grow.BoxMask;
 import com.addisortho.viewer.bones.grow.GrowOptions;
 import com.addisortho.viewer.bones.grow.GrowProgress.Stage;
+import com.addisortho.viewer.bones.grow.HuSource;
 import com.addisortho.viewer.bones.grow.RegionGrow;
 import com.addisortho.viewer.bones.grow.RegionGrow.Result;
 import com.addisortho.viewer.bones.grow.RegionGrow.SeedException;
 import com.addisortho.viewer.bones.grow.VoxelBox;
 import com.addisortho.viewer.bones.seg.CtGrid;
-import com.addisortho.viewer.bones.seg.SegmentationBuilder;
-import com.addisortho.viewer.bones.seg.SegmentationBuilder.Segment;
-import java.awt.Color;
-import java.io.IOException;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.SwingWorker;
-import org.dcm4che3.data.Attributes;
-import org.dcm4che3.data.Tag;
-import org.weasis.core.api.gui.util.AppProperties;
 
 /**
- * Grows one bone and writes the session's segmentation with it, or rewrites the segmentation with
- * the given segments only, off the event dispatch thread. Fires the bound property {@link #STAGE}
- * with the text of each step, and {@code progress} from 0 to 100.
+ * Grows one bone off the event dispatch thread. The bones already selected act as walls: the grow
+ * does not pass through them into the bones beyond. Fires the bound property {@link #STAGE} with
+ * the text of each step, and {@code progress} from 0 to 100.
  */
-final class BoneGrowWorker extends SwingWorker<BoneGrowWorker.Outcome, Void> {
+final class BoneGrowWorker extends SwingWorker<Result, Void> {
 
   static final String STAGE = "stage"; // NON-NLS
 
@@ -48,36 +39,21 @@ final class BoneGrowWorker extends SwingWorker<BoneGrowWorker.Outcome, Void> {
    * @param seed voxel of the CT grid
    * @param crop block of the grid to grow in, or {@code null} for the whole CT
    */
-  record Request(
-      int[] seed, VoxelBox crop, GrowOptions options, int number, String label, Color color) {}
-
-  /**
-   * @param result the grown bone, or {@code null} for a rewrite
-   * @param segments every segment of the segmentation written
-   * @param file the segmentation, or {@code null} when no segment is left
-   * @param sopInstanceUID its instance, or {@code null}
-   */
-  record Outcome(Result result, List<Segment> segments, Path file, String sopInstanceUID) {}
+  record Request(int[] seed, VoxelBox crop, GrowOptions options) {}
 
   private final CtSource ct;
   private final Request request;
-  private final List<Segment> kept;
-  private final String seriesUID;
-  private final int instanceNumber;
+  private final List<BoxMask> walls;
   private final AtomicReference<String> stage = new AtomicReference<>();
   private final AtomicInteger percent = new AtomicInteger();
 
   /**
-   * @param request the bone to grow, or {@code null} to write {@code kept} alone
-   * @param kept segments already in the segmentation
+   * @param walls the bones already selected
    */
-  BoneGrowWorker(
-      CtSource ct, Request request, List<Segment> kept, String seriesUID, int instanceNumber) {
+  BoneGrowWorker(CtSource ct, Request request, List<BoxMask> walls) {
     this.ct = ct;
     this.request = request;
-    this.kept = List.copyOf(kept);
-    this.seriesUID = seriesUID;
-    this.instanceNumber = instanceNumber;
+    this.walls = List.copyOf(walls);
   }
 
   CtSource ct() {
@@ -89,65 +65,37 @@ final class BoneGrowWorker extends SwingWorker<BoneGrowWorker.Outcome, Void> {
   }
 
   @Override
-  protected Outcome doInBackground() throws Problem {
+  protected Result doInBackground() throws Problem {
     CtGrid grid = ct.grid();
-    Result result = request == null ? null : grow(grid);
-    List<Segment> segments = new ArrayList<>(kept);
-    if (result != null) {
-      segments.add(
-          new Segment(
-              request.number(),
-              request.label(),
-              request.color(),
-              result,
-              description(request, result)));
-    }
-    if (segments.isEmpty()) {
-      return new Outcome(null, segments, null, null);
-    }
-    if (isCancelled()) {
-      throw new CancellationException();
-    }
-    showStage(Messages.getString("BoneGrowTool.stage.writing"));
-    advance(90);
-    Attributes dataset =
-        SegmentationBuilder.build(
-            ct.attributes(),
-            grid,
-            segments,
-            seriesUID,
-            instanceNumber,
-            AppProperties.WEASIS_VERSION,
-            new Date());
-    String sopUID = dataset.getString(Tag.SOPInstanceUID);
-    Path dir =
-        AppProperties.buildAccessibleTempDirectory(AppProperties.CACHE_NAME, "seg"); // NON-NLS
-    Path file = dir.resolve(sopUID + ".dcm"); // NON-NLS
-    try {
-      SegmentationBuilder.write(dataset, file);
-    } catch (IOException e) {
-      throw new Problem(
-          String.format(Messages.getString("BoneGrowTool.failed"), e.getLocalizedMessage()));
-    }
-    advance(100);
-    return new Outcome(result, List.copyOf(segments), file, sopUID);
-  }
-
-  private Result grow(CtGrid grid) throws Problem {
     GrowOptions options = request.options();
     int[] s = request.seed();
+    HuSource hu = ct.huSource();
+    HuSource walled =
+        walls.isEmpty()
+            ? hu
+            : (x, y, z) -> {
+              for (BoxMask wall : walls) {
+                if (wall.contains(x, y, z)) {
+                  return Double.NaN; // in no range
+                }
+              }
+              return hu.huAt(x, y, z);
+            };
     try {
-      return RegionGrow.grow(
-          grid.columns(),
-          grid.rows(),
-          grid.sliceCount(),
-          ct.huSource(),
-          s[0],
-          s[1],
-          s[2],
-          request.crop(),
-          options,
-          this::stageProgress);
+      Result result =
+          RegionGrow.grow(
+              grid.columns(),
+              grid.rows(),
+              grid.sliceCount(),
+              walled,
+              s[0],
+              s[1],
+              s[2],
+              request.crop(),
+              options,
+              this::stageProgress);
+      advance(100);
+      return result;
     } catch (SeedException e) {
       throw new Problem(
           switch (e.reason()) {
@@ -163,8 +111,7 @@ final class BoneGrowWorker extends SwingWorker<BoneGrowWorker.Outcome, Void> {
   }
 
   /** The settings, kept in the segment so the result can be traced. */
-  private static String description(Request request, Result result) {
-    GrowOptions o = request.options();
+  static String description(GrowOptions o, Result result) {
     return String.format(
         Locale.ROOT,
         "Region grow %.0f to %.0f HU, closing %d, separation %d%s, holes %s, seed voxel %d %d %d"
@@ -181,15 +128,15 @@ final class BoneGrowWorker extends SwingWorker<BoneGrowWorker.Outcome, Void> {
         result.seedHu());
   }
 
-  /** Maps the grow stages onto 0 to 90 percent. Called from pool threads. */
+  /** Maps the grow stages onto 0 to 100 percent. Called from pool threads. */
   private void stageProgress(Stage s, double fraction) {
     int[] span =
         switch (s) {
-          case GROWING -> new int[] {0, 60};
-          case SEPARATING -> new int[] {60, 72};
-          case CLOSING -> new int[] {72, 82};
-          case FILLING -> new int[] {82, 87};
-          case PIECES -> new int[] {87, 90};
+          case GROWING -> new int[] {0, 65};
+          case SEPARATING -> new int[] {65, 80};
+          case CLOSING -> new int[] {80, 90};
+          case FILLING -> new int[] {90, 96};
+          case PIECES -> new int[] {96, 100};
         };
     advance(span[0] + (int) Math.round(Math.min(1, fraction) * (span[1] - span[0])));
     showStage(Messages.getString("BoneGrowTool.stage." + s.name()));

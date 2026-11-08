@@ -347,7 +347,7 @@
     },
     {
       "code": "weasis.show.disclaimer",
-      "value": true,
+      "value": false,
       "description": "Show a disclaimer at the first launch of Weasis (requires to be accepted to start the application)",
       "type": "A",
       "javaType": "BOOLEAN",
@@ -408,6 +408,20 @@
       "code": "weasis.help.shortcuts",
       "value": "https://nroduit.github.io/en/basics/shortcuts",
       "description": "Provides a list of available shortcuts.",
+      "type": "A",
+      "category": "DOC"
+    },
+    {
+      "code": "addisortho.help.download",
+      "value": "https://github.com/DrSamiOrtho/addisortho-dicom-viewer/releases",
+      "description": "Addis Ortho's download page, opened by Help > Download page. Placeholder (the GitHub releases page) until the owner supplies the page. The menu item is hidden when the value is empty.",
+      "type": "A",
+      "category": "DOC"
+    },
+    {
+      "code": "addisortho.help.support",
+      "value": "",
+      "description": "Addis Ortho's support channel on Telegram (a https://t.me/... link), opened by Help > Support (Telegram). Empty until the owner supplies it; the menu item is hidden when the value is empty.",
       "type": "A",
       "category": "DOC"
     },

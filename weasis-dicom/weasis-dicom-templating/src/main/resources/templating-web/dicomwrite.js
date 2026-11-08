@@ -13,7 +13,7 @@ export function newUid(rand = n => crypto.getRandomValues(new Uint8Array(n))) {
 }
 const LONG = new Set(['OB', 'OW', 'SQ', 'UN', 'UT', 'UC', 'UR']);
 const bytesOf = s => Uint8Array.from(String(s), c => c.charCodeAt(0) & 0xFF);   // the X-ray's own bytes back as they were
-function el(tag, vr, value) {   // value: string, number (US/UL), Uint8Array, or array of items (SQ)
+export function el(tag, vr, value) {   // value: string, number (US/UL), Uint8Array, or array of items (SQ)
   let body;
   if (vr === 'SQ') {
     const items = value.map(it => { const inner = concat(it); const h = new DataView(new ArrayBuffer(8)); h.setUint16(0, 0xFFFE, true); h.setUint16(2, 0xE000, true); h.setUint32(4, inner.length, true); return concat([new Uint8Array(h.buffer), inner]); });
@@ -29,7 +29,7 @@ function el(tag, vr, value) {   // value: string, number (US/UL), Uint8Array, or
   if (long) h.setUint32(8, body.length, true); else h.setUint16(6, body.length, true);
   return concat([new Uint8Array(h.buffer), body]);
 }
-function concat(parts) { const n = parts.reduce((a, p) => a + p.length, 0), o = new Uint8Array(n); let i = 0; for (const p of parts) { o.set(p, i); i += p.length; } return o; }
+export function concat(parts) { const n = parts.reduce((a, p) => a + p.length, 0), o = new Uint8Array(n); let i = 0; for (const p of parts) { o.set(p, i); i += p.length; } return o; }
 const da = d => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
 const tm = d => `${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${String(d.getSeconds()).padStart(2, '0')}`;
 

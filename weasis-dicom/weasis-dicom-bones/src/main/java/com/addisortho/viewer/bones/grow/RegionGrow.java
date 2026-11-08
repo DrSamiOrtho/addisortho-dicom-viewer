@@ -336,8 +336,7 @@ public final class RegionGrow {
    * @param seeded the voxels of the core whose share is returned
    * @return the share of {@code seeded}
    */
-  private static BitVolume regrow(
-      BitVolume solid, BitVolume core, BitVolume seeded, Thread caller) {
+  static BitVolume regrow(BitVolume solid, BitVolume core, BitVolume seeded, Thread caller) {
     int sx = solid.sizeX();
     int sy = solid.sizeY();
     int sz = solid.sizeZ();
@@ -396,8 +395,7 @@ public final class RegionGrow {
   }
 
   /** First voxel of {@code target} met by a flood through {@code within} from {@code start}. */
-  private static int[] nearestInside(
-      BitVolume within, BitVolume target, int[] start, Thread caller) {
+  static int[] nearestInside(BitVolume within, BitVolume target, int[] start, Thread caller) {
     int sx = within.sizeX();
     int sy = within.sizeY();
     BitVolume seen = within.emptyCopy();
@@ -434,8 +432,7 @@ public final class RegionGrow {
    *
    * @return the voxels flooded
    */
-  private static long flood(
-      BitVolume mask, int[] start, BitVolume marks, boolean clear, Thread caller) {
+  static long flood(BitVolume mask, int[] start, BitVolume marks, boolean clear, Thread caller) {
     int sx = mask.sizeX();
     int sy = mask.sizeY();
     IntQueue queue = new IntQueue(1 << 12);
@@ -469,7 +466,7 @@ public final class RegionGrow {
     return count;
   }
 
-  private static boolean inside(BitVolume v, int x, int y, int z) {
+  static boolean inside(BitVolume v, int x, int y, int z) {
     return x >= 0 && y >= 0 && z >= 0 && x < v.sizeX() && y < v.sizeY() && z < v.sizeZ();
   }
 

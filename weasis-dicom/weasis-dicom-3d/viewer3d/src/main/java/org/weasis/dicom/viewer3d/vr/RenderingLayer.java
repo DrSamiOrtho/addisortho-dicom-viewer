@@ -18,13 +18,39 @@ import org.weasis.opencv.op.lut.LutShape;
 public class RenderingLayer<E extends ImageElement> {
 
   public static final String P_BCK_COLOR = "volume.background.color";
+
+  /** Background of the 3D view unless the user chose another: black, as the scanner's. */
+  public static final java.awt.Color DEFAULT_BCK_COLOR = java.awt.Color.BLACK;
+
   public static final String P_LIGHT_COLOR = "volume.light.color";
   public static final String P_DYNAMIC_QUALITY = "volume.dynamic.quality";
   public static final String P_MAX_TEX_XY = "volume.texture.max.xy";
   public static final String P_MAX_TEX_Z = "volume.texture.max.z";
 
+  /**
+   * Addis Ortho: system property set by the Lite edition, for PCs with 4 GB of RAM: smaller 3D
+   * textures and no smooth segment surfaces by default.
+   */
+  public static final String P_LITE = "weasis.lite"; // NON-NLS
+
+  /** Largest 3D texture side the Lite edition builds by default, in voxels. */
+  public static final int LITE_MAX_TEXTURE = 256;
+
+  /** Whether this is the Lite edition. */
+  public static boolean isLite() {
+    return Boolean.getBoolean(P_LITE);
+  }
+
   /** Whether a CT volume opens smoothed (on by default), see DicomVolTexture#isSmoothing(). */
   public static final String P_SMOOTH_CT = "volume.smooth.ct";
+
+  /**
+   * A CT opens on the bone, as RadiAnt's 3D button: the AO Bone preset, the Smooth option on
+   * whatever was chosen last time, and the crop box fitted to the bone (Addis Ortho).
+   */
+  public static final String P_OPEN_CT_ON_BONE = "volume.open.ct.bone"; // NON-NLS
+
+  public static final boolean DEFAULT_OPEN_CT_ON_BONE = true;
 
   public static final int MAX_QUALITY = 8192;
   public static final int MIN_QUALITY = 128;

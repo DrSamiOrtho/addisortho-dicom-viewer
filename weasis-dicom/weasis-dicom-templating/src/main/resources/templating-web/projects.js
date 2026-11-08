@@ -16,13 +16,30 @@
 import { zipParts, unzip, crc32, ZipError } from './zip.js';
 
 export const FORMAT = 'addis-ortho-templating-project';
-export const IMAGE_MAX = 40 * 1024 * 1024;          // contract 3: the original image
+export const IMAGE_MAX = 80 * 1024 * 1024;          // contract 3: the original image (80 MB from r24: a stitched long-leg DICOM is 40-50 MB uncompressed)
 export const PIXELS_MAX = 60000000;                  // contract 3: 60 megapixels
 export const PROJECT_MAX = 2 * 1024 * 1024;          // contract 3: project.json
-export const ZIP_MAX = 45 * 1024 * 1024;             // contract 5: an .aotp expanded
+export const ZIP_MAX = 85 * 1024 * 1024;             // contract 5: an .aotp expanded
 export const FILE_MAX = ZIP_MAX + 1024 * 1024;       // an .aotp on disk (stored entries and their headers)
 export const MIME_EXT = { 'application/dicom': 'dcm', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 export class ProjectError extends Error {}
+// A knee case (release 1, 14 Oct 2026; DESIGN-2026-10-14-knee-case.md with its binding amendments, contract section 12):
+// one patient, one knee, up to four films, each its own image, calibration and landmarks, and one shared plan. Project
+// format version 2: project.json {…, v: 2, case: {cid, kind: "knee"}, films: {role: {image, state, qc}}, active, shared}
+// and one ZIP entry per film (image-<role>.<ext>), at most 6 entries. Version 1 (one image) is read as before.
+export const ROLES = ['ap', 'lat', 'sky', 'long'];
+export const ROLE_NAME = { ap: 'AP', lat: 'Lateral', sky: 'Skyline', long: 'Long leg' };
+export const ROLE_WF = { ap: 'kneeAP', lat: 'kneeLat', sky: 'kneeSky', long: 'kneeLong' };
+export const CASE_IMAGES_MAX = 200 * 1024 * 1024;   // a case's images together (each at most IMAGE_MAX)
+export const CASE_PIXELS_MAX = 160000000;            // and their pixels together (each at most PIXELS_MAX)
+export const CASE_ZIP_MAX = CASE_IMAGES_MAX + PROJECT_MAX + 1024 * 1024;   // a version 2 .aotp expanded
+export const CASE_FILE_MAX = CASE_ZIP_MAX + 1024 * 1024;                   // and on disk
+const CID_RE = /^[0-9a-f]{16}$/;
+// the case key (contract section 12): what the automatic save, the kept changes and the tab's case map call a case by.
+// A knee case: "kc" and its own draft id, made when the case starts and kept in its project ever after (never an image's
+// hash: one case has several images). A film of one image: its image's sha256, as before.
+export const caseKey = cid => 'kc' + cid;
+const CK_RE = /^(?:[0-9a-f]{64}|kc[0-9a-f]{16})$/;
 // The library id of a page with no template file at all (a pending-only account on t.addisortho.com; contract 9, Astra's
 // page re-review, finding 7): sso_lib.php serves it as library.json's libraryId (TPL_NO_LIBRARY), and a project saved there
 // carries it (or the id of the plan it opened). It passes the libraryId check below like any build's id.
@@ -71,15 +88,42 @@ export const isZip = u => u.length > 4 && u[0] === 0x50 && u[1] === 0x4B && u[2]
 export const tooManyPixels = (w, h) => `This image is ${w} × ${h} pixels (${(w * h / 1e6).toFixed(0)} megapixels); the page takes up to ${PIXELS_MAX / 1e6}. Save a smaller copy of the film and open that.`;
 
 // ---------- checking a project (contract 5): everything, before the film on screen is replaced ----------
-const WFS = { hip: ['cupR', 'stemR', 'cupL', 'stemL'], kneeAP: ['femur', 'tibia'], kneeLat: ['femur', 'tibia'] };
-const LM_KEY = /^(?:(?:td|lt|head|canal|ac)[RL]|hip|femShaft|knee|condMed|condLat|platMed|platLat|ankle|tibShaft|antCortex|postCond|platAnt|platPost|tibAxis)$/;
+// the knee case's long leg and skyline films (contract section 12) have no implants; their landmarks are the case's own
+// (condW, platW: the femoral condylar and tibial plateau widths; patThick: patella thickness; patW, trochAnt: the skyline's
+// patella and anterior condyle lines)
+const WFS = { hip: ['cupR', 'stemR', 'cupL', 'stemL'], kneeAP: ['femur', 'tibia'], kneeLat: ['femur', 'tibia'], kneeLong: [], kneeSky: [] };
+const LM_KEY = /^(?:(?:td|lt|head|canal|ac)[RL]|hip|femShaft|knee|condMed|condLat|platMed|platLat|ankle|tibShaft|antCortex|postCond|platAnt|platPost|tibAxis|condW|platW|patThick|patW|trochAnt|sulcus|patApex|postCondSky)$/;
 const ORIENT_FROM = ['header', 'marker', 'assumed', 'user'];
 const SETTINGS = { cupRule: ['anatomic', 'teardrop', 'head', 'mirror'], legTarget: ['equal', 'keep'], mirrorRef: ['native', 'plan'], offsetTarget: ['auto', 'own', 'none'], stemRule: ['cup', 'offset'] };
 const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const isStr = (v, max) => typeof v === 'string' && v.length <= max;
 const ROT_LIM = 20 * Math.PI / 180 + 1e-6;   // the page's own limit for turning the film (app.js ROT_MAX)
+// Revision and conversion (14-15 Oct 2026; DESIGN-2026-10-14-revision-conversion.md with its binding amendments, contract
+// section 13): the case type of the operative plan, and per film the existing-implant regions (bounded vector polygons and
+// strokes, with the image they belong to) and the revision record (how each canal line was made, the old implant's tip,
+// holes or defects, the osteotomy, the fixation zone, the revision cup's target, each reference's label, the knee's
+// joint-line target). Limits keep a film's record small inside the 2 MB project.
+export const CASE_TYPES = ['primary', 'conversion', 'revision'];
+export const EXIST_MAX = { regions: 64, pts: 400, total: 6000 };
+const EXIST_CLS = ['hardware', 'cement', 'unknown', 'ball', 'marker', 'clear'];
+const REF_LABELS = ['native', 'implant', 'obscured'];
 const SCALE = [0.005, 5];                    // mm per pixel: a 0.005 mm pixel or a 5 mm one is not an X-ray
+
+// The plan values' provenance (16 Oct 2026, DESIGN-2026-10-16-knee-defaults.md; contract section 12c): per value
+// {o: 'assumed' | 'surgeon' | 'unknown', rv: boolean, v?: number} (origin and review kept apart), and asked: the films the
+// plan-values question was answered for (at most 80 characters). Missing provenance on a stored value is read as unknown.
+const TIB_REFS = ['less', 'medial', 'worn'], PV_KEYS = ['femDistal', 'tibial', 'slope', 'vca', 'rot'];
+function provProblems(prov, asked) {
+  const out = [];
+  if (asked !== undefined && asked !== null && !(typeof asked === 'string' && asked.length <= 80)) out.push('the plan values\' question record is not valid');
+  if (prov === undefined || prov === null) return out;
+  if (!isObj(prov)) return [...out, 'the plan values\' provenance is not valid'];
+  for (const [k, p] of Object.entries(prov)) if (!PV_KEYS.includes(k) || !isObj(p) || !['assumed', 'surgeon', 'unknown'].includes(p.o) || typeof p.rv !== 'boolean' || (p.v !== undefined && p.v !== null && !isNum(p.v))) out.push(`the provenance of plan value ${String(k).slice(0, 12)} is not valid`);
+  return out;
+}
+const provNorm = prov => (isObj(prov) ? Object.fromEntries(Object.entries(prov).filter(([k, p]) => PV_KEYS.includes(k) && isObj(p) && ['assumed', 'surgeon', 'unknown'].includes(p.o)).map(([k, p]) => [k, { o: p.o, rv: p.rv === true, ...(isNum(p.v) ? { v: p.v } : {}) }])) : {});
+
 
 // What is wrong with a project's state for an image of W x H pixels: a list of short sentences (empty: nothing).
 // Coordinates may lie a little outside the image (a point clicked or a ruler dragged onto the black beside the film): up
@@ -115,14 +159,25 @@ export function stateProblems(st, W, H, patient = null) {
     const c = st.cal;
     if (!isObj(c)) bad('calibration is not valid');
     else {
-      oneOf(c.method, ['ball', 'line', 'dicom'], 'calibration method', false);
+      oneOf(c.method, ['ball', 'line', 'dicom', 'xfer'], 'calibration method', false);
       range(c.mmPerPx, SCALE[0], SCALE[1], 'scale (mm per pixel)', false);
+      if (c.method === 'xfer') {   // a knee case's long leg scaled from the AP (contract section 12): where from, and its inputs
+        if (c.from !== 'ap' || (c.apSha !== undefined && !SHA_RE.test(String(c.apSha)))) bad('the scale taken from the AP is not valid');
+        for (const k of ['apMmPerPx', 'apWidthPx', 'widthPx']) range(c[k], 1e-6, 1e6, `scale from the AP (${k})`);
+      }
       if (c.method === 'ball') { if (inside(c.ball, 'calibration ball')) range(c.ball.r, 0.5, L, 'calibration ball radius', false); }
       if (c.method === 'line') { pts(c.line, 2, 2, 'calibration line'); range(c.lengthMm, 0.1, 5000, 'calibration length', false); }
       bool(c.confirmed, 'calibration confirmed');
     }
   }
   range(st.ballD, 5, 100, 'ball diameter'); range(st.vca, 0, 15, 'femoral valgus');
+  // a single knee film's own plan values (15 Oct 2026; Sami: old single-film plans show the standard defaults until these are
+  // entered): each a number in range or null (the standard default), the tibial reference plateau, whether the valgus was set
+  if (st.kres !== undefined && st.kres !== null) {
+    const k = st.kres, nn = (v, lo, hi, what) => { if (v !== undefined && v !== null && (!isNum(v) || v < lo || v > hi)) bad(`${what} out of range (${lo} to ${hi})`); };
+    if (!isObj(k)) bad('the plan values are not valid');
+    else { nn(k.femDistal, 0, 25, 'distal femoral resection'); nn(k.tibial, 0, 25, 'tibial resection'); nn(k.slope, -5, 15, 'planned cut slope'); nn(k.rot, 0, 10, 'planned femoral external rotation'); oneOf(k.tibRef, TIB_REFS, 'tibial reference plateau'); bool(k.vcaSet, 'femoral valgus set'); for (const m of provProblems(k.prov, k.asked)) bad(m); }
+  }
   if (!isObj(st.lm)) bad('landmarks missing');
   else {
     const ks = Object.keys(st.lm);
@@ -141,7 +196,10 @@ export function stateProblems(st, W, H, patient = null) {
       if (!isObj(t) || !isStr(t.fam, 80) || !/^[A-Za-z0-9._-]+$/.test(t.fam) || !(isStr(t.size, 16) || isNum(t.size)) || !isNum(t.angle) || Math.abs(t.angle) > 100) { bad(`${what} is not valid`); continue; }
       inside(t, what); bool(t.flip, `${what} mirrored`); bool(t.on, `${what} shown`);
       if (t.thick !== undefined) range(t.thick, 0, 60, `${what} thickness`);
+      if (t.tref !== undefined && t.tref !== null && (!isObj(t.tref) || !['medial', 'lateral', null, undefined].includes(t.tref.plat) || (t.tref.mode !== undefined && !TIB_REFS.includes(t.tref.mode)) || (t.tref.mm !== undefined && !(isNum(t.tref.mm) && t.tref.mm >= 0 && t.tref.mm <= 25)) || (t.tref.p !== undefined && t.tref.p !== null && !(isObj(t.tref.p) && isNum(t.tref.p.x) && isNum(t.tref.p.y))))) bad(`${what}: the tibial resection reference is not valid`);
       for (const [k, n] of [['head', 8], ['headKind', 20], ['neck', 16]]) if (t[k] !== undefined && !isStr(t[k], n)) bad(`${what} ${k} is not valid`);
+      if (t.stem !== undefined && !stemOk(t.stem)) bad(`${what}: the stem extension is not valid`);   // r20: {size} on a knee component
+      if (t.tum !== undefined && t.tum !== null && !tumOk(t.tum)) bad(`${what}: the tumour resection values are not valid`);   // r22: {src, extent, margin}
     }
   }
   if (st.geo !== undefined && (!isObj(st.geo) || Object.keys(st.geo).length > 40 || !Object.values(st.geo).every(g => isStr(g, 80)))) bad('implant outline versions are not valid');
@@ -171,6 +229,50 @@ export function stateProblems(st, W, H, patient = null) {
   if (st.notes !== undefined && (!isObj(st.notes) || Object.keys(st.notes).length > 100)) bad('notes are not valid');
   if (st.mirror !== undefined && st.mirror !== null && (!isObj(st.mirror) || !isStr(st.mirror.note, 2000))) bad('the mirroring note is not valid');
   if (st.markers !== undefined) { if (!Array.isArray(st.markers) || st.markers.length > 8) bad('too many R/L markers'); else st.markers.forEach((m, i) => { if (inside(m, `R/L marker ${i + 1}`)) oneOf(m.letter, ['R', 'L'], `R/L marker ${i + 1}`, false); }); }
+  // revision and conversion (contract section 13)
+  oneOf(st.caseType, CASE_TYPES, 'case type');
+  if (st.exist !== undefined && st.exist !== null) {
+    const e = st.exist, ip = (n, lo, hi) => Number.isInteger(n) && n >= lo && n <= hi;
+    if (!isObj(e) || e.v !== 1 || e.coord !== 'image-px' || (e.sha !== null && e.sha !== undefined && !SHA_RE.test(String(e.sha))) || !ip(e.rev, 0, 1e9) || !Array.isArray(e.regions)) bad('the existing implant marks are not valid');
+    else if (e.w !== W || e.h !== H) bad('the existing implant marks were made on an image of another size');
+    else if (e.regions.length > EXIST_MAX.regions) bad(`too many existing implant regions (at most ${EXIST_MAX.regions})`);
+    else {
+      bool(e.none, 'no existing implant on this film');
+      let n = 0;
+      e.regions.forEach((r, i) => {
+        const what = `existing implant region ${i + 1}`;
+        if (!isObj(r) || !ip(r.id, 1, 1e6) || !EXIST_CLS.includes(r.cls) || !['poly', 'stroke'].includes(r.kind) || !['detected', 'user'].includes(r.src) || typeof r.conf !== 'boolean') { bad(`${what} is not valid`); return; }
+        if (r.kind === 'stroke') range(r.r, 0.5, L, `${what} width`, false);
+        n += Array.isArray(r.pts) ? r.pts.length : 0;
+        pts(r.pts, r.kind === 'poly' ? 3 : 1, EXIST_MAX.pts, what);
+      });
+      if (n > EXIST_MAX.total) bad(`the existing implant regions have too many points (at most ${EXIST_MAX.total})`);
+      if (new Set(e.regions.filter(isObj).map(r => r.id)).size !== e.regions.length) bad('two existing implant regions have the same number');
+    }
+  }
+  if (st.rv !== undefined && st.rv !== null) {
+    const v = st.rv, pt1 = (p, what) => { if (p !== null && p !== undefined) inside(p, what); }, two = (a, what) => { if (a !== null && a !== undefined) pts(a, 2, 2, what); };
+    if (!isObj(v)) bad('the revision record is not valid');
+    else {
+      if (v.canal !== undefined && v.canal !== null) {
+        if (!isObj(v.canal)) bad('the revision canal record is not valid');
+        else for (const [sd, c] of Object.entries(v.canal)) if (!['R', 'L'].includes(sd) || (c !== null && (!isObj(c) || !['snap', 'pairs', 'hand'].includes(c.how) || !Number.isInteger(c.mrev) || c.mrev < 0 || c.mrev > 1e9))) bad('the revision canal record is not valid');
+      }
+      pt1(v.tip, 'the old implant\'s tip');
+      if (v.holes !== undefined && v.holes !== null) { if (!Array.isArray(v.holes) || v.holes.length > 20) bad('too many holes or defects (at most 20)'); else v.holes.forEach((p, i) => inside(p, `hole or defect ${i + 1}`)); }
+      two(v.osteo, 'the osteotomy'); two(v.fix, 'the fixation zone');
+      if (v.cupT !== undefined && v.cupT !== null && (!isObj(v.cupT) || !['mirror', 'point'].includes(v.cupT.how) || !inside(v.cupT.p, 'the revision cup target'))) bad('the revision cup target is not valid');
+      if (v.refs !== undefined && v.refs !== null) {
+        if (!isObj(v.refs) || Object.keys(v.refs).length > 30) bad('the reference labels are not valid');
+        else for (const [k, l] of Object.entries(v.refs)) if (!LM_KEY.test(k) || !REF_LABELS.includes(l)) bad(`the label of reference "${k.slice(0, 20)}" is not valid`);
+      }
+      if (v.jl !== undefined && v.jl !== null) {
+        const j = v.jl;
+        if (!isObj(j) || (j.src !== null && j.src !== undefined && !['contra', 'refs'].includes(j.src))) bad('the joint-line target is not valid');
+        else { two(j.line, 'the joint-line target'); two(j.epi, 'the epicondylar line'); pt1(j.fib, 'the fibular head'); bool(j.suit, 'contralateral knee suitable'); bool(j.agree, 'references agree'); }
+      }
+    }
+  }
   return out;
 }
 // What is wrong with a project's implants against the implant library the page has loaded (Astra's page re-review, 13 Oct,
@@ -181,6 +283,11 @@ export function stateProblems(st, W, H, patient = null) {
 // not have (a range not open to the account) is kept aside as it is (contract 7), and a plan from another build has its
 // implants placed again (app.js applyPlan), so neither is held against this library. lib: library.json as loaded.
 const KIND_OF = { cupR: 'cup', cupL: 'cup', stemR: 'stem', stemL: 'stem', femur: 'tka-femur', tibia: 'tka-tibia' };
+// a tumour body's resection values (r22): the extent's source ('' until chosen, MRI or CT), extent and margin in mm or null
+export const tumOk = v => isObj(v) && ['', 'MRI', 'CT'].includes(v.src) && [[v.extent, 400], [v.margin, 100], [v.c, 100]].every(([x, hi]) => x === null || x === undefined || (typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= hi))
+  && Object.keys(v).every(k => ['src', 'extent', 'margin', 'c'].includes(k));   // c: the stem collar picked with an option
+// a knee component's stem extension (r20, SCHEMA-2026-10-17-r20.md): {size}, the size a knee-stem family lists
+export const stemOk = v => isObj(v) && typeof v.size === 'string' && v.size.length <= 16 && /^[A-Za-z0-9._-]+$/.test(v.size) && (v.geo === undefined || (typeof v.geo === 'string' && /^[0-9a-f]{6,64}$/.test(v.geo)));
 const own = (o, k) => isObj(o) && Object.prototype.hasOwnProperty.call(o, k);
 export function libraryProblems(st, lib) {
   if (!isObj(st) || !isObj(st.tplAll) || !isObj(lib) || !Array.isArray(lib.families)) return [];
@@ -202,21 +309,125 @@ export function libraryProblems(st, lib) {
         else if (!own(heads[t.headKind].sizes[t.head], t.neck)) bad(`${what}: no neck "${String(t.neck).slice(0, 16)}" for that head`);
       }
       if (f.kind === 'tka-tibia' && Array.isArray(f.thicknesses) && t.thick !== undefined && !f.thicknesses.includes(t.thick)) bad(`${what}: ${name} has no ${String(t.thick).slice(0, 8)} mm total thickness`);
+      if (t.stem !== undefined) {   // only a stem the maker's sheet draws for that component size (r20)
+        const z = f.sizes.find(q => isObj(q) && q.size === t.size), sf = typeof f.stems === 'string' && own(fams, f.stems) ? fams[f.stems] : null;
+        if (!f.stems) bad(`${what}: ${name} takes no stem extension`);
+        else if (sf && !(z && Array.isArray(z.stemSizes) && z.stemSizes.includes(isObj(t.stem) ? t.stem.size : null))) bad(`${what}: stem ${String(isObj(t.stem) ? t.stem.size : '').slice(0, 16)} is not drawn for ${name} size ${String(t.size).slice(0, 8)}`);
+      }
     }
   }
   return out;
 }
-// What is wrong with a whole project (contract 5), the image's own bytes aside: a list of sentences.
+// ---------- the patient's identity (Sami, 15 Oct 2026; contract section 12, "Patient identity") ----------
+// Sami: "use their full name along with hospital name's initial and age, MRN and name for record, use the hospital initial
+// e.g SSC-MRN for each hospital, so we have clear database for each hospital. then under the specific patient add all the
+// other images as a sub menu". A case carries the hospital's code (its initials), the full name, the age in years and the
+// record number, stored and shown with the hospital's code in front ("SSC-12345", never "SSC-SSC-12345"). The patient is
+// the hospital and the record number together: the same name at two hospitals, or without a record number, is never one
+// patient. HOSPITALS is the one list of hospitals (edit it here: code, full name, and how the X-ray's InstitutionName
+// names it); a hospital not on it can still be typed as its initials (2 to 6 capital letters).
+export const HOSPITALS = [
+  { code: 'SSC', name: 'Samaritan Surgical Center', dicom: /\bsamaritan\b/i },
+];
+export const HOSP_RE = /^[A-Z]{2,6}$/;
+export const AGE_MAX = 130;
+export const hospitalName = code => ((HOSPITALS.find(h => h.code === code) || {}).name || '');
+// the hospital an X-ray's InstitutionName names, from the list ('' when it maps to none: the surgeon is asked)
+export function hospitalFromDicom(inst) {
+  const t = String(inst || '').trim(); if (!t) return '';
+  const h = HOSPITALS.find(x => x.dicom.test(t) || x.name.toLowerCase() === t.toLowerCase() || x.code === t.toUpperCase());
+  return h ? h.code : '';
+}
+// a record number as typed or read, without any hospital code already in front of it (SSC-123, SSC 123, ssc123 → 123 for
+// SSC; another code in front is kept: it is not this hospital's)
+export function mrnCore(code, raw) {
+  let t = String(raw || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  if (code && HOSP_RE.test(code)) for (let i = 0; i < 4; i++) { const m = t.match(new RegExp(`^${code}(?:[\\s:_/-]+|(?=\\d))(.+)$`, 'i')); if (!m) break; t = m[1].trim(); }   // "SSC-SSC-5" too
+  return t;
+}
+// the record number as stored and shown: the hospital's code in front, once ("SSC-12345"); without a hospital as it is.
+// Never shortened (Astra, 15 Oct, round 2, P1 1: cutting two long record numbers to one length made them one patient): a
+// stored form over MRN_MAX characters is refused by identProblem here and by the server alike (mrnOk says so first).
+export const MRN_MAX = 40, NAME_MAX = 120;
+export function normMrn(code, raw) {
+  const core = mrnCore(code, raw);
+  return !core ? '' : code && HOSP_RE.test(code) ? `${code}-${core}` : core;
+}
+export const mrnOk = (code, raw) => normMrn(code, raw).length <= MRN_MAX;
+// age in whole years from DICOM: the birth date and the study date when both are there (exact), else PatientAge with its
+// unit converted (045Y → 45, 024M → 2, 104W → 1, 400D → 1; Astra, round 2, P2 5: months, weeks and days were all taken as
+// 0); null when neither says
+export function ageOf(m) {
+  const b = String((m && m.PatientBirthDate) || ''), d = String((m && m.StudyDate) || '');
+  if (!(/^\d{8}$/.test(b) && /^\d{8}$/.test(d))) {
+    const a = String((m && m.PatientAge) || '').trim().toUpperCase(), am = a.match(/^(\d{1,3})([YMWD])$/);
+    if (!am) return null;
+    const n = parseInt(am[1], 10), y = Math.floor(n / ({ Y: 1, M: 12, W: 52.1775, D: 365.25 })[am[2]] + 1e-9);
+    return y <= AGE_MAX ? y : null;
+  }
+  if (/^\d{8}$/.test(b) && /^\d{8}$/.test(d)) {
+    const yb = +b.slice(0, 4), yd = +d.slice(0, 4), md = d.slice(4) < b.slice(4) ? 1 : 0, n = yd - yb - md;
+    return n >= 0 && n <= AGE_MAX ? n : null;
+  }
+  return null;
+}
+const normName = v => String(v || '').toLowerCase().replace(/[^a-z\u00c0-\u024f\u1200-\u137f]+/g, ' ').trim().split(' ').filter(Boolean).sort().join(' ');
+const mrnKey = (code, raw) => mrnCore(code, raw).toUpperCase().replace(/\s+/g, '');
+// a film's patient against the identities already established for a case (the case's own and each of its films'): ''
+// when they agree (or one side says nothing), else why, in words. Hospitals that differ, record numbers that differ (with
+// the hospital's code aside), or names that differ all refuse (Astra, 15 Oct, P1 3: compared with every film's identity,
+// so a record number learned from one film binds the next).
+export function identClash(known, inc) {
+  const i = inc || {};
+  for (const k of (Array.isArray(known) ? known : [known]).filter(Boolean)) {
+    if (k.hospital && i.hospital && k.hospital !== i.hospital) return `the X-ray is from ${i.hospital}, the case's patient from ${k.hospital}`;
+    const code = i.hospital || k.hospital || '';
+    const r1 = mrnKey(k.hospital || code, k.recordNo), r2 = mrnKey(i.hospital || code, i.recordNo);
+    if (r1 && r2 && r1 !== r2) return `the X-ray's record number is ${String(i.recordNo).slice(0, 40)}, the case's ${String(k.recordNo).slice(0, 40)}`;
+    const n1 = normName(k.name), n2 = normName(i.name);
+    if (n1 && n2 && n1 !== n2) return "the patient's name on the X-ray is not the case's";
+  }
+  return '';
+}
+// the case's identity with what a compatible film adds: every field the case lacks taken from the film (Astra, 15 Oct,
+// P1 3: a case learns a record number, hospital or age that a later film carries); the case's own never overwritten
+// an identity field cleaned (control characters and runs of spaces) but never shortened (Astra, round 3, P1: a cut record
+// number made two patients one): a value too long is refused where it is checked (identProblem, and the server)
+export const cleanId = v => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim();
+export function identFill(pt, inc) {
+  const o = { name: '', recordNo: '', hospital: '', age: null, ...(isObj(pt) ? pt : {}) }, i = inc || {};
+  if (!o.name && i.name) o.name = cleanId(i.name);
+  if (!o.hospital && i.hospital && HOSP_RE.test(i.hospital)) o.hospital = i.hospital;
+  if (!o.recordNo && i.recordNo) o.recordNo = cleanId(i.recordNo);
+  if (!Number.isInteger(o.age) && Number.isInteger(i.age)) o.age = i.age;
+  return o;
+}
+// what is wrong with a project's patient details ('' when nothing): name ≤ 120, record number ≤ 40, study ≤ 64, hospital
+// a code of 2 to 6 capital letters, age a whole number of years 0-130
+export function identProblem(pt) {
+  if ((pt.name !== undefined && !isStr(pt.name, NAME_MAX)) || (pt.recordNo !== undefined && !isStr(pt.recordNo, MRN_MAX)) || (pt.studyUID !== undefined && !isStr(pt.studyUID, 64))) return 'patient details are not valid';
+  if (pt.hospital !== undefined && !(typeof pt.hospital === 'string' && HOSP_RE.test(pt.hospital))) return 'the hospital code is not valid';
+  if (pt.age !== undefined && !(Number.isInteger(pt.age) && pt.age >= 0 && pt.age <= AGE_MAX)) return 'the age is not valid';
+  return '';
+}
+// one line for a patient in the list: "Full name · SSC · 45 y · SSC-MRN" (each part only when known)
+export function identLine(pt) {
+  const p = isObj(pt) ? pt : {};
+  return [p.name || '', p.hospital || '', Number.isInteger(p.age) ? `${p.age} y` : '', p.recordNo || ''].filter(Boolean).join(' · ');
+}
+// What is wrong with a whole project (contract 5), the image's own bytes aside: a list of sentences. Version 2 is a knee
+// case (contract section 12: caseProblems).
 export function projectProblems(p) {
   if (!isObj(p)) return ['not a templating project'];
   if (p.format !== FORMAT) return ['not an Addis Ortho templating project (format)'];
-  if (p.v !== 1) return [`a project of version ${String(p.v).slice(0, 10)}: this page reads version 1`];
+  if (p.v === 2) return caseProblems(p);
+  if (p.v !== 1) return [`a project of version ${String(p.v).slice(0, 10)}: this page reads versions 1 and 2`];
   const out = [];
   if (!isStr(p.savedAt, 40)) out.push('the date it was saved is missing');
   if (!isStr(p.libraryId, 40) || !/^[A-Za-z0-9._-]{1,40}$/.test(p.libraryId)) out.push('the implant library it was made with is missing');
   const pt = p.patient;
   if (!isObj(pt) || !['R', 'L'].includes(pt.side) || !['hip', 'knee'].includes(pt.procedure)) out.push('patient side and procedure are missing');
-  else if ((pt.name !== undefined && !isStr(pt.name, 120)) || (pt.recordNo !== undefined && !isStr(pt.recordNo, 40)) || (pt.studyUID !== undefined && !isStr(pt.studyUID, 64))) out.push('patient details are not valid');
+  else if (identProblem(pt)) out.push('patient details are not valid');
   const im = p.image;
   if (!isObj(im) || !isStr(im.fileName, 255) || !MIME_EXT[im.mime] || !SHA_RE.test(String(im.sha256)) || !Number.isInteger(im.size) || !Number.isInteger(im.width) || !Number.isInteger(im.height)) return [...out, 'the image description is missing or not valid'];
   if (im.size < 1 || im.size > IMAGE_MAX) out.push(`the image is larger than ${MB(IMAGE_MAX)}`);
@@ -224,43 +435,167 @@ export function projectProblems(p) {
   if (out.length) return out;
   return stateProblems(p.state, im.width, im.height, pt);
 }
-// The project and its image's bytes, checked together; throws ProjectError with what is wrong.
+// one film's image description (version 2): the same rules as version 1's image
+function imageProblems(im, what) {
+  if (!isObj(im) || !isStr(im.fileName, 255) || !MIME_EXT[im.mime] || !SHA_RE.test(String(im.sha256)) || !Number.isInteger(im.size) || !Number.isInteger(im.width) || !Number.isInteger(im.height)) return [`${what}: the image description is missing or not valid`];
+  const out = [];
+  if (im.size < 1 || im.size > IMAGE_MAX) out.push(`${what}: the image is larger than ${MB(IMAGE_MAX)}`);
+  if (im.width < 1 || im.height < 1 || im.width > 100000 || im.height > 100000 || im.width * im.height > PIXELS_MAX) out.push(`${what}: the image is larger than ${PIXELS_MAX / 1e6} megapixels`);
+  return out;
+}
+const PF = { grade: ['', 'none', 'mild', 'moderate', 'severe'], facet: ['', 'no', 'yes'], dysplasia: ['', 'none', 'suspected', 'present'], tracking: ['', 'central', 'tilted', 'subluxed'] };
+// The knee case's shared plan (contract section 12): the one femoral and one tibial component (family and size), the
+// surgeon's own entries (distal femoral and tibial resection depths, planned posterior slope, target HKA: null until
+// entered, never a default), the patella decision (undecided until the surgeon decides), the recorded patellofemoral
+// assessment from the skyline and whether the long leg is a standing film or a supine CT scout.
+export function sharedProblems(sh) {
+  const out = [], bad = m => { if (out.length < 12) out.push(m); };
+  if (!isObj(sh)) return ['the shared plan is missing'];
+  const num = (v, lo, hi, what) => { if (v !== null && v !== undefined && (!isNum(v) || v < lo || v > hi)) bad(`${what} out of range (${lo} to ${hi})`); };
+  if (sh.size !== undefined) {
+    if (!isObj(sh.size)) bad('the shared sizes are not valid');
+    else for (const [k, v] of Object.entries(sh.size)) if (!['femur', 'tibia'].includes(k) || (v !== null && (!isObj(v) || !isStr(v.fam, 80) || !/^[A-Za-z0-9._-]+$/.test(v.fam) || !(isStr(v.size, 16) || isNum(v.size)) || (v.stem !== undefined && !stemOk(v.stem))))) bad(`shared size ${k.slice(0, 12)} is not valid`);
+  }
+  if (sh.res !== undefined) {
+    if (!isObj(sh.res)) bad('the resection depths are not valid');
+    else {
+      num(sh.res.femDistal, 0, 25, 'distal femoral resection'); num(sh.res.tibial, 0, 25, 'tibial resection'); num(sh.res.slope, -5, 15, 'planned posterior slope'); num(sh.res.vca, 0, 15, 'femoral valgus');
+      if (sh.res.tibRef !== undefined && sh.res.tibRef !== null && !TIB_REFS.includes(sh.res.tibRef)) bad('the tibial resection\'s reference plateau is not valid');
+      for (const m of provProblems(sh.res.prov, sh.res.asked)) bad(m);
+    }
+  }
+  num(sh.hkaTarget, 165, 195, 'target HKA'); num(sh.rot, 0, 10, 'planned femoral external rotation');
+  if (sh.patella !== undefined && !['undecided', 'resurface', 'retain'].includes(sh.patella)) bad('the patella decision is not valid');
+  if (sh.longSrc !== undefined && sh.longSrc !== null && !['standing', 'ctscout'].includes(sh.longSrc)) bad('the long leg film\'s kind is not valid');
+  if (sh.caseType !== undefined && sh.caseType !== null && !CASE_TYPES.includes(sh.caseType)) bad('the case type is not valid');
+  if (sh.pf !== undefined) {
+    if (!isObj(sh.pf)) bad('the patellofemoral assessment is not valid');
+    else { for (const [k, list] of Object.entries(PF)) if (sh.pf[k] !== undefined && !list.includes(sh.pf[k])) bad(`patellofemoral ${k} is not valid`); if (sh.pf.note !== undefined && !isStr(sh.pf.note, 300)) bad('the patellofemoral note is too long'); }
+  }
+  return out;
+}
+// The shared plan as the page keeps it (Astra, 15 Oct, P2 5): every part present, every value either a finite number in
+// range or null ("not set"), never undefined, so a shared plan saved with a part missing ({res: {}}) can never reach the
+// placement as an undefined value. Checked first by sharedProblems (anything of the wrong kind is refused there); this
+// only fills what is absent. A copy: the caller's object is not changed.
+export function normShared(sh) {
+  const o = isObj(sh) ? sh : {}, n = (v, lo, hi) => (isNum(v) && v >= lo && v <= hi ? v : null);
+  const sz = isObj(o.size) ? o.size : {}, res = isObj(o.res) ? o.res : {}, pf = isObj(o.pf) ? o.pf : {};
+  const size1 = v => (isObj(v) && isStr(v.fam, 80) && (isStr(v.size, 16) || isNum(v.size)) ? { fam: v.fam, size: String(v.size), byHand: v.byHand === true, ...(stemOk(v.stem) ? { stem: { size: v.stem.size, ...(v.stem.geo ? { geo: v.stem.geo } : {}) } } : {}) } : null);
+  return {
+    size: { femur: size1(sz.femur), tibia: size1(sz.tibia) },
+    res: { femDistal: n(res.femDistal, 0, 25), tibial: n(res.tibial, 0, 25), slope: n(res.slope, -5, 15), tibRef: TIB_REFS.includes(res.tibRef) ? res.tibRef : 'less', vca: n(res.vca, 0, 15), prov: provNorm(res.prov), asked: typeof res.asked === 'string' && res.asked.length <= 80 ? res.asked : null },
+    rot: n(o.rot, 0, 10), hkaTarget: n(o.hkaTarget, 165, 195),
+    patella: ['undecided', 'resurface', 'retain'].includes(o.patella) ? o.patella : 'undecided',
+    pf: Object.fromEntries([...Object.entries(PF).map(([k, list]) => [k, list.includes(pf[k]) ? pf[k] : '']), ['note', isStr(pf.note, 300) ? pf.note : '']]),
+    longSrc: o.longSrc === 'standing' || o.longSrc === 'ctscout' ? o.longSrc : null,
+    caseType: CASE_TYPES.includes(o.caseType) ? o.caseType : 'primary',   // revision and conversion (contract section 13)
+  };
+}
+// What is wrong with a knee case (project version 2, contract section 12), the images' own bytes aside
+export function caseProblems(p) {
+  const out = [];
+  if (!isObj(p.films)) return ['a project of version 2 without its films'];
+  if (!isStr(p.savedAt, 40)) out.push('the date it was saved is missing');
+  if (!isStr(p.libraryId, 40) || !/^[A-Za-z0-9._-]{1,40}$/.test(p.libraryId)) out.push('the implant library it was made with is missing');
+  if (!isObj(p.case) || !CID_RE.test(String(p.case.cid)) || p.case.kind !== 'knee') out.push('the knee case\'s own id is missing');
+  const pt = p.patient;
+  if (!isObj(pt) || !['R', 'L'].includes(pt.side) || pt.procedure !== 'knee') out.push('patient side and procedure are missing (a knee case is a knee)');
+  else if (identProblem(pt)) out.push('patient details are not valid');
+  const roles = Object.keys(p.films);
+  if (!roles.length || roles.length > ROLES.length || roles.some(r => !ROLES.includes(r))) return [...out, `the films must be some of ${ROLES.map(r => ROLE_NAME[r]).join(', ')}`];
+  let bytes = 0, px = 0; const shas = new Set();
+  for (const r of roles) {
+    const f = p.films[r], what = `${ROLE_NAME[r]} film`;
+    if (!isObj(f)) { out.push(`${what} is not valid`); continue; }
+    const ip = imageProblems(f.image, what); if (ip.length) { out.push(...ip); continue; }
+    if (shas.has(f.image.sha256)) out.push(`${what}: the same image is another film of this case`);
+    shas.add(f.image.sha256); bytes += f.image.size; px += f.image.width * f.image.height;
+    if (f.qc !== undefined && (!isObj(f.qc) || ['side', 'quality', 'ptSame'].some(k => f.qc[k] !== undefined && typeof f.qc[k] !== 'boolean'))) out.push(`${what}: its checks are not valid`);
+    if (isObj(pt) && isObj(f.state) && f.state.wf !== ROLE_WF[r]) out.push(`${what}: its plan is not a ${what.toLowerCase()} plan`);
+    else out.push(...stateProblems(f.state, f.image.width, f.image.height, isObj(pt) ? pt : null).map(m => `${what}: ${m}`));
+  }
+  if (bytes > CASE_IMAGES_MAX) out.push(`the films are larger than ${MB(CASE_IMAGES_MAX)} together`);
+  if (px > CASE_PIXELS_MAX) out.push(`the films are larger than ${CASE_PIXELS_MAX / 1e6} megapixels together`);
+  if (p.active !== undefined && !roles.includes(p.active)) out.push('the film shown is not one of the case\'s films');
+  if (p.shared !== undefined) out.push(...sharedProblems(p.shared));
+  if (p.notices !== undefined && (!Array.isArray(p.notices) || p.notices.length > 20 || !p.notices.every(n => isStr(n, 300)))) out.push('the case\'s notices are not valid');
+  return out.slice(0, 12);
+}
+// The project and its image's bytes, checked together; throws ProjectError with what is wrong. A knee case: bytes is
+// {role: Uint8Array}, every film's checked.
 export async function checkProject(p, bytes) {
   const pr = projectProblems(p);
   if (pr.length) throw new ProjectError(`This project cannot be opened: ${pr.slice(0, 4).join('; ')}${pr.length > 4 ? '; …' : ''}.`);
+  if (p.v === 2) {
+    for (const [r, f] of Object.entries(p.films)) {
+      const b = isObj(bytes) ? bytes[r] : null;
+      if (!(b instanceof Uint8Array) || b.length !== f.image.size) throw new ProjectError(`This project cannot be opened: the ${ROLE_NAME[r]} film's image is not the size the project states.`);
+      if (await sha256hex(b) !== f.image.sha256) throw new ProjectError(`This project cannot be opened: the ${ROLE_NAME[r]} film's image does not match the project (sha256 differs). The file is damaged or was changed.`);
+    }
+    return true;
+  }
   if (!(bytes instanceof Uint8Array) || bytes.length !== p.image.size) throw new ProjectError('This project cannot be opened: its image is not the size the project states.');
   if (await sha256hex(bytes) !== p.image.sha256) throw new ProjectError('This project cannot be opened: its image does not match the project (sha256 differs). The file is damaged or was changed.');
   return true;
 }
-// The .aotp's parts (zip.js): project.json, image.<ext>, and case.json when it has a case on t.addisortho.com.
+// The .aotp's parts (zip.js): project.json, image.<ext>, and case.json when it has a case on t.addisortho.com. A knee case
+// (version 2): one image-<role>.<ext> per film; image is {role: Uint8Array} and imageCrc {role: crc}; case.json carries
+// the films' images the server holds ({id, rev, shas: {role: sha256}}).
 export function aotpParts(project, image, { caseRef = null, imageCrc } = {}) {
   const enc = new TextEncoder(), json = enc.encode(JSON.stringify(project));
   if (json.length > PROJECT_MAX) throw new ProjectError(`the plan is larger than ${MB(PROJECT_MAX)} (too many eraser strokes?)`);
-  const entries = [{ name: 'project.json', data: json }, { name: 'image.' + MIME_EXT[project.image.mime], data: image, crc: imageCrc }];
-  if (caseRef && ID_RE.test(caseRef.id)) entries.push({ name: 'case.json', data: enc.encode(JSON.stringify({ id: caseRef.id, rev: caseRef.rev, sha256: caseRef.sha256 || null })) });
+  const entries = [{ name: 'project.json', data: json }];
+  const kc = project.v === 2 && isObj(project.films);
+  if (kc) for (const r of ROLES) { const f = project.films[r]; if (f) entries.push({ name: `image-${r}.${MIME_EXT[f.image.mime]}`, data: image[r], crc: imageCrc && imageCrc[r] }); }
+  else entries.push({ name: 'image.' + MIME_EXT[project.image.mime], data: image, crc: imageCrc });
+  if (caseRef && ID_RE.test(caseRef.id)) entries.push({ name: 'case.json', data: enc.encode(JSON.stringify(kc ? { id: caseRef.id, rev: caseRef.rev, sha256: null, shas: shasOf(caseRef) } : { id: caseRef.id, rev: caseRef.rev, sha256: caseRef.sha256 || null })) });
   return zipParts(entries, new Date(project.savedAt));
 }
-// An .aotp read and checked whole (contract 5) → {project, image (Uint8Array), caseRef}. Nothing is changed on the page.
+const shasOf = ref => { const o = {}; if (ref && isObj(ref.shas)) for (const r of ROLES) if (SHA_RE.test(String(ref.shas[r]))) o[r] = ref.shas[r]; return o; };
+// An .aotp read and checked whole (contract 5; a knee case: section 12) → {project, image (Uint8Array, or {role:
+// Uint8Array} for a knee case), caseRef}. Nothing is changed on the page.
 export async function readAotp(u8) {
-  if (u8.length > FILE_MAX) throw new ProjectError(`This project file is larger than ${MB(FILE_MAX)}.`);
+  if (u8.length > CASE_FILE_MAX) throw new ProjectError(`This project file is larger than ${MB(CASE_FILE_MAX)}.`);
   let files;
-  try { files = await unzip(u8, { maxEntries: 4, maxTotal: ZIP_MAX }); } catch (e) { throw new ProjectError(`This is not a project file this page can open: ${e instanceof ZipError ? e.message : 'unreadable'}.`); }
-  const names = [...files.keys()], imgs = names.filter(n => /^image\.(dcm|png|jpg|webp)$/.test(n));
-  const extra = names.filter(n => n !== 'project.json' && n !== 'case.json' && !imgs.includes(n));
-  if (extra.length) throw new ProjectError(`This project file has an unexpected entry "${extra[0]}".`);
-  if (!files.has('project.json') || imgs.length !== 1) throw new ProjectError('This project file must hold project.json and one image.');
+  try { files = await unzip(u8, { maxEntries: 6, maxTotal: CASE_ZIP_MAX }); } catch (e) { throw new ProjectError(`This is not a project file this page can open: ${e instanceof ZipError ? e.message : 'unreadable'}.`); }
+  const names = [...files.keys()];
   const pj = files.get('project.json');
-  if (pj.length > PROJECT_MAX) throw new ProjectError(`This project's plan is larger than ${MB(PROJECT_MAX)}.`);
-  let project;
-  try { project = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(pj)); } catch (e) { throw new ProjectError('This project file is damaged: project.json is not readable.'); }
-  if (isObj(project) && isObj(project.image) && MIME_EXT[project.image.mime] && 'image.' + MIME_EXT[project.image.mime] !== imgs[0]) throw new ProjectError('This project file is damaged: the image is not the type the project says.');
-  const image = files.get(imgs[0]);
+  if (pj && pj.length > PROJECT_MAX) throw new ProjectError(`This project's plan is larger than ${MB(PROJECT_MAX)}.`);
+  let project = null;
+  if (pj) { try { project = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(pj)); } catch (e) { project = undefined; } }
+  let image;
+  if (isObj(project) && project.v === 2) {   // a knee case: one image entry per film, nothing else
+    { const pr = projectProblems(project); if (pr.length) throw new ProjectError(`This project cannot be opened: ${pr.slice(0, 4).join('; ')}${pr.length > 4 ? '; …' : ''}.`); }
+    const imgs = names.filter(n => /^image-(ap|lat|sky|long)\.(dcm|png|jpg|webp)$/.test(n));
+    const extra = names.filter(n => n !== 'project.json' && n !== 'case.json' && !imgs.includes(n));
+    if (extra.length) throw new ProjectError(`This project file has an unexpected entry "${extra[0]}".`);
+    const films = isObj(project.films) ? project.films : {};
+    image = {};
+    for (const n of imgs) {
+      const role = n.slice(6, n.indexOf('.')), f = films[role];
+      if (!isObj(f) || !isObj(f.image) || n !== `image-${role}.${MIME_EXT[f.image.mime]}`) throw new ProjectError(`This project file is damaged: the entry "${n}" is not one of its films.`);
+      image[role] = files.get(n);
+    }
+    for (const r of Object.keys(films)) if (!image[r]) throw new ProjectError(`This project file is damaged: the ${ROLE_NAME[r] || 'unknown'} film's image is missing.`);
+  } else {
+    const imgs = names.filter(n => /^image\.(dcm|png|jpg|webp)$/.test(n));
+    const extra = names.filter(n => n !== 'project.json' && n !== 'case.json' && !imgs.includes(n));
+    if (extra.length) throw new ProjectError(`This project file has an unexpected entry "${extra[0]}".`);
+    if (!pj || imgs.length !== 1) throw new ProjectError('This project file must hold project.json and one image.');
+    if (u8.length > FILE_MAX || names.reduce((n, k) => n + files.get(k).length, 0) > ZIP_MAX) throw new ProjectError(`This project file expands to more than ${MB(ZIP_MAX)}.`);
+    if (project === undefined) throw new ProjectError('This project file is damaged: project.json is not readable.');
+    if (isObj(project) && isObj(project.image) && MIME_EXT[project.image.mime] && 'image.' + MIME_EXT[project.image.mime] !== imgs[0]) throw new ProjectError('This project file is damaged: the image is not the type the project says.');
+    image = files.get(imgs[0]);
+  }
+  if (project === undefined || project === null) throw new ProjectError('This project file is damaged: project.json is not readable.');
   await checkProject(project, image);
   let caseRef = null;
   if (files.has('case.json')) {
     let c = null; try { c = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(files.get('case.json'))); } catch (e) { c = null; }
-    if (!isObj(c) || !ID_RE.test(String(c.id)) || !Number.isInteger(c.rev) || c.rev < 1 || (c.sha256 !== null && c.sha256 !== undefined && !SHA_RE.test(String(c.sha256)))) throw new ProjectError('This project file is damaged: case.json is not valid.');
-    caseRef = { id: c.id, rev: c.rev, sha256: c.sha256 || null };
+    if (!isObj(c) || !ID_RE.test(String(c.id)) || !Number.isInteger(c.rev) || c.rev < 1 || (c.sha256 !== null && c.sha256 !== undefined && !SHA_RE.test(String(c.sha256)))
+      || (c.shas !== undefined && (!isObj(c.shas) || Object.entries(c.shas).some(([r, s]) => !ROLES.includes(r) || !SHA_RE.test(String(s)))))) throw new ProjectError('This project file is damaged: case.json is not valid.');
+    caseRef = project.v === 2 ? { id: c.id, rev: c.rev, shas: shasOf(c) } : { id: c.id, rev: c.rev, sha256: c.sha256 || null };
   }
   return { project, image, caseRef };
 }
@@ -274,6 +609,17 @@ export function parseCollaborators(text) {
 }
 
 // ======================= the page =======================
+let H0 = null;
+// the host (app.js), with what a host from before the knee case lacks filled in: the unit open is the X-ray itself, its
+// case key its image's sha256 (test.mjs drives the save with such a stand-in)
+const H_DEFAULTS = {
+  unit() { return H0.S.img; }, isCase() { return false; }, caseKeyNow() { return (H0.S.orig && H0.S.orig.sha256) || null; },
+  images() { const o = H0.S.orig; return o && o.bytes ? { [o.sha256]: { bytes: o.bytes, mime: o.mime, holder: o } } : {}; },
+  keptNow() { return H0.projectNow().state; }, applyCaseState() { return []; }, caseWhy() { return ''; }, unsentRoles() { return []; },
+  identNow() { const p = H0.S.patientIn || {}; return { name: p.name || '', recordNo: p.recordNo || '', hospital: p.hospital || '', age: Number.isInteger(p.age) ? p.age : null }; },
+  setIdent(o) { H0.S.patientIn = { ...(H0.S.patientIn || {}), ...o, asked: true }; }, hospitalKnown() { return true; }, patientPending() { return false; }, async preparePatient() {},
+  privacyKey() { return JSON.stringify([!!H0.S.set.share, H0.S.orig && H0.S.orig.sha256]); },
+};
 let H = null;                       // app.js: { S, STANDALONE, prompt, panel, projectNow, metaNow, fileName, loadProject, ... }
 const OUT = { file: null, server: null };   // the last save's two outcomes: this device, the patient list
 let busy = false;
@@ -329,7 +675,8 @@ function why(e) {
   if (s === 401) return 'your sign-in has ended';
   if (s === 403) return c === 'forbidden' ? 'only the person who first saved this case, or someone allowed to see every templated patient, can do that' : 'the server refused the request (security check)';
   if (s === 404) return 'this case is not in your patient list (hidden, or not shared with you)';
-  if (s === 413) return 'the X-ray or the plan is too large for the patient list';
+  if (s === 413) return c === 'images' ? `the films are larger than ${MB(CASE_IMAGES_MAX)} together` : 'the X-ray or the plan is too large for the patient list';
+  if (s === 422 && c === 'films') return 'this case now holds several films (a knee case): reload the page and open it from the list';
   if (s === 422) return c === 'pixels' ? `the image is larger than ${PIXELS_MAX / 1e6} megapixels` : 'the X-ray did not arrive complete; save again to send it again';
   if (s === 429) return 'too many unfinished uploads from your account; wait 15 minutes and save again';
   if (s === 503) return 'the patient list is busy; save again in a moment';
@@ -387,42 +734,92 @@ async function sendImage(o, progress) {
 function setServer(ctx, state, text, extra = {}) { if (!ctx.live() || ctx.auto) return; OUT.server = { state, text, ...extra }; renderOut(); }
 function say(ctx, text) { if (ctx.live() && !ctx.auto) H.prompt(text); }
 function progressText(done, n) { return n > 1 ? `Sending the X-ray to the patient list: part ${Math.min(done + 1, n)} of ${n}…` : 'Sending the X-ray to the patient list…'; }
-// ---- a new case's identity, per image ----
-const CREATES = new Map();   // sha256 → { rid, body }: a new case's save not yet answered (this page)
-const PEND_TAB = 'aoc-tpl-pending', PEND_LOCAL = sha => 'aoc-tpl:pending:' + sha;
-function pendingRid(sha) {
-  const c = CREATES.get(sha); if (c) return c.rid;
+// ---- a new case's identity, per case key (contract section 12: a knee case's own draft id, a single film's image) ----
+const CREATES = new Map();   // case key → { rid, body }: a new case's save not yet answered (this page)
+const PEND_TAB = 'aoc-tpl-pending', PEND_LOCAL = ck => 'aoc-tpl:pending:' + ck;
+function pendingRid(ck) {
+  const c = CREATES.get(ck); if (c) return c.rid;
   let r = null;
-  try { r = (JSON.parse(sessionStorage.getItem(PEND_TAB) || '{}') || {})[sha] || null; } catch (e) { r = null; }
-  if (!r && H.S.set.keepLocal) { try { r = JSON.parse(localStorage.getItem(PEND_LOCAL(sha)) || 'null'); } catch (e) { r = null; } }
+  try { r = (JSON.parse(sessionStorage.getItem(PEND_TAB) || '{}') || {})[ck] || null; } catch (e) { r = null; }
+  if (!r && H.S.set.keepLocal) { try { r = JSON.parse(localStorage.getItem(PEND_LOCAL(ck)) || 'null'); } catch (e) { r = null; } }
   return isObj(r) && /^[a-z0-9-]{16,32}$/.test(String(r.rid)) ? r.rid : null;
 }
-function setPending(sha, rid, body, film = null) {
-  if (rid) CREATES.set(sha, { rid, body, film }); else CREATES.delete(sha);
+// share: sharing mode when the body was built (a body built outside sharing mode is never replayed once it is on: round 5).
+// Fail closed (round 6): a body stored without saying is never replayed (null matches no sharing state).
+function setPending(ck, rid, body, film = null, share = null) {
+  if (rid) CREATES.set(ck, { rid, body, film, share }); else CREATES.delete(ck);
   try {
     const m = JSON.parse(sessionStorage.getItem(PEND_TAB) || '{}') || {};
-    if (rid) m[sha] = { rid, at: Date.now() }; else delete m[sha];
+    if (rid) m[ck] = { rid, at: Date.now() }; else delete m[ck];
     sessionStorage.setItem(PEND_TAB, JSON.stringify(m));
   } catch (e) { /* storage off */ }
-  try { if (rid && H.S.set.keepLocal) localStorage.setItem(PEND_LOCAL(sha), JSON.stringify({ rid, at: Date.now() })); else if (!rid) localStorage.removeItem(PEND_LOCAL(sha)); } catch (e) { /* storage off */ }
+  try { if (rid && H.S.set.keepLocal) localStorage.setItem(PEND_LOCAL(ck), JSON.stringify({ rid, at: Date.now() })); else if (!rid) localStorage.removeItem(PEND_LOCAL(ck)); } catch (e) { /* storage off */ }
+}
+// a cached new-case body that must not be sent again (built under another sharing state): its requestId stays, so the case
+// an earlier attempt may have made is found by it (caseByRequest) and saved over, never made twice
+function noReplay(ck) { const c = CREATES.get(ck); if (c) c.body = null; }
+// the case a meta names, as the page keeps it: a single film's {id, rev, sha256}; a knee case's {id, rev, shas: {role:
+// sha256}} (the films' images the server holds)
+function refFromMeta(m, ck) {
+  if (isObj(m.images)) { const shas = {}; for (const r of ROLES) if (isObj(m.images[r]) && SHA_RE.test(String(m.images[r].sha256))) shas[r] = m.images[r].sha256; return { id: m.id, rev: m.rev, shas }; }
+  return { id: m.id, rev: m.rev, sha256: (isObj(m.image) && m.image.sha256) || (SHA_RE.test(String(ck)) ? ck : null) };
 }
 // the case a lost new-case save made, found by its requestId in the whole list (null: certainly not made). The list is
 // read to its end (round 13b re-review): a search that could not finish throws, so the requestId is kept and the search
-// is made again later; it is never taken for "not made".
-async function caseByRequest(sha, rid) {
+// is made again later; it is never taken for "not made". A single film's case must also hold its image; a knee case's
+// requestId (24 random hex) is enough.
+async function caseByRequest(ck, rid) {
   let before = null;
+  const kc = String(ck).startsWith('kc');
   for (let page = 0; page < 2000; page++) {
     const body = { limit: 50 }; if (before) body.before = before;
     const r = await call('POST', '/projects/list', { json: body });
-    for (const m of Array.isArray(r.items) ? r.items : []) if (m.lastRequestId === rid && isObj(m.image) && m.image.sha256 === sha && ID_RE.test(String(m.id))) return { id: m.id, rev: m.rev, sha256: sha };
+    for (const m of Array.isArray(r.items) ? r.items : []) if (m.lastRequestId === rid && ID_RE.test(String(m.id)) && (kc || (isObj(m.image) && m.image.sha256 === ck))) return refFromMeta(m, ck);
     if (typeof r.next !== 'string') return null;   // the end of the list: not there
     if (r.next === before) break;
     before = r.next;
   }
   throw new ApiError(503, 'busy');   // not finished: tried again later, the requestId kept
 }
+// Sharing mode is checked again just before a plan leaves the page for the patient list (Astra, round 4 sweep): the plan on
+// screen, taken before sharing mode changed, is not sent (it is taken again as it is now); a film no longer on screen is
+// sent without the patient's name, age and record number when sharing mode was turned on since it was taken
+// Checked before every transmission, each retry included (Astra, round 5): a body built under another sharing state is never
+// sent. The attempt is abandoned (its requestId kept to reconcile an earlier attempt that may have reached the server, as
+// section 11 says) and the save is made again from the plan as it is now; a film no longer on screen has the patient's
+// name, age and record number taken out of its snapshot first when sharing mode was turned on.
+const shareErr = () => { const e = new ProjectError('sharing mode changed while it was being saved; it is saved again as it is now'); e.shareChanged = true; return e; };
+function shareGuard(ctx) {
+  if (!!H.S.set.share === !!ctx.share0) return;
+  if (!ctx.live() && !H.S.set.share) return;   // a film no longer on screen, its snapshot without identity: safe to send as it is
+  const F = ctx.F;
+  if (!ctx.live() && H.S.set.share && F && F.snap) { scrubForSharing(F.snap.project, F.snap.meta); F.snap.share = true; }
+  throw shareErr();
+}
+// The one sharing-mode scrub (Fable, round 7): what a project and its list entry may carry in sharing mode, made so in place
+// (the page's projectNow uses it too): the patient's hospital code only (no name, record number, age or study UID), and
+// every image named only by its role ("image.<ext>", a knee film "image-<role>.<ext>": the page names files after the
+// patient). → the project (and meta) given
+export function scrubForSharing(project, meta = null) {
+  const keep = o => { if (!isObj(o)) return; for (const k of Object.keys(o)) if (!['hospital', 'side', 'procedure'].includes(k)) delete o[k]; };
+  if (isObj(project)) {
+    keep(project.patient);
+    if (isObj(project.image) && MIME_EXT[project.image.mime]) project.image.fileName = 'image.' + MIME_EXT[project.image.mime];
+    if (isObj(project.films)) for (const [r, f] of Object.entries(project.films)) if (isObj(f) && isObj(f.image) && MIME_EXT[f.image.mime]) f.image.fileName = `image-${r}.${MIME_EXT[f.image.mime]}`;
+  }
+  if (isObj(meta)) keep(meta.patient);
+  return project;
+}
+// one POST of a body, retried on a dropped connection or a busy server, with the sharing check before every attempt;
+// uncertain(): an attempt may have reached the server (no answer, or 5xx)
+async function guardedPost(ctx, body) {
+  let uncertain = false;
+  try { return await retrying(() => { shareGuard(ctx); return call('POST', '/projects/save', { json: body, timeout: 90000 }).catch(e => { if (retryable(e)) uncertain = true; throw e; }); }); }
+  catch (e) { if (e.shareChanged) e.uncertain = uncertain; throw e; }
+}
 // one save to the server: {id, rev}; throws ApiError
 async function postSave(ctx, project, meta, ref) {
+  if (project.v === 2) return postCase(ctx, project, meta, ref);
   const img = project.image, F = ctx.F;
   let uploadId = null;
   if (!ref || ref.sha256 !== img.sha256) {   // the image goes up only when the server does not hold it for this case
@@ -430,15 +827,16 @@ async function postSave(ctx, project, meta, ref) {
     uploadId = await sendImage({ bytes: ctx.orig.bytes, sha256: img.sha256, mime: img.mime }, (d, n) => { setServer(ctx, 'busy', progressText(d, n)); say(ctx, progressText(d, n)); });
   }
   setServer(ctx, 'busy', 'Saving the plan to the patient list…');
+  shareGuard(ctx);   // before the body is built and before every attempt to send it (Astra, rounds 4 and 5)
   const body = { requestId: ridOf(), meta, project };   // one requestId for this save and all its retries (contract 4)
   if (ref) { body.id = ref.id; body.baseRev = ref.rev; }
   if (uploadId) body.uploadId = uploadId;
-  if (!ref) setPending(img.sha256, body.requestId, body, F);   // known before it is sent: a reopened film or a reload finds it
+  if (!ref) setPending(img.sha256, body.requestId, body, F, !!ctx.share0);   // known before it is sent: a reopened film or a reload finds it
   let r;
-  try { r = await retrying(() => call('POST', '/projects/save', { json: body, timeout: 90000 })); }
+  try { r = await guardedPost(ctx, body); }
   catch (e) {   // no answer at all: the save may or may not have been made, which the next save finds out
-    const unknown = e instanceof ApiError && (e.status === 0 || e.status >= 500);
-    if (!ref) { if (!unknown) setPending(img.sha256, null); }
+    const unknown = (e instanceof ApiError && (e.status === 0 || e.status >= 500)) || (e.shareChanged && e.uncertain);
+    if (!ref) { if (!unknown) setPending(img.sha256, null); else if (e.shareChanged) noReplay(img.sha256); }
     else if (unknown) F.lost = [...(F.lost || []), body.requestId].slice(-8);   // kept through the next save's 409 (finding 4)
     throw e;
   }
@@ -448,33 +846,90 @@ async function postSave(ctx, project, meta, ref) {
   if (!ID_RE.test(String(r.id)) || !Number.isInteger(r.rev)) throw new ApiError(500, 'answer');
   return r;
 }
+// A knee case's save (contract section 12): the films whose images the case does not hold yet go up one at a time, each
+// with its own save (one upload open at a time, well within the server's three), every save one whole revision of the
+// films the case then holds and the shared plan; the last one holds them all. A save of a case not yet made carries the
+// case key's requestId (kept before it is sent, as for a single film); a lost answer is recognised as for a single film.
+// → the last answer {id, rev}; ctx.ref follows every answered step, so a failure half-way goes on from there next time.
+async function postCase(ctx, project, meta, ref) {
+  const F = ctx.F, imgs = ctx.images || {};
+  let cur = ref, r = null;
+  for (let step = 0; step < ROLES.length + 1; step++) {
+    const held = new Set(Object.values(cur ? shasOf(cur) : {}));
+    const missing = ROLES.filter(rl => project.films[rl] && !held.has(project.films[rl].image.sha256)), add = missing[0] || null;
+    const films = {}; for (const rl of ROLES) { const f = project.films[rl]; if (f && (held.has(f.image.sha256) || rl === add)) films[rl] = f; }
+    const body0 = { ...project, films, active: films[project.active] ? project.active : Object.keys(films)[0] };
+    let uploads = null;
+    if (add) {
+      const im = project.films[add].image, src = imgs[im.sha256];
+      if (!src || !src.bytes) throw new ProjectError(`the ${ROLE_NAME[add]} film's X-ray itself is no longer on this page (open it again to save it)`);
+      const what = `Sending the ${ROLE_NAME[add]} film to the patient list`;
+      const upId = await sendImage({ bytes: src.bytes, sha256: im.sha256, mime: im.mime }, (d, n) => { const t = n > 1 ? `${what}: part ${Math.min(d + 1, n)} of ${n}…` : `${what}…`; setServer(ctx, 'busy', t); say(ctx, t); });
+      uploads = { [add]: upId };
+    }
+    setServer(ctx, 'busy', 'Saving the plan to the patient list…');
+    shareGuard(ctx);
+    const body = { requestId: ridOf(), meta, project: body0 };
+    if (cur) { body.id = cur.id; body.baseRev = cur.rev; }
+    if (uploads) body.uploads = uploads;
+    if (!cur) setPending(ctx.ck, body.requestId, body, F, !!ctx.share0);
+    try { r = await guardedPost(ctx, body); }
+    catch (e) {
+      const unknown = (e instanceof ApiError && (e.status === 0 || e.status >= 500)) || (e.shareChanged && e.uncertain);
+      if (!cur) { if (!unknown) setPending(ctx.ck, null); else if (e.shareChanged) noReplay(ctx.ck); }
+      else if (unknown) F.lost = [...(F.lost || []), body.requestId].slice(-8);
+      throw e;
+    }
+    if (!ID_RE.test(String(r.id)) || !Number.isInteger(r.rev)) throw new ApiError(500, 'answer');
+    if (!cur) setPending(ctx.ck, null);
+    F.lost = [];
+    if (uploads) UPS.delete(project.films[add].image.sha256);   // used up by the save
+    const shas = {}; for (const [rl, f] of Object.entries(films)) shas[rl] = f.image.sha256;
+    cur = { id: r.id, rev: r.rev, shas };
+    ctx.ref = cur; remember(ctx.ck, cur); rememberFilms(ctx.ck, cur);   // every opening of the case and of its films knows it at once
+    if (missing.length <= (add ? 1 : 0)) break;   // this save held every film
+  }
+  return r;
+}
 // before a new case is made for an image: a save of that image still unanswered is sent again as it was, or (after a
 // reload) found by its requestId → the case, or null when none was made
 // → { ref, own } (own: made by this film's own earlier save) or null. Every new case of an image, from the film on screen
 // or one in the background, goes through here first, so there is one case per image (round 13b re-review, finding 3).
-async function pendingCase(sha, F = null) {
-  const k = knownCase(sha);   // another film of this image has its case already
+async function pendingCase(ck, F = null) {
+  const k = knownCase(ck);   // another opening of this X-ray (or of this knee case) has its case already
   if (k) return { ref: k, own: false };
-  const c = CREATES.get(sha);
+  const c = CREATES.get(ck);
+  if (c && c.body && c.share !== !!H.S.set.share) noReplay(ck);   // built under another sharing state: never replayed (round 5)
   if (c && c.body) {
     const own = !!F && c.film === F;
-    try { const r = await retrying(() => call('POST', '/projects/save', { json: c.body, timeout: 90000 })); setPending(sha, null); UPS.delete(sha); const got = { id: r.id, rev: r.rev, sha256: sha }; remember(sha, got); return { ref: got, own }; }
-    catch (e) { if (!(e instanceof ApiError) || e.status === 0 || e.status >= 500) throw e; setPending(sha, null); UPS.delete(sha); return null; }   // refused: none was made by it
+    try {
+      const r = await retrying(() => { if (c.share !== !!H.S.set.share) throw shareErr(); return call('POST', '/projects/save', { json: c.body, timeout: 90000 }); }); setPending(ck, null);
+      let got;
+      if (c.body.project && c.body.project.v === 2) {   // a knee case: the films that save held
+        const shas = {}; for (const [rl, f] of Object.entries(c.body.project.films || {})) shas[rl] = f.image.sha256;
+        for (const s of Object.values(shas)) UPS.delete(s);
+        got = { id: r.id, rev: r.rev, shas }; rememberFilms(ck, got);
+      } else if (String(ck).startsWith('kc')) {   // a single film's create, then made a knee case (toCase): that film is the case's first
+        const s0 = c.body.project.image.sha256; UPS.delete(s0); got = { id: r.id, rev: r.rev, shas: { [c.role || 'ap']: s0 } }; rememberFilms(ck, got);
+      } else { UPS.delete(ck); got = { id: r.id, rev: r.rev, sha256: ck }; }
+      remember(ck, got); return { ref: got, own };
+    } catch (e) { if (e.shareChanged) { noReplay(ck); throw e; } if (!(e instanceof ApiError) || e.status === 0 || e.status >= 500) throw e; setPending(ck, null); if (SHA_RE.test(ck)) UPS.delete(ck); return null; }   // refused: none was made by it
   }
-  const rid = pendingRid(sha);
+  const rid = pendingRid(ck), mine = !!F && !!c && c.film === F;
   if (!rid) return null;
-  const found = await caseByRequest(sha, rid);   // throws when the list cannot be read to its end: tried again later
-  setPending(sha, null);
-  if (found) remember(sha, found);
-  return found ? { ref: found, own: false } : null;
+  const found = await caseByRequest(ck, rid);   // throws when the list cannot be read to its end: tried again later
+  setPending(ck, null);
+  if (found) { remember(ck, found); if (found.shas) rememberFilms(ck, found); }
+  return found ? { ref: found, own: mine } : null;   // (its own earlier attempt, found by its requestId: saved on top, so the entry is rewritten as it is now)
 }
 // the patient list part of a save, with its choices (a newer version, a case gone): → {ok, text, reload?}; the case it
 // ends with is ctx.ref. An automatic save (ctx.auto) never asks: a newer version or a case gone is answered as
 // {ok: false, conflict} / {ok: false, gone}, and nothing is overwritten.
 async function saveToServer(ctx, project, meta) {
-  const F = ctx.F, sha = project.image.sha256;
-  if (!ctx.ref && !ctx.copy) {   // a new case of this image may already exist (another film of it, a save whose answer was lost)
-    const got = await pendingCase(sha, F);
+  const F = ctx.F, sha = project.v === 2 ? null : project.image.sha256;
+  if (!ctx.ck) ctx.ck = project.v === 2 ? caseKey(project.case.cid) : sha;
+  if (!ctx.ref && !ctx.copy) {   // a new case of this image (or knee case) may already exist (another opening of it, a save whose answer was lost)
+    const got = await pendingCase(ctx.ck, F);
     if (got && got.own) ctx.ref = got.ref;   // this film's own: its save goes on top
     else if (got) {   // another opening of this X-ray made it: never one plan over the other
       if (ctx.auto) return { ok: false, other: got.ref };
@@ -489,16 +944,21 @@ async function saveToServer(ctx, project, meta) {
     const ref = ctx.ref;
     try {
       const r = await postSave(ctx, project, meta, ref);
-      ctx.ref = { id: r.id, rev: r.rev, sha256: sha };
+      if (project.v !== 2) ctx.ref = { id: r.id, rev: r.rev, sha256: sha };   // (a knee case's: set by postCase, with its films)
       return { ok: true, text: `Saved to the patient list${r.rev > 1 ? ` (version ${r.rev})` : ''}.` };
     } catch (e) {
       if (!(e instanceof ApiError)) throw e;
-      if (e.status === 422 && (e.code === 'image' || e.code === 'upload') && tries === 0) { UPS.delete(sha); if (ref) ctx.ref = { ...ref, sha256: null }; continue; }   // send the image (again) after all
+      const ref = ctx.ref;   // a knee case's save may have made a step or two before this answer
+      if (e.status === 422 && (e.code === 'image' || e.code === 'upload') && tries === 0) {   // send the image(s) (again) after all
+        if (project.v === 2) { for (const f of Object.values(project.films)) UPS.delete(f.image.sha256); if (ref) ctx.ref = { ...ref, shas: {} }; }
+        else { UPS.delete(sha); if (ref) ctx.ref = { ...ref, sha256: null }; }
+        continue;
+      }
       if (e.status === 409 && e.code === 'stale' && ref) {
         // the newer version may be this page's own earlier save whose answer was lost: then save on top of it
         if (F.lost && F.lost.length) {
           let m = null; try { m = (await call('GET', `/projects/${ref.id}`)).meta; } catch (er) { m = null; }
-          if (m && F.lost.includes(m.lastRequestId) && Number.isInteger(m.rev)) { F.lost = []; ctx.ref = { ...ref, rev: m.rev }; continue; }
+          if (m && F.lost.includes(m.lastRequestId) && Number.isInteger(m.rev)) { F.lost = []; ctx.ref = project.v === 2 ? refFromMeta(m, ctx.ck) : { ...ref, rev: m.rev }; continue; }
         }
         if (ctx.auto) return { ok: false, conflict: true, rev: e.extra.rev };
         if (!ctx.live()) return { ok: false, conflict: true, text: `Not saved to the patient list: a newer version is there (version ${e.extra.rev}), and another X-ray was opened meanwhile.` };
@@ -533,14 +993,16 @@ const sameRef = (a, b) => (!a && !b) || (!!a && !!b && a.id === b.id && a.rev ==
 export async function saveProject() {
   const S = H.S;
   if (busy || !S.img || document.querySelector('.dlg')) return;   // one save at a time (a second tap while it runs or asks does nothing)
+  const pk0 = H.privacyKey();   // the file is written only if the X-ray, the case and sharing mode are as they were (Astra, round 4, P2)
   if (!S.orig || !S.orig.sha256) return H.prompt(S.origWhy || 'This X-ray cannot be saved as a project: its original file is not available here. Open the file again.');
+  { const cw = H.caseWhy ? H.caseWhy() : ''; if (cw) return H.prompt(cw); }   // a knee case with a film whose original is not on this page
   if (S.filling) return H.prompt('Wait a moment: a stroke is still being filled.');
-  if (!S.set.share && !H.patientKnown()) { const ok = await askPatient(); if (!ok) return; }
+  if (!S.set.share && !H.patientKnown()) { const ok = await askPatient(); if (!ok) return; }   // (15 Oct: the question has the hospital and the age too)
   const F = FILM && live(FILM) ? FILM : { stub: true, lost: [] };
   let project, meta;
   try { project = H.projectNow(); meta = metaFor(F); aotpCheck(project); } catch (e) { return H.prompt(`The project could not be saved: ${e.message || e}.`); }
-  const ctx = { F, img: S.img, orig: S.orig, ref: null, ref0: null, rev: H.revision(), at: Date.now(), uid: F.uid, name: H.fileName(), refAtPress: F.stub ? S.caseRef : refOf(F) };
-  ctx.live = () => H.S.img === ctx.img && H.S.orig === ctx.orig;
+  const ctx = { F, unit: H.unit(), img: S.img, orig: S.orig, images: H.images(), ck: H.caseKeyNow(), ref: null, ref0: null, rev: H.revision(), at: Date.now(), uid: F.uid, name: H.fileName(), refAtPress: F.stub ? S.caseRef : refOf(F), share0: !!S.set.share };
+  ctx.live = () => H.unit() === ctx.unit;
   busy = true; syncButtons();
   OUT.file = null; OUT.server = null;
   let reload = null, file = null, server = null, r = null;
@@ -549,21 +1011,24 @@ export async function saveProject() {
       setServer(ctx, 'busy', 'Saving to the patient list…'); say(ctx, 'Saving the project…');
       if (!F.stub) status(F, 'saving');
       try {
-        r = await serial(() => {
+        r = await serial(async () => {
           const ref = F.stub ? S.caseRef : refOf(F);
           if (ctx.live()) {   // the plan, its revision and the case version, taken together now (finding 2)
-            try { project = H.projectNow(); meta = metaFor(F); aotpCheck(project); ctx.rev = H.revision(); ctx.at = Date.now(); ctx.uid = F.uid; } catch (e) { return { ok: false, text: `Not saved to the patient list: ${e.message || e}.` }; }
+            try { await H.preparePatient(); } catch (e) { return { ok: false, prepErr: e, text: `Not saved to the patient list: ${why(e)} (the case's patient is read from the list first); it is tried again.` }; }
+            if (!ctx.live()) return { ok: false, stale: true, text: 'Not saved to the patient list by this press: another X-ray was opened meanwhile.' };
+            try { project = H.projectNow(); meta = metaFor(F); aotpCheck(project); ctx.rev = H.revision(); ctx.at = Date.now(); ctx.uid = F.uid; ctx.images = H.images(); ctx.partial = unsentNow(F); } catch (e) { return { ok: false, text: `Not saved to the patient list: ${e.message || e}.` }; }
           } else if (!sameRef(ref, ctx.refAtPress)) {
             return { ok: false, stale: true, text: `Not saved to the patient list by this press: the plan was saved there meanwhile${ref ? ` (version ${ref.rev})` : ''}, after the moment you pressed.` };
           }
           ctx.ref = ctx.ref0 = ref;
           return saveToServer(ctx, project, meta);
         });
-        server = { state: r.ok ? 'ok' : 'fail', text: r.text }; reload = r.reload || null;
+        server = { state: r.ok ? 'ok' : 'fail', text: r.text + (r.ok && !S.set.share && !H.hospitalKnown() ? ' Hospital not set: pick it under Patient (Measurements and save), so the case is listed under its hospital.' : '') }; reload = r.reload || null;
         if (!F.stub) {
-          if (r.ok) { F.conflict = false; F.gone = false; F.created = true; acked(F, ctx.rev, ctx.at, ctx.uid); status(F, 'saved'); }
+          if (r.ok) { F.conflict = false; F.gone = false; F.created = true; acked(F, ctx.rev, ctx.at, ctx.uid, !!ctx.partial); status(F, 'saved'); }
           else if (r.conflict) { F.conflict = true; status(F, 'conflict'); }
           else if (r.gone) { F.gone = true; status(F, 'fail', 'Not saved: this case is no longer in your patient list', 'The case was hidden, or it is no longer shared with you. Save project offers to save it as your own copy.'); }
+          else if (r.prepErr) failed(F, r.prepErr);   // the patient could not be read: offline handling and a retry, as an automatic save (Fable, round 9)
         }
       } catch (e) {
         const part = e instanceof ApiError && e.parts > 1 && e.status === 0 ? ` (${e.sent} of ${e.parts} parts of the X-ray sent; Save project again goes on from there)` : '';
@@ -571,9 +1036,13 @@ export async function saveProject() {
         if (!F.stub) failed(F, e);
       }
     }
-    try {
-      const o = ctx.orig; if (o.crc === undefined) o.crc = crc32(o.bytes);
-      saveBlob(new Blob(aotpParts(project, o.bytes, { caseRef: H.STANDALONE ? ctx.ref : null, imageCrc: o.crc }), { type: 'application/zip' }), ctx.name);
+    // sharing mode (Astra, round 2): no project file on this device. It would carry the original X-ray, and a DICOM header can
+    // name the patient; blanking its tags reliably is beyond the page's small DICOM reader (sequences, private and
+    // compressed files), so the file is not written. The saved picture (PNG) is the copy for sharing.
+    if (S.set.share) file = { ok: false, skipped: true, text: 'Sharing mode: no project file saved to this device (it would hold the original X-ray, whose DICOM header can name the patient). Use Save picture for sharing.' };
+    else if (H.privacyKey() !== pk0) file = { ok: false, skipped: true, text: 'No project file saved to this device: the X-ray on screen, the case or sharing mode changed while it was being saved. Save project again.' };
+    else try {
+      saveBlob(new Blob(fileParts(ctx, project), { type: 'application/zip' }), ctx.name);
       file = { ok: true, text: `File saved to this device: ${ctx.name}${reload ? ' (your version)' : ''}.` };
     } catch (e) { file = { ok: false, text: `File not saved to this device: ${e.message || e}.` }; }
     const saved = file.ok || (server && server.state === 'ok');
@@ -601,8 +1070,25 @@ export async function saveProject() {
     OUT.file = keep; renderOut(); H.prompt([OUT.file && OUT.file.text, OUT.server.text].filter(Boolean).join(' '));
   }
 }
-// the page refuses to save a project it would refuse to open (contract 7), its implants against this library too
-function aotpCheck(p) { const pr = [...projectProblems(p), ...libraryProblems(p.state, H.S.lib)]; if (pr.length) throw new Error(pr.slice(0, 3).join('; ')); }
+// the page refuses to save a project it would refuse to open (contract 7), its implants against this library too (a knee
+// case: every film's)
+function aotpCheck(p) {
+  const lib = p.v === 2 ? Object.values(p.films || {}).flatMap(f => libraryProblems(f.state, H.S.lib)) : libraryProblems(p.state, H.S.lib);
+  const pr = [...projectProblems(p), ...lib]; if (pr.length) throw new Error(pr.slice(0, 3).join('; '));
+}
+// the .aotp of a save: one image, or a knee case's films (each image's CRC worked out once and kept with its bytes)
+function fileParts(ctx, project) {
+  const crcOf = o => { if (o.crc === undefined) o.crc = crc32(o.bytes); return o.crc; };
+  const caseRef = H.STANDALONE ? ctx.ref : null;
+  if (project.v !== 2) { const o = ctx.orig; return aotpParts(project, o.bytes, { caseRef, imageCrc: crcOf(o) }); }
+  const by = {}, crc = {};
+  for (const [r, f] of Object.entries(project.films)) {
+    const o = ctx.images && ctx.images[f.image.sha256];
+    if (!o || !o.bytes) throw new ProjectError(`the ${ROLE_NAME[r]} film's X-ray itself is not on this page (open it again)`);
+    by[r] = o.bytes; crc[r] = crcOf(o.holder || o);
+  }
+  return aotpParts(project, by, { caseRef, imageCrc: crc });
+}
 
 // the two outcomes, in the Measurements and save segment (rebuilt with the panel, updated in place while saving)
 export function outcomeEl() {
@@ -639,23 +1125,46 @@ function dialog(build) {
     const f = box.querySelector('input, button.primary, button'); if (f) f.focus();
   });
 }
+// more: a note under the question, or a list of short lines (the list's permanent delete: what would be lost). The first
+// option is the one focused (dialog focuses the first input or button in the box), so Cancel goes first where it is the default.
 function choose(text, options, more = '') {
   return dialog((box, done) => {
-    box.appendChild(node('p', '', text)); if (more) box.appendChild(node('p', 'note', more));
+    box.appendChild(node('p', '', text));
+    if (Array.isArray(more)) { const l = node('ul', 'dlgfacts'); for (const t of more) l.appendChild(node('li', '', t)); box.appendChild(l); }
+    else if (more) box.appendChild(node('p', 'note', more));
     const r = node('div', 'row'); for (const [label, v, cls] of options) r.appendChild(button(label, () => done(v), cls)); box.appendChild(r);
   });
 }
 const clip = (s, n) => String(s || '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
-// a picture without the patient's details (a phone photo of the film): asked once for this X-ray, for the list and the
-// file name; "Leave them out" is a choice too
+// a picture without the patient's details (a phone photo of the film), or a case whose hospital is not known: asked once
+// for this X-ray or case, for the list and the file name; "Leave them out" is a choice too. The hospital is picked from the
+// list (HOSPITALS) or typed as its initials; the record number is stored with the hospital's code in front (Sami, 15 Oct).
 function askPatient() {
+  const id = H.identNow();
   return dialog((box, done) => {
-    box.appendChild(node('p', '', 'This X-ray carries no patient name or record number. Add them for the templated-patients list and the file name?'));
+    box.appendChild(node('p', '', !id.name && !id.recordNo ? 'This X-ray carries no patient name or record number. Add them for the templated-patients list and the file name?' : 'Which hospital is this patient from? The patient list keeps each hospital\'s patients apart (the record number is stored as, for example, SSC-12345).'));
     const f = node('div', 'fields');
-    const nm = node('input'); nm.type = 'text'; nm.maxLength = 120; nm.autocomplete = 'off'; nm.setAttribute('aria-label', 'Patient name');
-    const rn = node('input'); rn.type = 'text'; rn.maxLength = 40; rn.autocomplete = 'off'; rn.setAttribute('aria-label', 'Record number');
-    const l1 = node('label', '', 'Patient name '), l2 = node('label', '', 'Record number '); l1.appendChild(nm); l2.appendChild(rn); f.append(l1, l2); box.appendChild(f);
-    const set = (name, recordNo) => { H.S.patientIn = { name: clip(name, 120), recordNo: clip(recordNo, 40), asked: true }; done(true); };
+    const hs = node('select'); hs.setAttribute('aria-label', 'Hospital'); hs.appendChild(new Option('(not set)', ''));
+    for (const h of HOSPITALS) hs.appendChild(new Option(`${h.code} · ${h.name}`, h.code));
+    if (id.hospital && !HOSPITALS.some(h => h.code === id.hospital)) hs.appendChild(new Option(id.hospital, id.hospital));
+    hs.value = id.hospital || '';
+    const ho = node('input'); ho.type = 'text'; ho.autocomplete = 'off';   // no maxLength on identity: checked whole, never cut (Astra, round 4)
+    ho.placeholder = 'or type its initials'; ho.setAttribute('aria-label', 'Hospital initials');
+    const nm = node('input'); nm.type = 'text'; nm.autocomplete = 'off'; nm.setAttribute('aria-label', 'Patient name'); nm.value = id.name || '';
+    const ag = node('input'); ag.type = 'number'; ag.min = '0'; ag.max = String(AGE_MAX); ag.step = '1'; ag.setAttribute('aria-label', 'Age in years'); ag.value = Number.isInteger(id.age) ? String(id.age) : '';
+    const rn = node('input'); rn.type = 'text'; rn.autocomplete = 'off'; rn.setAttribute('aria-label', 'Record number'); rn.value = mrnCore(id.hospital, id.recordNo);
+    const lab = (t, ...els) => { const l = node('label', '', t + ' '); l.append(...els); return l; };
+    f.append(lab('Patient name', nm), lab('Record number', rn), lab('Age', ag), lab('Hospital', hs, ho)); box.appendChild(f);
+    const msg = node('p', 'note'); box.appendChild(msg);
+    const set = (name, recordNo) => {
+      const typed = ho.value.trim().toUpperCase(), hosp = typed || hs.value;
+      if (hosp && !HOSP_RE.test(hosp)) { msg.textContent = 'Hospital initials: 2 to 6 capital letters (for example SSC).'; return; }
+      const a = ag.value.trim() === '' ? null : Number(ag.value);
+      if (a !== null && !(Number.isInteger(a) && a >= 0 && a <= AGE_MAX)) { msg.textContent = `Age: a whole number of years from 0 to ${AGE_MAX}.`; return; }
+      if (cleanId(name).length > NAME_MAX) { msg.textContent = `Name too long: at most ${NAME_MAX} characters (it is never cut automatically).`; return; }
+      if (!mrnOk(hosp, cleanId(recordNo))) { msg.textContent = `Record number too long: with the hospital's code at most ${MRN_MAX} characters (it is never cut automatically).`; return; }
+      H.setIdent({ name: cleanId(name), recordNo: cleanId(recordNo), hospital: hosp, age: name || recordNo ? a : null }); done(true);
+    };
     const r = node('div', 'row');
     r.append(button('Save with these', () => set(nm.value, rn.value), 'primary'), button('Leave them out', () => set('', '')), button('Cancel', () => done(false)));
     box.appendChild(r);
@@ -672,13 +1181,14 @@ export async function openAotp(u8, name) {
 // a case from the patient list: its project and image, checked like a file (the image is not fetched again when it is the
 // one on screen, e.g. "Reload the newer version")
 // bytes: the image's bytes when the page already has them (a film opened again whose case is known; round 13)
-export async function openCase(id, { force = false, bytes: have = null, how = 'list' } = {}) {
+export async function openCase(id, { force = false, bytes: have = null, how = 'list', sha: haveSha = null, role = null } = {}) {
   const S = H.S;
   if (!ID_RE.test(String(id))) return;
   // the film on screen is saved automatically before another opens (round 13), unless it cannot be
   if (!force && S.img && H.isDirty() && !autoCovers() && !confirm('The X-ray on screen has changes not saved in a project. Open the other case anyway?')) return false;
   const got = await call('GET', `/projects/${id}`);
   const meta = got.meta, project = got.project;
+  if (isObj(meta) && isObj(project) && project.v === 2) return openKneeCase(id, meta, project, { have, haveSha, how, role });
   if (!isObj(meta) || !isObj(project) || !isObj(project.image)) throw new ProjectError('The patient list sent a case this page cannot read.');
   const pr = projectProblems(project); if (pr.length) throw new ProjectError(`This case cannot be opened: ${pr.slice(0, 3).join('; ')}.`);
   let bytes = have && have.length === project.image.size ? have : S.orig && S.orig.sha256 === project.image.sha256 ? S.orig.bytes : null;
@@ -691,9 +1201,38 @@ export async function openCase(id, { force = false, bytes: have = null, how = 'l
   finally { NEXT_PLACEHOLDER = null; }
   return true;
 }
+// the patient a case in the list holds (its meta's: name, record number, hospital, age as stored); throws when it cannot be
+// read (Fable, round 7: a knee case restored from kept changes takes its patient from here before its first save)
+export async function casePatient(id) {
+  if (!ID_RE.test(String(id))) throw new ProjectError('not a case id');
+  const got = await call('GET', `/projects/${id}`);
+  const p = isObj(got.meta) && isObj(got.meta.patient) ? got.meta.patient : {};
+  const o = {}; for (const k of ['name', 'recordNo', 'hospital']) if (typeof p[k] === 'string' && p[k] && !p[k].startsWith(PLACEHOLDER)) o[k] = p[k]; if (Number.isInteger(p.age)) o.age = p.age;
+  return o;
+}
+// a knee case from the patient list (contract section 12): every film's image fetched by its role (one at a time; an
+// image already on this page, or the file just opened, is not fetched again), the whole case checked, then opened with
+// the film just opened (haveSha) or the one last shown in front
+async function openKneeCase(id, meta, project, { have = null, haveSha = null, how = 'list', role = null } = {}) {
+  const pr = projectProblems(project); if (pr.length) throw new ProjectError(`This case cannot be opened: ${pr.slice(0, 3).join('; ')}.`);
+  const imgs = {}, local = H.images();
+  for (const [r, f] of Object.entries(project.films)) {
+    const sha = f.image.sha256;
+    let b = have && haveSha === sha && have.length === f.image.size ? have : local[sha] && local[sha].bytes && local[sha].bytes.length === f.image.size ? local[sha].bytes : null;
+    if (!b) b = await call('GET', `/projects/${id}/image/${r}`, { raw: true, timeout: 180000 });
+    imgs[r] = b;
+  }
+  await checkProject(project, imgs);
+  const mp = isObj(meta.patient) ? meta.patient : {}, pp = isObj(project.patient) ? project.patient : {};
+  NEXT_PLACEHOLDER = !pp.name && !pp.recordNo && typeof mp.name === 'string' && mp.name.startsWith(PLACEHOLDER) ? mp.name.slice(0, 120) : null;
+  const front = haveSha ? Object.keys(project.films).find(r => project.films[r].image.sha256 === haveSha) : role && project.films[role] ? role : null;   // (a film's own button in the list: that film in front)
+  try { await H.loadProject(project, imgs, { caseRef: refFromMeta(meta, caseKey(project.case.cid)), how, role: front || null }); }
+  finally { NEXT_PLACEHOLDER = null; }
+  return true;
+}
 
 // ---------- who is signed in (13 Oct 2026): GET /api/me -> {uid, em, ca, rg} ----------
-// Share and Hide are offered only where the server would allow them (contract 2 and 4: the case's owner, or someone who
+// Share, Hide and Delete (permanent) are offered only where the server would allow them (contract 2 and 4: the case's owner, or someone who
 // may see every templated patient); the server still decides. Asked once per page; if the answer does not come, both
 // are offered as before and a refusal is explained.
 let ME;   // undefined: not asked yet; null: no answer
@@ -722,22 +1261,96 @@ export function showList(box) {
   const msg = node('div', 'cmsg'); msg.setAttribute('role', 'status');
   const ul = node('ul', 'clist'), more = button('More', () => load(false), 'cmore'); more.hidden = true;
   sec.append(h, q, msg, ul, more); box.appendChild(sec);
-  const st = { q: '', next: null, seq: 0 };
+  // hosp: hospital code → its patients' <ul>; groups: the patient groups on the page ({li, hd, sub, cases, hcode, hul, who}),
+  // kept in step when a case leaves (deleted or hidden), so a "More" page adds to the right hospital and nothing stale is kept
+  const st = { q: '', next: null, seq: 0, hosp: new Map(), groups: [], gn: 0 };
   const say = (text, cls = '') => { msg.className = 'cmsg' + (cls ? ' ' + cls : ''); msg.textContent = text; };
-  async function load(reset) {
+  // a patient group starts closed (22 Oct 2026, Sami: duplicates are found and deleted case by case); its header says what
+  // is in it: "N cases, N films", the latest date, the sides and joints ("R hip, L knee"), and "possible duplicate" when two
+  // of its cases share an X-ray (sha256) or the same side and joint (a mark only; nothing is done about it here)
+  const filmsOf = m => (isObj(m.images) ? Object.values(m.images).filter(isObj).length : 1);
+  const shasOf = m => { const s = new Set(); if (isObj(m.image) && typeof m.image.sha256 === 'string' && m.image.sha256) s.add(m.image.sha256); if (isObj(m.images)) for (const f of Object.values(m.images)) if (isObj(f) && typeof f.sha256 === 'string' && f.sha256) s.add(f.sha256); return s; };
+  const sjOf = m => `${m.side === 'L' ? 'L' : 'R'} ${m.procedure === 'knee' ? 'knee' : 'hip'}`;
+  function maybeDup(cs) {
+    const sj = new Set(), sh = new Set();
+    for (const m of cs) {
+      const k = sjOf(m), own = shasOf(m);
+      if (sj.has(k) || [...own].some(s => sh.has(s))) return true;
+      sj.add(k); for (const s of own) sh.add(s);
+    }
+    return false;
+  }
+  function paint(G) {
+    const cs = G.cases, nf = cs.reduce((n, m) => n + filmsOf(m), 0);
+    const last = cs.map(m => String(m.updatedAt || '')).sort().pop() || '';
+    G.hd.textContent = '';
+    G.hd.append(node('b', 'pname', G.who), node('span', 'pcount', `${cs.length} case${cs.length === 1 ? '' : 's'}, ${nf} film${nf === 1 ? '' : 's'}`), node('span', 'psum', [...new Set(cs.map(sjOf))].join(', ')), node('span', 'pdate', fmtWhen(last)));
+    if (maybeDup(cs)) { const b = node('span', 'pdup', 'possible duplicate'); b.title = 'Two cases of this patient share an X-ray, or have the same side and joint. Open them to check before deleting one.'; G.hd.appendChild(b); }
+  }
+  function setOpen(G, on) { G.sub.hidden = !on; G.hd.setAttribute('aria-expanded', String(!!on)); }
+  // a case gone from the list (deleted for good, or hidden): its row, then its patient group when empty, then its hospital
+  function dropCase(li, G, m) {
+    li.remove();
+    if (!G) return;
+    const i = G.cases.indexOf(m); if (i >= 0) G.cases.splice(i, 1);
+    if (G.cases.length) { paint(G); return; }
+    G.li.remove(); st.groups = st.groups.filter(x => x !== G);
+    if (!G.hul.children.length) { const hli = G.hul.parentNode; if (hli) hli.remove(); if (st.hosp.get(G.hcode) === G.hul) st.hosp.delete(G.hcode); }
+  }
+  const emptyNote = () => (!ul.children.length && !st.next ? (st.q ? ` No other saved case matches "${st.q}".` : ' No other templated patients here.') : '');
+  // may this case be deleted from the list now? Not the case on screen (its film would be saved again, or the page started
+  // over with work not sent), not one with changes still waiting to be sent, and not while any save is on its way
+  function listBusy(id) {
+    const ref = FILM ? refOf(FILM) : null;
+    if ((H.S.caseRef && H.S.caseRef.id === id) || (ref && ref.id === id)) return 'Not deleted: this case is open on screen. Close it first (open another X-ray), or delete it from the case itself.';
+    for (const A of AWAY) if (A.ref && A.ref.id === id) return 'Not deleted: this case has changes still waiting to be sent (see the panel). Let them be sent or discard them first.';
+    if (JOBS > 0) return 'Not deleted: a save is still being sent. Try again in a moment.';
+    return '';
+  }
+  // note: a message kept once the list is loaded again (a refused delete says why the list was reloaded)
+  async function load(reset, note = '') {
     const seq = ++st.seq;
     if (reset) { st.next = null; }
     say(reset ? 'Loading…' : 'Loading more…'); more.disabled = true;
     try {
-      const body = { limit: 20 }; if (st.q) body.q = st.q; if (!reset && st.next) body.before = st.next;
+      // by patient (contract section 12; Sami, 14 Oct: "keep the images for one patient under the name of that patient"):
+      // 20 patients a page, each with every case of theirs and each case's films
+      const body = { limit: 20, group: true }; if (st.q) body.q = st.q; if (!reset && st.next) body.before = st.next;
       const r = await call('POST', '/projects/list', { json: body });   // the search goes in the body, never the URL (contract 4)
       const viewer = await me();
       if (seq !== st.seq) return;
-      if (reset) ul.textContent = '';
-      for (const m of Array.isArray(r.items) ? r.items : []) ul.appendChild(row(m, viewer));
+      if (reset) { ul.textContent = ''; st.hosp = new Map(); st.groups = []; }
+      const now = H.S.caseRef && H.S.caseRef.id ? H.S.caseRef.id : null, mark = now || LAST_CASE, added = [];
+      // under hospital headings (Sami, 15 Oct: "so we have clear database for each hospital"), one row per patient labelled
+      // "Full name · SSC · 45 y · SSC-MRN", and under it that patient's cases with their films (the "sub menu"); a case with
+      // no hospital is under "Hospital not set" until a hospital is picked for it
+      for (const g of Array.isArray(r.groups) ? r.groups : []) {
+        const cs = Array.isArray(g.cases) ? g.cases.filter(isObj) : [];
+        if (!cs.length) continue;
+        const pt = isObj(g.patient) ? g.patient : {}, hcode = typeof g.hospital === 'string' && HOSP_RE.test(g.hospital) ? g.hospital : '';
+        let hul = st.hosp.get(hcode);
+        if (!hul) {
+          const hli = node('li', 'hgrp'), hn = hospitalName(hcode);
+          hli.dataset.hospital = hcode || '-';
+          hli.appendChild(node('h3', 'hhead', hcode ? (hn ? `${hn} (${hcode})` : hcode) : 'Hospital not set'));
+          hul = node('ul', 'hpats'); hul.setAttribute('aria-label', hcode ? `Patients of ${hn || hcode}` : 'Patients whose hospital is not set');
+          hli.appendChild(hul); ul.appendChild(hli); st.hosp.set(hcode, hul);
+        }
+        const hideId = !!H.S.set.share;   // sharing mode: no name, age or record number on the screen either (Astra, round 2, P1 3)
+        const li = node('li', 'pgrp'), who = hideId ? `${hcode ? hcode + ' · ' : ''}patient details hidden (sharing mode)` : identLine(pt) || (pt.recordNo ? `Record ${pt.recordNo}` : 'Name left out');
+        const hd = node('button', 'phead'); hd.type = 'button';   // a button: Enter and Space open and close it
+        const sub = node('ul', 'pcases'); sub.setAttribute('aria-label', `Cases of ${who}`);
+        sub.id = `pcases-${++st.gn}`; hd.setAttribute('aria-controls', sub.id);
+        const G = { li, hd, sub, cases: cs, hcode, hul, who };
+        hd.onclick = () => setOpen(G, sub.hidden);
+        for (const m of cs) sub.appendChild(row(m, viewer, true, G, mark && m.id === mark ? (m.id === now ? 'on screen' : 'last opened') : ''));
+        paint(G); setOpen(G, !!st.q || (!!mark && cs.some(m => m.id === mark)));   // closed, unless searched for or holding the case on screen / just opened
+        li.append(hd, sub); hul.appendChild(li); st.groups.push(G); added.push(G);
+      }
       st.next = typeof r.next === 'string' ? r.next : null;
+      if (reset && !st.next && st.groups.length <= 3) for (const G of added) setOpen(G, true);   // a short list: all open
       more.hidden = !st.next; more.disabled = false;
-      say(ul.children.length ? '' : st.q ? `No saved case matches "${st.q}".` : 'No templated patients yet. A project saved here appears in this list.');
+      if (note) say(note, 'bad'); else say(ul.children.length ? '' : st.q ? `No saved case matches "${st.q}".` : 'No templated patients yet. A project saved here appears in this list.');
     } catch (e) {
       if (seq !== st.seq) return;
       more.hidden = true;
@@ -745,21 +1358,49 @@ export function showList(box) {
       say(`Could not load the patient list: ${why(e)}. `, 'bad'); msg.appendChild(button('Try again', () => load(true)));
     }
   }
-  function row(m, viewer = ME) {
-    const li = node('li', 'case'); li.dataset.id = String(m.id || '');
-    const pt = isObj(m.patient) ? m.patient : {}, who = pt.name || (pt.recordNo ? `Record ${pt.recordNo}` : 'Name left out');
-    const side = `${m.side === 'L' ? 'Left' : 'Right'} ${m.procedure === 'knee' ? 'knee' : 'hip'}`;
+  // an error that says the case itself cannot be opened (not: no connection, a busy server, not signed in, not yours, over quota)
+  const brokenOpen = e => !(e instanceof ApiError) || e.status === 500 || e.status === 422 || (e.status === 503 && e.code !== 'busy');
+  // G: the patient group the row is in; markTxt: "on screen" or "last opened" for the case this page has open or opened last
+  function row(m, viewer = ME, inGroup = false, G = null, markTxt = '') {
+    const li = node('li', 'case' + (inGroup ? ' sub' : '') + (markTxt ? ' cmark' : '')); li.dataset.id = String(m.id || '');
+    const pt0 = isObj(m.patient) ? m.patient : {}, pt = H.S.set.share ? { hospital: pt0.hospital } : pt0;   // sharing mode: identity hidden
+    const who = H.S.set.share ? 'Patient details hidden (sharing mode)' : pt.name || (pt.recordNo ? `Record ${pt.recordNo}` : 'Name left out');
+    const kc = isObj(m.images);   // a knee case (contract section 12): its films under it (a button each)
+    const side = `${m.side === 'L' ? 'Left' : 'Right'} ${m.procedure === 'knee' ? 'knee' : 'hip'}${kc ? ' case' : ''}`;
     const open = node('button', 'copen'); open.type = 'button';
-    const top = node('span', 'ctop'); top.append(node('b', 'cname', who), node('span', 'cside', side), node('span', 'cdate', fmtWhen(m.updatedAt)));
+    const top = node('span', 'ctop'); top.append(node('b', 'cname' + (inGroup ? ' sr-only' : ''), who), node('span', 'cside', side), node('span', 'cdate', fmtWhen(m.updatedAt)));
     const imp = node('span', 'cimp', implantsText(m.implants) || 'no implants placed');
-    const by = node('span', 'cby', [pt.name && pt.recordNo ? `Record ${pt.recordNo}` : '', m.updatedBy && m.updatedBy.em ? `saved by ${m.updatedBy.em}` : '', Array.isArray(m.collaborators) && m.collaborators.length ? `shared with ${m.collaborators.length}` : ''].filter(Boolean).join(' · '));
-    open.append(top, imp, by); open.setAttribute('aria-label', `Open ${who}, ${side}, saved ${fmtWhen(m.updatedAt)}`);
-    open.onclick = async () => {
+    const by = node('span', 'cby', [pt.name && pt.recordNo && !inGroup ? `Record ${pt.recordNo}` : '', !kc ? '1 film' : '', m.updatedBy && m.updatedBy.em ? `saved by ${m.updatedBy.em}` : '', Array.isArray(m.collaborators) && m.collaborators.length ? `shared with ${m.collaborators.length}` : ''].filter(Boolean).join(' · '));
+    if (markTxt) top.appendChild(node('span', 'cnow', markTxt));
+    open.append(top);
+    let films = null;
+    if (kc) {   // AP ✓ · Lateral ✓ · Skyline – · Long leg ✓: each saved film opens the case with that film in front
+      const fl = node('span', 'cfilms'), have = ROLES.filter(r => isObj(m.images[r]));
+      for (const r of ROLES) {
+        const on = have.includes(r), c = on ? node('button', 'cfilm on', `${ROLE_NAME[r]} ✓`) : node('span', 'cfilm', `${ROLE_NAME[r]} –`);
+        c.title = on ? `Open the case with its ${ROLE_NAME[r].toLowerCase()} film in front` : `no ${ROLE_NAME[r].toLowerCase()} film yet`;
+        if (on) { c.type = 'button'; c.setAttribute('aria-label', `Open the ${ROLE_NAME[r]} film of ${who}, ${side}`); c.onclick = () => go(r); }
+        fl.appendChild(c);
+      }
+      fl.setAttribute('aria-label', `Films: ${have.map(r => ROLE_NAME[r]).join(', ') || 'none'}; missing: ${ROLES.filter(r => !have.includes(r)).map(r => ROLE_NAME[r]).join(', ') || 'none'}`);
+      films = fl;
+    }
+    open.append(imp, by); open.setAttribute('aria-label', `Open ${who}, ${side}, saved ${fmtWhen(m.updatedAt)}${kc ? `, ${ROLES.filter(r => isObj(m.images[r])).length} of 4 films` : ''}`);
+    const go = async role => {
       say('Opening the case…'); for (const b of sec.querySelectorAll('button')) b.disabled = true;
-      try { const done = await openCase(m.id); if (done === false) say(''); }
-      catch (e) { say(`Could not open that case: ${e instanceof ApiError ? why(e) : e.message || e}.`, 'bad'); if (e instanceof ApiError && e.status === 401) msg.appendChild(signinLink()); }
+      try { const done = await openCase(m.id, { role }); if (done === false) say(''); }
+      catch (e) {
+        say(`Could not open that case: ${e instanceof ApiError ? why(e) : e.message || e}.`, 'bad'); if (e instanceof ApiError && e.status === 401) msg.appendChild(signinLink());
+        // a case that cannot be opened (its files unreadable, refused by the store, not what the page can read) can be removed for good (21 Oct 2026)
+        if (brokenOpen(e) && mayManage(m, viewer) && !li.querySelector('.cpurge')) {
+          const pg = button('Delete (permanent)', () => { const no = listBusy(String(m.id)); if (no) { say(no, 'bad'); return; } return runDelete('case', { id: m.id, what: H.S.set.share ? '' : who, report: t => say(t, 'bad'), onDone: () => { dropCase(li, G, m); say('Deleted permanently.' + emptyNote()); } }); }, 'cdel cpurge', 'This case cannot be opened. Remove it from the server for good (not only from the list)');
+          pg.setAttribute('aria-label', `Delete ${who} permanently`);
+          (act.isConnected ? act : li).appendChild(pg); li.classList.add('broken');
+        }
+      }
       finally { for (const b of sec.querySelectorAll('button')) b.disabled = false; }
     };
+    open.onclick = () => go(null);
     const act = node('div', 'cact');
     const ed = node('div', 'cshare'); ed.hidden = true;
     const share = button('Share', () => {
@@ -775,7 +1416,7 @@ export function showList(box) {
           const before = [...(m.collaborators || [])].sort().join(','), r = await call('POST', `/projects/${m.id}/collaborators`, { json: { collaborators: p.list } });
           m.collaborators = Array.isArray(r.collaborators) ? r.collaborators : p.list;
           if (H.S.caseRef && H.S.caseRef.id === m.id && [...m.collaborators].sort().join(',') !== before) caseOnScreen({ ...H.S.caseRef, rev: H.S.caseRef.rev + 1 });   // the server counts a change of sharing as a version
-          ed.hidden = true; li.replaceWith(row(m, viewer));
+          ed.hidden = true; li.replaceWith(row(m, viewer, inGroup, G, markTxt));
           say(m.collaborators.length ? `Shared with ${m.collaborators.join(', ')}.` : 'Not shared with anyone now.');
         } catch (e) { say(`Not shared: ${why(e)}.`, 'bad'); }
       }, 'primary');
@@ -783,19 +1424,62 @@ export function showList(box) {
       ed.append(lab, note, r2); inp.focus();
     }, '', 'Share this case with colleagues');
     share.setAttribute('aria-label', `Share ${who}`);
-    const hide = button('Hide', async () => {
+    const hide = button('Hide (keeps files)', async () => {
       if (!confirm(`Hide ${who} (${side}) from the templated-patients list? It is not deleted: the case stays on the server.`)) return;
       try {
         await call('POST', `/projects/${m.id}/hide`, { json: {} });
         if (H.S.caseRef && H.S.caseRef.id === m.id) caseOnScreen(null);   // saving the X-ray on screen again (Save project) starts a new case; it is not saved automatically any more
-        li.remove(); say('Hidden from the list (kept on the server).');
-        if (!ul.children.length && !st.next) say('Hidden from the list (kept on the server). No other templated patients here.');
+        dropCase(li, G, m); say('Hidden from the list (kept on the server).' + emptyNote());
       } catch (e) { say(`Not hidden: ${why(e)}.`, 'bad'); }
     }, '', 'Take this case off the list (it is kept on the server)');
-    hide.setAttribute('aria-label', `Hide ${who}`);
-    if (mayManage(m, viewer)) { act.append(share, hide); li.append(open, act, ed); }   // only where the server would allow them
-    else li.append(open);
+    hide.setAttribute('aria-label', `Hide ${who}, ${side} (keeps files)`);
+    // the case removed for good (22 Oct 2026; POST /projects/<id>/purge, contract section 14): only where Hide is offered,
+    // after the case is read again (a version saved since the list was loaded is not deleted unseen) and the page's own
+    // dialog says what is lost, Cancel first and focused
+    const del = button('Delete (permanent)', () => listDelete(m, li, G, who, side, del), 'cdel', 'Remove this case and all its X-rays from the server for good');
+    del.setAttribute('aria-label', `Delete ${who}, ${side}, permanently`);
+    if (mayManage(m, viewer)) { act.append(share, hide, del); li.append(open, act); if (films) li.appendChild(films); li.append(ed); }   // only where the server would allow them
+    else { li.append(open); if (films) li.appendChild(films); }
     return li;
+  }
+  async function listDelete(m, li, G, who, side, btn) {
+    const id = String(m.id || ''); if (!ID_RE.test(id)) return;
+    let no = listBusy(id); if (no) { say(no, 'bad'); return; }
+    btn.disabled = true;
+    try {
+      let got;
+      try { got = await call('GET', `/projects/${id}`); }
+      catch (e) {
+        if (gone404(e)) load(true, 'Not deleted: this case is no longer in your patient list (deleted or hidden elsewhere). The list was reloaded.');
+        else say(`Not deleted: ${why(e)}.`, 'bad');
+        return;
+      }
+      const cur = isObj(got.meta) ? got.meta : {};
+      if (cur.rev !== m.rev || String(cur.updatedAt || '') !== String(m.updatedAt || '')) {
+        load(true, 'Not deleted: this case was saved again after the list was loaded (here or elsewhere). The list was reloaded: look at it again before deleting.'); return;
+      }
+      const share = !!H.S.set.share, pt = isObj(m.patient) ? m.patient : {}, kc = isObj(m.images);
+      const roles = kc ? ROLES.filter(r => isObj(m.images[r])) : [], nf = kc ? roles.length : 1;
+      const collab = Array.isArray(m.collaborators) ? m.collaborators.length : 0;
+      const ownerEm = isObj(m.owner) && typeof m.owner.em === 'string' ? m.owner.em : '';
+      const notMine = !ME || !isObj(m.owner) || m.owner.uid !== ME.uid;
+      const facts = [
+        share ? `${side}, saved ${fmtWhen(m.updatedAt)} (patient details hidden: sharing mode)` : `${who}${pt.name && pt.recordNo ? ` (record ${pt.recordNo})` : ''}: ${side}, saved ${fmtWhen(m.updatedAt)}`,
+        `${nf} film${nf === 1 ? '' : 's'}${kc ? `: ${roles.map(r => ROLE_NAME[r]).join(', ') || 'none'}` : ''}`,
+        `Implants: ${implantsText(m.implants) || 'none placed'}`,
+        m.updatedBy && m.updatedBy.em ? `Saved by ${m.updatedBy.em}` : '',
+        collab ? `Shared with ${collab} ${collab === 1 ? 'person' : 'people'}; they lose it too` : 'Not shared with anyone',
+        notMine && ownerEm ? `Owner: ${ownerEm} (not you)` : '',
+      ].filter(Boolean);
+      const pick = await choose('Delete this patient case PERMANENTLY? Every X-ray, plan and note in it is removed from the server for good and cannot be brought back. (Hide only takes it off the list and keeps the files.)',
+        [['Cancel', null, ''], ['Delete permanently', 'del', 'cdel']], facts);
+      if (pick !== 'del') return;
+      no = listBusy(id); if (no) { say(no, 'bad'); return; }   // opened or saved meanwhile
+      try { await purgeCall(`/projects/${id}/purge`); }
+      catch (e) { say(`Not deleted: ${why(e)}.`, 'bad'); return; }
+      if (LAST_CASE === id) LAST_CASE = null;
+      dropCase(li, G, m); say('Deleted permanently.' + emptyNote());
+    } finally { btn.disabled = false; }
   }
   let t = 0;
   q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { const v = q.value.trim(); if (v !== st.q) { st.q = v; load(true); } }, 350); });
@@ -817,26 +1501,34 @@ export function showList(box) {
 // copy does none of this. What is stored is what Save project stores (sharing mode leaves the name out, as before).
 export const PLACEHOLDER = 'Unnamed film, ';
 const AUTO = { delay: 20000, maxWait: 60000, step: 400, retry: [5000, 15000, 30000, 60000, 120000], paused: false };
-let FILM = null;             // the film on screen: { img, orig, ref, how, eligible, wantCase, created, placeholder, conflict, gone, pend, snap, status, ... }
+// A knee case (contract section 12) is one "film" here: one case key (its own draft id, not an image's hash), one queue of
+// saves, one status, one set of kept changes, whichever of its films is on screen; adding a film is a change like any
+// other. unit: what the page has open (app.js H.unit(): the knee case, else the X-ray), so switching between a case's
+// films never closes it.
+let FILM = null;             // the film on screen: { ck, kc, unit, orig, ref, how, eligible, wantCase, created, placeholder, conflict, gone, pend, snap, status, ... }
 const AWAY = new Set();      // films no longer on screen with a save still to make (their snapshot) or to retry
 let NEXT_PLACEHOLDER = null; // openCase → filmOpened: the list's placeholder name of the case being opened
+let LAST_CASE = null;        // the id of the case last opened or saved on this page (the list opens its patient group)
 let QUEUE = Promise.resolve();
 // every write to the server, automatic or Save project, one after another: one upload at a time, and two saves of the same
 // case never race on the same version
 let JOBS = 0;   // writes queued or running
 function serial(fn) { JOBS++; const p = QUEUE.then(fn).finally(() => { JOBS--; }); QUEUE = p.then(() => {}, () => {}); return p; }
-const live = F => !!F && F === FILM && H.S.img === F.img;
+const live = F => !!F && F === FILM && !!F.unit && H.unit() === F.unit;
 const refOf = F => (live(F) ? H.S.caseRef : F.ref);
 function setRef(F, r) {
   F.ref = r || null; if (live(F)) H.S.caseRef = r || null;
-  if (F.orig && F.orig.sha256) remember(F.orig.sha256, r);
+  if (r && r.id) LAST_CASE = r.id;   // the list opens this case's patient and marks the row (22 Oct 2026)
+  if (F.ck) { remember(F.ck, r); if (F.kc && r) rememberFilms(F.ck, r); }
 }
 function caseOnScreen(r) { if (FILM && live(FILM)) { setRef(FILM, r); if (!r) { FILM.status = null; render(); } } else H.S.caseRef = r; }
 // may the film on screen be left without asking? (its changes are saved automatically before the other opens)
 const autoCovers = () => !!FILM && live(FILM) && FILM.eligible && !FILM.conflict && !FILM.gone && !!(refOf(FILM) || (FILM.wantCase && !FILM.created));
-function metaFor(F) {
-  const meta = H.metaNow();
-  if (F && F.placeholder && !H.S.set.share && !meta.patient.name && !meta.patient.recordNo) meta.patient = { name: F.placeholder };
+function metaFor(F) { return withPlaceholder(H.metaNow(), F && F.placeholder, H.S.set.share); }
+// the list's "Unnamed film, <date>" for a case with neither a name nor a record number, its hospital and age kept (Astra,
+// round 2, P2 4: the whole patient was replaced); none in sharing mode
+export function withPlaceholder(meta, placeholder, share) {
+  if (placeholder && !share && !meta.patient.name && !meta.patient.recordNo) meta.patient = { ...meta.patient, name: placeholder };
   return meta;
 }
 const hhmm = d => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -845,10 +1537,12 @@ const placeholderNow = () => { const d = new Date(); return `${PLACEHOLDER}${Str
 // ---------- which case a film is (this tab, and this browser when plans are kept here) ----------
 // Only ids, versions and image hashes: no names. The tab's list ends with the tab; the browser's only when plans are kept
 // in this browser (Auto plan settings), and "Forget plans on this computer" removes it with the plans (aoc-tpl:).
+// Keyed by case key (contract section 12): a single film's image sha256, or a knee case's "kc<draft id>"; each film of a
+// knee case is also remembered by its image's sha256, with the case key (ck), so opening that X-ray again opens its case.
 const TAB_KEY = 'aoc-tpl-cases', LOCAL_KEY = sha => 'aoc-tpl:case:' + sha;
 function remember(sha, r) {
-  if (!SHA_RE.test(String(sha))) return;
-  const v = r && ID_RE.test(String(r.id)) ? { id: r.id, rev: r.rev, sha256: r.sha256 || null } : null;
+  if (!CK_RE.test(String(sha))) return;
+  const v = r && ID_RE.test(String(r.id)) ? { id: r.id, rev: r.rev, sha256: r.sha256 || null, ...(isObj(r.shas) ? { shas: shasOf(r) } : {}), ...(typeof r.ck === 'string' && CK_RE.test(r.ck) ? { ck: r.ck } : {}) } : null;
   try {
     const m = JSON.parse(sessionStorage.getItem(TAB_KEY) || '{}') || {};
     if (v) { delete m[sha]; m[sha] = v; } else delete m[sha];
@@ -857,8 +1551,9 @@ function remember(sha, r) {
   } catch (e) { /* storage off */ }
   try { if (v && H.S.set.keepLocal) localStorage.setItem(LOCAL_KEY(sha), JSON.stringify(v)); else if (!v) localStorage.removeItem(LOCAL_KEY(sha)); } catch (e) { /* storage off */ }
 }
+function rememberFilms(ck, r) { if (r && isObj(r.shas)) for (const s of Object.values(shasOf(r))) remember(s, { id: r.id, rev: r.rev, sha256: null, ck }); }
 export function knownCase(sha) {
-  if (!H || !H.STANDALONE || !SHA_RE.test(String(sha))) return null;
+  if (!H || !H.STANDALONE || !CK_RE.test(String(sha))) return null;
   let r = null;
   try { r = (JSON.parse(sessionStorage.getItem(TAB_KEY) || '{}') || {})[sha] || null; } catch (e) { r = null; }
   if (!r && H.S.set.keepLocal) { try { r = JSON.parse(localStorage.getItem(LOCAL_KEY(sha)) || 'null'); } catch (e) { r = null; } }
@@ -868,7 +1563,7 @@ export function knownCase(sha) {
 // saves keep current) instead of a new case being made. true: done. false: open it as a new film (the case is gone or
 // hidden). A case that cannot be reached now (no connection) opens the film without making a case, so none is doubled.
 export async function openKnown(ref, bytes, sha) {
-  try { await openCase(ref.id, { force: true, bytes, how: 'known' }); return true; }
+  try { await openCase(ref.id, { force: true, bytes, sha, how: 'known' }); return true; }
   catch (e) {
     if (e instanceof ApiError && e.status === 404) { remember(sha, null); return false; }
     if (e instanceof ApiError) { NO_CASE = { sha, text: `Not saved: this X-ray is already in the patient list, which cannot be reached now (${why(e)}); open it from the list later` }; return false; }
@@ -893,7 +1588,7 @@ const UNSENT_TAB = 'aoc-tpl-unsent', UNSENT_LOCAL = 'aoc-tpl:unsent:';
 const rkey = (sha, origin) => `${sha}:${origin || '-'}`;
 let VSEQ = 0;
 const nextV = () => { VSEQ = Math.max(VSEQ + 1, Date.now() * 1000); return VSEQ; };
-const validRec = r => isObj(r) && isObj(r.state) && SHA_RE.test(String(r.sha)) && Number.isFinite(r.v);
+const validRec = r => isObj(r) && isObj(r.state) && CK_RE.test(String(r.sha)) && Number.isFinite(r.v);   // sha: the case key (an image's sha256, or a knee case's)
 function tabRecs() { try { const m = JSON.parse(sessionStorage.getItem(UNSENT_TAB) || '{}'); return isObj(m) ? m : {}; } catch (e) { return {}; } }
 function localRecs() {
   const out = {};
@@ -949,8 +1644,8 @@ export const UNSENT_MAX = 6;
 let KEEP_WHY = '';
 function keepUnsent(F, state) {
   KEEP_WHY = 'storage full';
-  const sha = F.sha, origin = F.uid;
-  if (!SHA_RE.test(String(sha)) || !isObj(state)) return false;
+  const sha = F.ck, origin = F.uid;
+  if (!CK_RE.test(String(sha)) || !isObj(state)) return false;
   const key = rkey(sha, origin), rec = { sha, origin, v: nextV(), at: Date.now(), label: clip(F.label || labelOf(F), 100), state };
   const all = unsentAll();
   if (!all[key] && Object.keys(all).length >= UNSENT_MAX) { KEEP_WHY = `${UNSENT_MAX} X-rays with unsaved changes are already kept in this tab`; return false; }
@@ -972,45 +1667,79 @@ function dropKey(key, upTo = Infinity) {
   try { const r = JSON.parse(localStorage.getItem(UNSENT_LOCAL + key) || 'null'); if (r && !(r.at > upTo)) localStorage.removeItem(UNSENT_LOCAL + key); } catch (e) { /* off */ }
 }
 // film F's own save, taken at time takenAt, was answered: its own records written before that are done with
-function dropUnsent(F, takenAt, uid = F && F.uid) { if (F && F.sha && uid) dropKey(rkey(F.sha, uid), takenAt); }
+function dropUnsent(F, takenAt, uid = F && F.uid) { if (F && F.ck && uid) dropKey(rkey(F.ck, uid), takenAt); }
 const stateText = st => { const c = { ...st }; delete c.saved; delete c.pendingSend; return JSON.stringify(c); };
+// What the kept-changes store holds of a project: a single film's state; a knee case's films (each image described
+// without its file name, its state without the save time) and the shared plan, never an image or a typed patient detail
+export function keptStateOf(p) {
+  if (!isObj(p) || p.v !== 2) return isObj(p) ? p.state : null;
+  const films = {};
+  for (const [r, f] of Object.entries(p.films || {})) {
+    const st = { ...f.state }; delete st.saved; st.pendingSend = null;
+    films[r] = { image: { mime: f.image.mime, sha256: f.image.sha256, size: f.image.size, width: f.image.width, height: f.image.height }, state: st, qc: f.qc || {} };
+  }
+  return { kc: true, cid: p.case.cid, side: p.patient.side, active: p.active, films, shared: p.shared || {}, notices: p.notices || [] };
+}
+// a knee case's kept record checked as a project would be (its films' images described without a file name)
+export function keptCaseProblems(st, side) {
+  if (!isObj(st) || !st.kc || !isObj(st.films)) return ['not a knee case'];
+  const films = {};
+  for (const [r, f] of Object.entries(st.films)) films[r] = isObj(f) ? { ...f, image: { ...(f.image || {}), fileName: 'image' } } : f;
+  return caseProblems({ format: FORMAT, v: 2, savedAt: 'kept', libraryId: NO_LIBRARY, patient: { side, procedure: 'knee' }, case: { cid: st.cid, kind: 'knee' }, films, active: st.active, shared: st.shared });
+}
 async function offerUnsent(F) {
-  const sha = F.sha, found = sha && unsentOf(sha);
-  if (!found || !live(F)) return;
+  const sha = F.ck, found = sha && unsentOf(sha);
+  if (!found || !live(F) || F.adopted) return;
   const rec = found.rec;
-  let now = null; try { now = H.projectNow().state; } catch (e) { now = null; }
+  let now = null; try { now = H.keptNow(); } catch (e) { now = null; }
   if (now && stateText(now) === stateText(rec.state)) { dropKey(found.key, rec.at); return; }   // what was kept is what is here
   const when = hhmm(new Date(rec.at));
-  const pick = await choose(`This X-ray has changes from ${when} that may not have reached the patient list (the page was closed, reloaded or had to let them go).`,
+  const pick = await choose(`This ${F.kc ? 'knee case' : 'X-ray'} has changes from ${when} that may not have reached the patient list (the page was closed, reloaded or had to let them go).`,
     [['Put them back', 'back', 'primary'], ['Discard them', 'drop', '']], 'Put them back: they replace the plan on the screen and are saved to the patient list. Discard: they are forgotten.');
   if (!live(F)) return;
   if (pick === 'back') {
-    const pr = stateProblems(rec.state, H.S.img.cols, H.S.img.rows);
+    const pr = F.kc ? keptCaseProblems(rec.state, H.S.side) : stateProblems(rec.state, H.S.img.cols, H.S.img.rows);
     if (pr.length) { dropKey(found.key, rec.at); return H.prompt(`The kept changes could not be put back: ${pr.slice(0, 2).join('; ')}.`); }
-    H.applyState(rec.state); F.srvKey = null; F.first = 0;
+    // a knee case: films whose original X-ray is not on this page are named, to be opened again (contract section 12)
+    const missing = F.kc ? H.applyCaseState(rec.state) : (H.applyState(rec.state), []);
+    F.srvKey = null; F.first = 0;
     F.uid = rec.origin || F.uid;   // this opening carries those changes on: its answered save removes their record
-    H.prompt(`The changes from ${when} are back on the screen; they are being saved to the patient list.`);
+    H.prompt(`The changes from ${when} are back on the screen; they are being saved to the patient list.${missing.length ? ` Open these X-rays again to restore their films: ${missing.join('; ')}.` : ''}`);
     flushSoon(F);
   } else if (pick === 'drop') dropKey(found.key, rec.at);
 }
+// A knee case whose changes were kept (the page closed before the patient list had them, its case perhaps never made):
+// the newest kept record of a knee case holding the X-ray with this sha256, offered when that X-ray is opened again
+// (contract section 12: "recovery says which original images must be reopened") → { key, rec } or null
+export function keptCaseFor(sha) {
+  if (!H || !H.STANDALONE || !SHA_RE.test(String(sha))) return null;
+  let best = null;
+  for (const [k, r] of Object.entries(unsentAll())) if (r.state && r.state.kc && isObj(r.state.films) && Object.values(r.state.films).some(f => isObj(f) && isObj(f.image) && f.image.sha256 === sha) && (!best || r.v > best.rec.v)) best = { key: k, rec: r };
+  return best;
+}
+export function dropKept(key) { dropKey(key); }
+// a knee case just restored from its kept record (app.js kcRestoreFrom): this opening carries those changes on, so the record
+// is not offered again and is removed only when a save of this opening is answered
+export function adoptKept(kept) { const F = FILM; if (F && live(F) && kept && kept.rec) { F.adopted = true; F.uid = kept.rec.origin || F.uid; F.srvKey = null; } }
 
 // ---------- the film's life on the page (app.js setImage) ----------
 // F.srvKey: the revision (app.js stateKey) the patient list has for this film: what the server answered for, never what
 // was only downloaded as a file (finding 1). srvDirty: the plan on screen is not that one.
 const srvDirty = F => (live(F) ? H.revision() !== F.srvKey : !!F.snap);
 const needsCase = F => !refOf(F) && F.wantCase && !F.created;
-// a film is put on screen: how = 'file' (an image file), 'aotp' (a project file), 'list' or 'known' (a case from the list)
+// a film is put on screen: how = 'file' (an image file), 'aotp' (a project file), 'list' or 'known' (a case from the list),
+// 'case' (a knee case started on this page). A knee case is one film here whichever of its films is shown.
 export function filmOpened(how) {
   if (!H || !H.STANDALONE) return;
-  const S = H.S, ref = S.caseRef;
-  const F = { uid: ridOf().slice(0, 12), sha: S.orig && S.orig.sha256, openedAt: Date.now(), img: S.img, orig: S.orig, ref, how, eligible: !!(S.orig && S.orig.sha256), created: !!ref, conflict: false, gone: false, lost: [], snap: null,
+  const S = H.S, ref = S.caseRef, kc = H.isCase(), ck = H.caseKeyNow();
+  const F = { uid: ridOf().slice(0, 12), ck, kc, sha: kc ? null : S.orig && S.orig.sha256, openedAt: Date.now(), unit: H.unit(), orig: kc ? null : S.orig, ref, how, eligible: kc ? !!ck : !!(S.orig && S.orig.sha256), created: !!ref, conflict: false, gone: false, lost: [], snap: null,
     srvKey: ref ? H.revision() : null, status: null, timer: 0, first: 0, retryN: 0, retryT: 0, nextTry: 0, waitUp: false, queued: false, step: null, placeholder: NEXT_PLACEHOLDER };
-  const blocked = NO_CASE && F.eligible && NO_CASE.sha === S.orig.sha256 ? NO_CASE : null; NO_CASE = null;
-  F.wantCase = F.eligible && !ref && !blocked && (how === 'file' || how === 'aotp');
+  const blocked = NO_CASE && F.eligible && !kc && NO_CASE.sha === S.orig.sha256 ? NO_CASE : null; NO_CASE = null;
+  F.wantCase = F.eligible && !ref && !blocked && (how === 'file' || how === 'aotp' || how === 'case');
   if (F.wantCase && !H.patientKnown() && !S.set.share) F.placeholder = placeholderNow();
   try { F.step = H.stepNow(); } catch (e) { F.step = null; }
   FILM = F;
-  if (ref) remember(S.orig && S.orig.sha256, ref);
+  if (ref) { remember(ck, ref); if (kc) rememberFilms(ck, ref); }
   if (blocked) status(F, 'fail', blocked.text, 'The X-ray is already a case in your patient list. To go on with it, open it from the list (Open) once the connection is back; this copy is not saved to the list, so no second case is made.');
   else if (F.wantCase) { status(F, 'saving'); enqueue(F); }
   else render();
@@ -1025,11 +1754,24 @@ export function filmClosing() {
   const F = FILM;
   if (!F || !live(F)) return;
   clearTimeout(F.timer); F.timer = 0; F.first = 0; F.waitUp = false;
-  const ref = H.S.caseRef, dirty = !!ref && H.revision() !== F.srvKey, need = !ref && F.wantCase && !F.created;
+  const ref = H.S.caseRef, dirty = !!ref && H.revision() !== F.srvKey, need = !ref && F.wantCase && !F.created, partial = unsentNow(F);
   F.label = labelOf(F);
-  let state = null; const stateNow = () => { if (!state) state = H.projectNow().state; return state; };
-  F.ref = ref; F.img = null;
+  let state = null; const stateNow = () => { if (!state) state = H.keptNow(); return state; };
+  // a knee case with films whose plan never reached the server (their X-ray not opened again): kept for the next opening
+  // whatever else happens below, so closing the case never loses them (Astra, 15 Oct, P1 2)
+  let keptPartial = false;
+  if (partial && F.eligible) { try { keptPartial = keepUnsent(F, stateNow()); } catch (e) { keptPartial = false; } }
+  F.ref = ref; F.unit = null;
+  if (F.kc) F.snapImgs = H.images();   // a knee case's films: their bytes, kept below only while the server lacks them
   if (!F.eligible) { FILM = null; return; }
+  if (H.patientPending()) {   // a restored case whose patient was never read: its changes stay in the kept store (offered again), nothing sent
+    let ok = false; try { ok = keepUnsent(F, stateNow()); } catch (e) { ok = false; }
+    if (!ok) {   // could not be kept in this browser: the case stays on this page (as section 11c), tried again (Fable, round 9)
+      try { F.snap = { project: null, meta: null, rev: null, at: Date.now(), uid: F.uid, userDirty: true, keepOnly: true, kept: stateNow(), share: !!H.S.set.share }; F.keepFail = KEEP_WHY; AWAY.add(F); H.prompt(`The knee case open before (${F.label}) could not be saved yet (its patient is still to be read from the list) and this browser could not keep its changes (${KEEP_WHY}): they stay on this page; see the panel.`); }
+      catch (e) { /* nothing more can be done */ }
+    }
+    FILM = null; return;
+  }
   if (F.conflict || F.gone) {   // never saved automatically: kept for the next opening, or on this page if it cannot be
     let ok = !dirty || !!F.replaced; try { if (!ok) ok = keepUnsent(F, stateNow()); } catch (e) { ok = false; }
     if (!ok) {
@@ -1038,11 +1780,17 @@ export function filmClosing() {
     }
     FILM = null; return;
   }
+  if (partial && !keptPartial && !need && !dirty) {   // could not be kept in this browser: the case stays on this page
+    try { F.snap = { project: H.projectNow(), meta: metaFor(F), rev: H.revision(), at: Date.now(), uid: F.uid, userDirty: true, partial: true, keepOnly: true, kept: stateNow(), share: !!H.S.set.share }; AWAY.add(F); H.prompt(`The knee case open before (${F.label}) has films whose plans are not in the patient list (their X-rays were not opened again), and this browser could not keep them (${KEEP_WHY}): they stay on this page; see the panel.`); }
+    catch (e) { /* nothing more can be done */ }
+    FILM = null; return;
+  }
   if (!need && !dirty) { FILM = null; return; }
-  try { const project = H.projectNow(); aotpCheck(project); F.snap = { project, meta: metaFor(F), rev: H.revision(), at: Date.now(), uid: F.uid, userDirty: H.isDirty() || !!F.ref }; }
+  try { const project = H.projectNow(); aotpCheck(project); F.snap = { project, meta: metaFor(F), rev: H.revision(), at: Date.now(), uid: F.uid, userDirty: H.isDirty() || !!F.ref, partial, kept: partial ? stateNow() : null, share: !!H.S.set.share }; }
   catch (e) { F.snap = null; FILM = null; return; }
   FILM = null;
   if (F.ref && F.orig && F.orig.sha256 === F.ref.sha256) F.orig = { sha256: F.orig.sha256, mime: F.orig.mime, name: F.orig.name, bytes: null };   // the server has the image
+  if (F.kc) { const held = new Set(Object.values(F.ref ? shasOf(F.ref) : {})), keep = {}; for (const [s2, o] of Object.entries(F.snapImgs || {})) if (!held.has(s2)) keep[s2] = o; F.snapImgs = keep; }
   AWAY.add(F);
   for (const old of [...AWAY]) {   // the oldest first, never the one just closed
     if (AWAY.size <= AWAY_MAX || old === F) break;
@@ -1056,14 +1804,15 @@ export function filmClosing() {
 function labelOf(F) {
   const m = F.snap ? F.snap.meta : (() => { try { return H.metaNow(); } catch (e) { return null; } })();
   const side = m && m.side === 'L' ? 'Left' : 'Right', joint = m && m.procedure === 'knee' ? 'knee' : 'hip';
+  if (F.kc) { let n = 0; try { n = Object.keys((F.snap ? F.snap.project : H.projectNow()).films || {}).length; } catch (e) { n = 0; } return `${side} knee case opened ${hhmm(new Date(F.openedAt || Date.now()))}, ${n} film${n === 1 ? '' : 's'}, case ${String(F.ck).slice(2, 8)}`; }
   return `${side} ${joint} X-ray opened ${hhmm(new Date(F.openedAt || Date.now()))}, image ${String((F.orig && F.orig.sha256) || '').slice(0, 6)}`;
 }
 // a film no longer on screen is let go: its unsaved plan (if any) goes to the kept-changes store when keep is true
 // → false (and nothing let go) when keep is asked and the changes could not be written: the film stays on the page
 function letGo(F, keep) {
-  if (keep && F.snap && F.orig && !keepUnsent(F, F.snap.project.state)) return false;
+  if (keep && F.snap && (F.orig || F.kc) && !keepUnsent(F, F.snap.kept || keptStateOf(F.snap.project))) return false;   // (kept: a knee case's films left out of its saves too)
   AWAY.delete(F); clearTimeout(F.retryT); F.retryT = 0; F.nextTry = 0;
-  F.snap = null; F.orig = null; F.gone = true;   // nothing more is sent for it
+  F.snap = null; F.orig = null; F.snapImgs = null; F.gone = true;   // nothing more is sent for it
   return true;
 }
 // something on the page changed (app.js save(), the panel, a pointer lifted): the plan is saved about 20 s after the
@@ -1115,44 +1864,54 @@ async function runJob(F, force = false) {
   if (force) { clearTimeout(F.retryT); F.retryT = 0; F.nextTry = 0; }
   if (F.conflict || F.gone) return;
   let ref = refOf(F);
-  let project, meta, rev, base, at, uid;
+  let project, meta, rev, base, at, uid, partial = false;
   if (live(F)) {
     if (dragging()) { F.waitUp = true; return; }
     if (ref ? !srvDirty(F) : !needsCase(F)) { if (F.status && F.status.kind === 'offline') status(F, ref ? 'saved' : null); return; }
-    if (!ref) {   // a new case: is there one already for this image (another film of it, a save whose answer was lost)?
+    if (!ref) {   // a new case: is there one already for this image or knee case (another opening of it, a save whose answer was lost)?
       status(F, 'saving');
-      const sha = F.orig.sha256;
+      const sha = F.ck;
       let got = null;
       try { got = await pendingCase(sha, F); } catch (e) { failed(F, e); return; }
       if (got && got.own && live(F)) { F.created = true; setRef(F, got.ref); }   // its own earlier save made it: saved on top below
       else if (got && live(F)) {
         const k = got.ref; remember(sha, k);
-        if (!H.isDirty()) { F.wantCase = false; await openKnown(k, F.orig.bytes, sha); return; }   // nothing done here yet: its case, as saved
+        if (!H.isDirty()) { F.wantCase = false; await openKnown(k, F.kc ? null : F.orig.bytes, F.kc ? null : sha); return; }   // nothing done here yet: its case, as saved
         F.created = true; F.wantCase = false; setRef(F, k); F.conflict = true; status(F, 'conflict'); return;   // both changed: never one over the other
       }
       if (!live(F)) { enqueue(F); return; }
-      try { await sendImage({ bytes: F.orig.bytes, sha256: sha, mime: F.orig.mime }, () => {}); }   // the image first, then the plan as it is once it is there
-      catch (e) { if (e instanceof ApiError && e.status === 422) UPS.delete(sha); failed(F, e); return; }
+      // a single film: its image first, then the plan as it is once it is there; a knee case sends its films one by one
+      // with its saves (postCase)
+      if (!F.kc) {
+        try { await sendImage({ bytes: F.orig.bytes, sha256: sha, mime: F.orig.mime }, () => {}); }
+        catch (e) { if (e instanceof ApiError && e.status === 422) UPS.delete(sha); failed(F, e); return; }
+      }
       for (let i = 0; i < 100 && live(F) && (H.S.auto.busy || H.S.filling); i++) await sleep(100);
       if (!live(F)) { enqueue(F); return; }   // another film opened meanwhile: its snapshot is saved in turn
       ref = refOf(F);
     }
-    try { project = H.projectNow(); meta = metaFor(F); aotpCheck(project); rev = H.revision(); base = H.base(); at = Date.now(); uid = F.uid; }
+    try { await H.preparePatient(); } catch (e) { failed(F, e); return; }   // a restored case's patient, read from the list first (Fable, round 8)
+    if (!live(F)) { enqueue(F); return; }
+    try { project = H.projectNow(); meta = metaFor(F); aotpCheck(project); rev = H.revision(); base = H.base(); at = Date.now(); uid = F.uid; partial = unsentNow(F); }
     catch (e) { status(F, 'fail', `Not saved: ${e.message || e}`, 'The plan cannot be saved as it is: the page would refuse to open it. Change or undo the last step.'); return; }
   } else {
     if (!AWAY.has(F) || !F.snap) { AWAY.delete(F); return; }
+    if (F.snap.keepOnly) {   // nothing to save, only films the browser could not keep: try to keep them again
+      if (keepUnsent(F, F.snap.kept)) { F.snap = null; AWAY.delete(F); F.keepFail = ''; H.panel(); } else { F.keepFail = KEEP_WHY; H.panel(); }
+      return;
+    }
     if (!ref && F.created) { letGo(F, false); H.panel(); return; }   // its case was hidden meanwhile: nothing is made again
-    ({ project, meta, rev, at, uid } = F.snap);
+    ({ project, meta, rev, at, uid } = F.snap); partial = !!F.snap.partial;
   }
   status(F, 'saving');
-  const ctx = { F, auto: true, img: F.img, orig: F.orig, ref, live: () => live(F) };
+  const ctx = { F, auto: true, orig: F.orig, ck: F.ck, images: live(F) ? H.images() : F.snapImgs || {}, ref, live: () => live(F), share0: live(F) ? !!H.S.set.share : !!(F.snap && F.snap.share) };
   try {
     const r = await saveToServer(ctx, project, meta);
     if (r.ok) {
       F.created = true; F.retryN = 0; F.nextTry = 0; clearTimeout(F.retryT); F.retryT = 0;
       const cur = refOf(F);   // the list may have raised the version meanwhile (Share): keep the higher
       setRef(F, cur && cur.id === ctx.ref.id && cur.rev > ctx.ref.rev ? { ...ctx.ref, rev: cur.rev } : ctx.ref);
-      acked(F, rev, at, uid);
+      acked(F, rev, at, uid, partial);
       // the page's own "unsaved" mark: cleared only for the revision saved; if the page set a new starting point meanwhile
       // (its automatic search done), that stands unless the page is now exactly what was saved
       if (live(F) && (H.base() === base || H.revision() === rev)) H.markSaved(rev);
@@ -1169,12 +1928,22 @@ async function runJob(F, force = false) {
 }
 // the server has answered for revision rev of film F (taken at time at)
 // uid: the opening the saved plan was taken under (a plan put back later carries another one; Astra's fourth review)
-function acked(F, rev, at = Date.now(), uid = F.uid) {
+// partial: the save left out films whose X-ray is not on the page (a knee case restored from kept changes; Astra, 15 Oct,
+// P1 2): what the server answered for is not the whole case, so the kept changes stay (they hold those films' plans) until
+// a save that holds every film is answered
+function acked(F, rev, at = Date.now(), uid = F.uid, partial = false) {
   if (live(F)) F.srvKey = rev;
   if (!live(F) || !srvDirty(F)) F.storeFail = null;
-  if (F.snap && F.snap.rev === rev) { F.snap = null; if (AWAY.delete(F)) H.panel(); }
-  dropUnsent(F, at, uid);
+  if (F.snap && F.snap.rev === rev) {
+    // a case no longer on screen whose films left out could not be kept in this browser: it stays on the page until they are
+    if (partial && F.snap.kept && !keepUnsent(F, F.snap.kept)) { F.snap = { ...F.snap, keepOnly: true }; F.keepFail = KEEP_WHY; H.panel(); }
+    else { F.snap = null; if (AWAY.delete(F)) H.panel(); }
+  }
+  F.partial = !!partial;
+  if (!partial) dropUnsent(F, at, uid);
 }
+// the film on screen leaves films out of its saves (their kept changes must stay)
+const unsentNow = F => !!F && F.kc && live(F) && H.unsentRoles().length > 0;
 // a film no longer on screen that cannot be saved automatically (a newer version elsewhere, the case gone): its plan goes
 // to the kept-changes store and it is let go; opening that X-ray again offers it back (finding 6)
 function parked(F) {
@@ -1185,6 +1954,7 @@ function parked(F) {
 }
 // a save that failed: no connection (or the server busy) is tried again later and when the connection is back
 function failed(F, e) {
+  if (e && e.shareChanged) { status(F, 'saving'); setTimeout(() => { if ((live(F) && (needsCase(F) || refOf(F))) || AWAY.has(F)) enqueue(F, true); }, AUTO.step); return; }   // made again as it is now (a new case too)
   if (e instanceof ApiError && (e.status === 0 || e.status >= 500)) {
     const part = e.parts > 1 ? ` ${e.sent} of ${e.parts} parts of the X-ray are on the server; the rest follow.` : '';
     status(F, 'offline', 'Offline: will retry', `No connection to t.addisortho.com (or the server is busy). The plan stays on this page and is saved when the connection is back.${part}`);
@@ -1204,20 +1974,20 @@ function retryAll() { for (const F of [FILM, ...AWAY]) if (F && F.status && F.st
 function hiding() {
   HIDING = true;
   const F = FILM;
-  if (F && live(F) && F.eligible && (needsCase(F) || (refOf(F) && srvDirty(F)))) {   // also a film changed elsewhere or gone
-    let ok = false; try { ok = keepUnsent(F, H.projectNow().state); } catch (e) { ok = false; }
+  if (F && live(F) && F.eligible && (needsCase(F) || (refOf(F) && srvDirty(F)) || unsentNow(F))) {   // also a film changed elsewhere or gone, and a knee case whose saves leave films out
+    let ok = false; try { ok = keepUnsent(F, H.keptNow()); } catch (e) { ok = false; }
     F.storeFail = ok ? null : { text: `Not saved: ${KEEP_WHY === 'storage full' ? 'storage full' : 'too many kept'}`, detail: `This browser could not keep the unsaved changes for later (${KEEP_WHY}). Keep this page open until the patient list has them, or use Save project to save the file.` };
     if (!ok) status(F, 'fail', F.storeFail.text, F.storeFail.detail);
     if (!F.conflict && !F.gone && refOf(F) && !H.S.filling) { clearTimeout(F.timer); F.timer = 0; F.first = 0; enqueue(F); }
   }
-  for (const A of AWAY) if (A.snap && A.orig && !keepUnsent(A, A.snap.project.state)) A.keepFail = KEEP_WHY;
+  for (const A of AWAY) if (A.snap && (A.orig || A.kc) && !keepUnsent(A, A.snap.kept || keptStateOf(A.snap.project))) A.keepFail = KEEP_WHY;
 }
 function shown() { HIDING = false; }
 
 // ---------- films waiting for the patient list, in the Measurements and save segment (finding 6) ----------
 export function awayEl() {
   const d = node('div', 'projaway');
-  const kept = H && H.STANDALONE ? Object.entries(unsentAll()).filter(([k, r]) => ![...AWAY].some(F => rkey(F.sha, F.uid) === k) && !(FILM && rkey(FILM.sha, FILM.uid) === k)) : [];
+  const kept = H && H.STANDALONE ? Object.entries(unsentAll()).filter(([k, r]) => ![...AWAY].some(F => rkey(F.ck, F.uid) === k) && !(FILM && rkey(FILM.ck, FILM.uid) === k)) : [];
   if (!H || !H.STANDALONE || (!AWAY.size && !kept.length)) { d.hidden = true; return d; }
   if (kept.length) {   // changes kept in this tab (offered back when that X-ray is opened again)
     d.appendChild(node('div', 'pah', `Changes kept in this tab, offered back when the X-ray is opened again (${kept.length} of at most ${UNSENT_MAX}):`));
@@ -1235,7 +2005,7 @@ export function awayEl() {
     row.appendChild(button('Try now', () => { F.retryN = 0; enqueue(F, true); }, '', 'Send it to the patient list now'));
     row.appendChild(button('Discard', () => {
       if (!confirm(`Discard the changes of ${F.label} that are not in the patient list? They cannot be brought back.`)) return;
-      letGo(F, false); dropKey(rkey(F.sha, F.uid)); H.panel();
+      letGo(F, false); dropKey(rkey(F.ck, F.uid)); H.panel();
     }, '', 'Forget these changes'));
     d.appendChild(row);
   }
@@ -1271,7 +2041,8 @@ function render() {
   b.textContent = st.text;
   b.setAttribute('aria-label', `Patient list: ${st.text}${tap ? ' (details)' : ''}`);
   const unnamed = st.kind === 'saved' && FILM.placeholder && !H.S.set.share && !H.patientKnown();
-  b.title = `Patient list: ${st.text}${st.detail ? `. ${st.detail}` : ''}${tap ? ' (tap for details)' : unnamed ? ` as "${FILM.placeholder}" (tap to add the patient's name and record number)` : ''}`;
+  const noHosp = st.kind === 'saved' && !unnamed && !H.S.set.share && !H.hospitalKnown();   // (15 Oct: listed under "Hospital not set" until picked)
+  b.title = `Patient list: ${st.text}${st.detail ? `. ${st.detail}` : ''}${tap ? ' (tap for details)' : unnamed ? ` as "${FILM.placeholder}" (tap to add the patient's name and record number)` : noHosp ? ' under "Hospital not set" (tap to pick the hospital)' : ''}`;
   const say = `Patient list: ${st.text}`;
   if (sr.textContent !== say) sr.textContent = say;
 }
@@ -1279,7 +2050,7 @@ async function details() {
   const F = FILM; if (!F || !live(F) || !F.status) return;
   const st = F.status;
   if (st.kind === 'conflict' || (st.kind === 'fail' && F.gone)) return saveProject();   // its choices: Reload the newer version, Save as my copy
-  if (st.kind === 'saved' && F.placeholder && !H.S.set.share && !H.patientKnown()) {   // a case made before its patient was named
+  if (st.kind === 'saved' && !H.S.set.share && ((F.placeholder && !H.patientKnown()) || !H.hospitalKnown())) {   // a case made before its patient was named, or its hospital picked
     if (await askPatient()) { H.panel(); flushSoon(F); }
     return;
   }
@@ -1290,6 +2061,11 @@ async function details() {
     const r = node('div', 'row');
     if (st.kind === 'offline' || st.kind === 'fail') r.appendChild(button('Try now', () => done('retry'), 'primary'));
     r.appendChild(button('Close', () => done(null), st.kind === 'offline' || st.kind === 'fail' ? '' : 'primary')); box.appendChild(r);
+    if (st.kind === 'fail' && openSubject()) {   // a save that cannot be made: the X-ray or the case can be removed for good (21 Oct 2026)
+      const d = node('div', 'row');
+      d.append(button('Delete this X-ray (permanent)', () => { done(null); runDelete('xray'); }, 'cdel'), button('Delete this patient case (permanent)', () => { done(null); runDelete('case'); }, 'cdel'));
+      box.appendChild(d);
+    }
   });
   if (pick === 'retry' && live(F)) { F.retryN = 0; if (!refOf(F) && !needsCase(F)) return saveProject(); enqueue(F, true); }
 }
@@ -1299,7 +2075,7 @@ function flushSoon(F) { if (live(F)) setTimeout(() => tick(F), AUTO.step); }
 // host: app.js's side. Makes the header's Save project button (and, on t.addisortho.com, its status and the list in the
 // start card).
 export function initProjects(host) {
-  H = host;
+  H0 = host; H = { ...H_DEFAULTS, ...host };
   const slot = $('projSlot');
   if (slot && !slot.querySelector('.projsave')) {
     if (H.STANDALONE) {
@@ -1327,6 +2103,21 @@ export function initProjects(host) {
   syncButtons();
 }
 export const sync = () => { if (H) { syncButtons(); if (H.STANDALONE) notify(); } };
+// A single film made into a knee case on this page (app.js kcStart; contract section 12): the same case on the server,
+// its key now the knee case's own; a new-case save of that film not yet answered goes on under the new key (the same
+// requestId and body), so the case is still made once.
+export function toCase(ck, role) {
+  const F = FILM;
+  if (!H || !H.STANDALONE || !F || F.kc || !F.unit) return;
+  const old = F.ck, c = CREATES.get(old);
+  if (c) { setPending(old, null); setPending(ck, c.rid, c.body, F, c.share); const e = CREATES.get(ck); if (e) e.role = role; }   // the body's sharing state moves with it (Astra, round 6)
+  else { const rid = pendingRid(old); if (rid) { setPending(old, null); setPending(ck, rid, null, F); } }
+  F.ck = ck; F.kc = true; F.sha = null; F.orig = null; F.unit = H.unit();
+  if (H.S.caseRef) setRef(F, H.S.caseRef);
+  notify();
+}
+// a knee case's films changed (one added, replaced, moved or taken out): saved like any change
+export function caseChanged() { const F = FILM; if (F && live(F)) { if (needsCase(F)) enqueue(F); else notify(); } }
 export function forget() { OUT.file = null; OUT.server = null; }   // a different film: the last save's outcomes no longer apply
 // for the automated UI tests (28l): the wait, the status, whether the queue is idle, the films waiting
 export const autoTest = {
@@ -1339,4 +2130,76 @@ export const autoTest = {
   nextTry: () => (FILM && FILM.nextTry ? FILM.nextTry - Date.now() : 0),
   hiding: () => HIDING,
 };
-export const _test = { call, sendImage, keepaliveOk, get UPS() { return UPS; } };
+// ---------- permanent delete (Sami, 21 Oct 2026; contract section 14: "no permanent deletes" no longer holds) ----------
+// Offered on the errors of an open X-ray or case (a failed save, a refused film, an X-ray that cannot be read) and on a list
+// entry that cannot be opened. (Each list row has its own "Delete (permanent)" since 22 Oct 2026; Hide keeps the files.) These remove for good:
+// kind "case": the whole patient case (POST /projects/<id>/purge); kind "xray": the X-ray the error is about, i.e. its film of
+// a knee case (POST /projects/<id>/film/<role>; the case's last film means the whole case, asked once more), or, for a case of
+// one X-ray, the case. A subject is {id (server case, or null: nothing saved yet), role (knee film), what (a few words for the
+// question), open (it is what is on screen), onDone, report}. Sent with a requestId, retried as every write is; a 404 means it
+// is already gone. Nothing identifying goes into the request (ids only; the server logs and audits ids and uids only).
+const gone404 = e => e instanceof ApiError && e.status === 404;
+async function purgeCall(path) {
+  const q = ridOf();
+  try { await retrying(() => call('POST', path, { json: { requestId: q } })); } catch (e) { if (!gone404(e)) throw e; }
+}
+// what is on screen as a subject (null when nothing is open on t.addisortho.com)
+export function openSubject(extra = {}) {
+  if (!H || !H.STANDALONE || !(H.S.img || H.isCase())) return null;
+  const F = FILM, ref = F && live(F) ? refOf(F) : H.S.caseRef, kc = H.isCase() && H.S.kc;
+  return { id: ref ? ref.id : null, role: kc && ROLES.includes(kc.active) ? kc.active : null, open: true, ...extra };
+}
+// the page after what it showed is gone for good: nothing of it is kept or sent again, and the page starts over
+function resetAfterDelete() {
+  const F = FILM;
+  if (F) { letGo(F, false); dropKey(rkey(F.ck, F.uid)); }
+  FILM = null; H.S.caseRef = null;
+  if (H.afterDelete) H.afterDelete(); else if (typeof location !== 'undefined') location.reload();
+}
+export async function runDelete(kind, subj = null) {
+  subj = subj || openSubject();
+  if (!subj || !H) return false;
+  const wt = clip(subj.what, 120), open = !!subj.open || (!!subj.id && !!H.S.caseRef && H.S.caseRef.id === subj.id), w = wt ? ` (${wt})` : '';   // no "()" when there is no name
+  const hideNote = ' (Hide in the patient list only hides a case and keeps its files; this does not.)';
+  let q;
+  if (subj.caseOnly && kind === 'xray') kind = 'case';
+  if (!subj.id && !open) return false;
+  if (!subj.id) q = 'Nothing of this is saved in the patient list yet. Remove it from this page?';
+  else if (kind === 'xray' && subj.role) q = `Delete the ${ROLE_NAME[subj.role]} X-ray of this knee case${w} PERMANENTLY? It is removed from the server for good and cannot be brought back. The case's other X-rays stay.`;
+  else if (kind === 'xray') q = `Delete this X-ray${w} PERMANENTLY? It is the only X-ray of its patient case, so the whole case is removed from the server for good and cannot be brought back.${hideNote}`;
+  else q = `Delete this patient case${w} PERMANENTLY? Every X-ray, plan and note in it is removed from the server for good and cannot be brought back.${hideNote}`;
+  if (!confirm(q)) return false;
+  const F = open ? FILM : null, g0 = F ? F.gone : false;
+  if (F) { F.gone = true; clearTimeout(F.timer); F.timer = 0; }   // nothing more is saved for it
+  if (open) { try { await QUEUE; } catch (e) { /* its own failure is shown elsewhere */ } }   // a save on its way ends first, so it cannot make the case again after this
+  let id = subj.id;
+  if (open && !id) { const r = F ? refOf(F) : H.S.caseRef; id = r ? r.id : null; }   // made by the save that was on its way
+  const report = subj.report || (t => H.prompt(t));
+  try {
+    if (id) {
+      if (kind === 'xray' && subj.role) {
+        try { await purgeCall(`/projects/${id}/film/${subj.role}`); }
+        catch (e) {
+          if (!(e instanceof ApiError && e.status === 422 && e.code === 'last_film')) throw e;
+          if (!confirm(`This is the only X-ray left in the case, so the whole patient case${w} would be deleted PERMANENTLY. Continue?`)) { if (F) F.gone = g0; return false; }
+          await purgeCall(`/projects/${id}/purge`);
+        }
+      } else await purgeCall(`/projects/${id}/purge`);
+    }
+  } catch (e) {
+    if (F) { F.gone = g0; if (live(F)) notify(); }
+    report(`Not deleted: ${why(e)}.`);
+    return false;
+  }
+  if (subj.onDone) subj.onDone();
+  if (open) resetAfterDelete();
+  return true;
+}
+// the two choices for an error message that lists links: [[text, fn], …]
+export function deleteItems(subj) {
+  if (!subj || !H || !H.STANDALONE) return [];
+  const c = ['Delete this patient case (permanent)', () => runDelete('case', subj)];
+  return subj.caseOnly ? [c] : [['Delete this X-ray (permanent)', () => runDelete('xray', subj)], c];   // caseOnly: a knee case's film whose role is not known here
+}
+export const _test = { call, sendImage, keepaliveOk, get UPS() { return UPS; }, setPending, pendingCase, CREATES, shareGuard, setFilm(F) { FILM = F; } };
+export { choose, dialog };   // the page's own small dialog, for app.js (the knee case: a film of another patient)

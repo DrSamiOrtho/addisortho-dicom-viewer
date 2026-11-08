@@ -84,9 +84,18 @@ function solve3(A, b) {
 }
 
 // Bilinear sample of a Float32Array image.
+// Does a bilinear sample at (x, y) read any pixel for which unknown(px, py) is true (its four contributing pixels)?
+// (Astra, 16 Oct 2026, P1 1 and 2: checking only the sample's own coordinate let a masked neighbour leak into the value.)
+export function touchesUnknown(unknown, x, y) {
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  return unknown(x0, y0) || unknown(x0 + 1, y0) || unknown(x0, y0 + 1) || unknown(x0 + 1, y0 + 1);
+}
+// img.unknown (optional, revision and conversion): a sample that touches an excluded pixel is missing (NaN), like one off
+// the film, so the ball search, its shading fit and the canal trace never read a confirmed existing implant
 export function sample(img, x, y) {
   const { cols, rows, data } = img;
   if (x < 0 || y < 0 || x > cols - 1.001 || y > rows - 1.001) return NaN;
+  if (img.unknown && touchesUnknown(img.unknown, x, y)) return NaN;
   const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, i = y0 * cols + x0;
   return (data[i] * (1 - fx) + data[i + 1] * fx) * (1 - fy) + (data[i + cols] * (1 - fx) + data[i + cols + 1] * fx) * fy;
 }
