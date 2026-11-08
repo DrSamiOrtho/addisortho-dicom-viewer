@@ -21,7 +21,6 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Line2D;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -52,6 +51,7 @@ import javax.swing.table.DefaultTableCellRenderer;
 import org.dcm4che3.data.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.weasis.dicom.explorer.library.StoredInstance;
 
 /**
  * The stitch window (design section 4): the user ticks and orders the pieces and confirms the
@@ -684,9 +684,9 @@ final class StitchDialog extends JDialog {
 
   private void save(Stitch s) {
     running =
-        new SwingWorker<Path, Void>() {
+        new SwingWorker<StoredInstance, Void>() {
           @Override
-          protected Path doInBackground() throws Exception {
+          protected StoredInstance doInBackground() throws Exception {
             active.incrementAndGet();
             try {
               return StitchService.save(
@@ -705,16 +705,17 @@ final class StitchDialog extends JDialog {
           protected void done() {
             progress.setValue(0);
             try {
-              Path file = get();
-              String uid = seriesUid(file);
-              StitchService.loadAndOpen(study.model(), file, uid);
+              StoredInstance saved = get();
+              // Only now is it saved: the file is on the disk, read back and in the catalog.
               state.setText(
                   Messages.getString(
                       s.unverified ? "StitchDialog.savedUnverified" : "StitchDialog.saved"));
+              StitchService.loadAndOpen(
+                  study.model(), saved.file(), saved.seriesUid(), StitchDialog.this::notOpened);
             } catch (CancellationException e) {
               state.setText(" ");
             } catch (Exception e) {
-              fail(e);
+              saveFailed(e);
             }
             refresh();
           }
@@ -730,11 +731,25 @@ final class StitchDialog extends JDialog {
     refresh();
   }
 
-  private static String seriesUid(Path file) throws java.io.IOException {
-    try (var in = new org.dcm4che3.io.DicomInputStream(file.toFile())) {
-      in.setIncludeBulkData(org.dcm4che3.io.DicomInputStream.IncludeBulkData.NO);
-      return in.readDataset().getString(Tag.SeriesInstanceUID);
-    }
+  private void notOpened() {
+    JOptionPane.showMessageDialog(
+        this,
+        Messages.getString("StitchDialog.savedNotOpened"),
+        Messages.getString("StitchDialog.title"),
+        JOptionPane.WARNING_MESSAGE);
+  }
+
+  /** The stitch stays in this dialog, so the user can free some space and press Save again. */
+  private void saveFailed(Exception e) {
+    Throwable cause = e.getCause() == null ? e : e.getCause();
+    // Its message can hold a path with the patient's name: for the user, not for the log.
+    LOGGER.error("The stitch could not be saved: {}", cause.getClass().getSimpleName());
+    state.setText(" ");
+    JOptionPane.showMessageDialog(
+        this,
+        Messages.getString("StitchDialog.saveFailed").formatted(cause.getMessage()),
+        Messages.getString("StitchDialog.title"),
+        JOptionPane.ERROR_MESSAGE);
   }
 
   private void fail(Exception e) {

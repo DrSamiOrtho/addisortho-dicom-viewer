@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -22,6 +23,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
@@ -29,6 +33,9 @@ import org.dcm4che3.data.VR;
 import org.dcm4che3.io.DicomInputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.weasis.dicom.explorer.library.StoredInstance;
+import org.weasis.dicom.explorer.library.StudyCatalog;
+import org.weasis.dicom.explorer.library.StudyStore;
 
 class StitchWriterTest {
 
@@ -90,6 +97,94 @@ class StitchWriterTest {
             seams,
             new Stitch.Choices("AP", "standing", Stitch.Leg.LEFT, SeamMatcher.Band.WHOLE));
     return new Built(s, cuts, leg);
+  }
+
+  private static void acquired(Stitch s, String... days) {
+    for (int i = 0; i < s.pieces.size(); i++) {
+      s.pieces.get(i).header.setString(Tag.AcquisitionDate, VR.DA, days[i]);
+    }
+  }
+
+  @Test
+  void theStitchCarriesTheDayOfTheXrayNotTheDayItWasMade() throws IOException {
+    Stitch s = build().stitch();
+    acquired(s, "20260115", "20260115", "20260115");
+    Attributes a = StitchWriter.write(s, dir.resolve("a.dcm"), (done, total) -> true);
+    assertEquals("20260115", a.getString(Tag.AcquisitionDate));
+  }
+
+  @Test
+  void piecesFromDifferentDaysGiveNoSingleDateAndEachIsRecorded() throws IOException {
+    Stitch s = build().stitch();
+    acquired(s, "20260115", "20260116", "20260115");
+    Attributes a = StitchWriter.write(s, dir.resolve("a.dcm"), (done, total) -> true);
+    assertNull(a.getString(Tag.AcquisitionDate));
+    String seams = a.getString(StitchWriter.PRIVATE_CREATOR, StitchWriter.PRIVATE_DATA);
+    assertTrue(seams.contains("\"imageDate\":\"2026-01-16\""), seams);
+  }
+
+  private StudyStore store() throws IOException {
+    return new StudyStore(dir.resolve("library"), true);
+  }
+
+  @Test
+  void aSavedStitchIsInTheStoreAndSurvivesARestartWithItsPixels() throws IOException {
+    Stitch s = build().stitch();
+
+    StoredInstance saved = StitchService.save(store(), s, (done, total) -> true);
+
+    assertTrue(saved.file().startsWith(dir.resolve("library")));
+    Attributes read;
+    try (DicomInputStream in = new DicomInputStream(saved.file().toFile())) {
+      read = in.readDataset();
+    }
+    assertEquals(
+        read.getInt(Tag.Rows, 0) * read.getInt(Tag.Columns, 0) * 2,
+        read.getBytes(Tag.PixelData).length);
+
+    StudyCatalog afterRestart = new StudyCatalog(dir.resolve("library/.catalog/studies.tsv"));
+    afterRestart.load();
+    afterRestart.reconcile(dir.resolve("library"));
+    assertEquals(1, afterRestart.studies().size());
+    assertEquals(1, afterRestart.studies().getFirst().imageCount());
+  }
+
+  @Test
+  void savingAgainKeepsTheEarlierVersion() throws IOException {
+    Stitch s = build().stitch();
+    StudyStore store = store();
+
+    StoredInstance first = StitchService.save(store, s, (done, total) -> true);
+    StoredInstance second = StitchService.save(store, s, (done, total) -> true);
+
+    assertNotEquals(first.file(), second.file());
+    assertTrue(Files.isRegularFile(first.file()));
+    assertTrue(Files.isRegularFile(second.file()));
+  }
+
+  @Test
+  void aCancelledSaveLeavesNothing() throws IOException {
+    Stitch s = build().stitch();
+    StudyStore store = store();
+
+    assertThrows(
+        CancellationException.class, () -> StitchService.save(store, s, (done, total) -> false));
+
+    try (var left = Files.list(dir.resolve("library/.incoming"))) {
+      assertEquals(0, left.count());
+    }
+    assertEquals(0, store.listStudies().size());
+  }
+
+  @Test
+  void aFailureToOpenKeepsTheSavedFileAndTellsTheUser() throws Exception {
+    StoredInstance saved = StitchService.save(store(), build().stitch(), (done, total) -> true);
+    CountDownLatch told = new CountDownLatch(1);
+
+    StitchService.openLoaded(null, null, told::countDown);
+
+    assertTrue(told.await(30, TimeUnit.SECONDS), "the user is told it did not open");
+    assertTrue(Files.isRegularFile(saved.file()), "the saved stitch stays");
   }
 
   @Test

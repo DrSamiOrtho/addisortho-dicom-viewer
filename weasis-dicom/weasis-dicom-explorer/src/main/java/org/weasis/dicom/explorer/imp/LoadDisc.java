@@ -53,7 +53,7 @@ public class LoadDisc extends LoadLocalDicom {
         dir,
         percent -> showProgress(Messages.getString("LoadDisc.copying"), percent),
         this::isCancelled);
-    LOGGER.info("Copied {} in {} ms", disc, (System.nanoTime() - start) / 1_000_000);
+    LOGGER.info("Copied the disc in {} ms", (System.nanoTime() - start) / 1_000_000);
     if (!isCancelled()) {
       // Kept in the library too, so the study outlasts this temporary copy and the disc.
       StudyLibrary.getInstance().importAndReport(List.of(dir.toFile()), true, null);
@@ -85,7 +85,7 @@ public class LoadDisc extends LoadLocalDicom {
         Files.copy(file, target);
       } catch (IOException e) {
         // A scratched sector loses one file, not the disc.
-        LOGGER.warn("Cannot copy {} from the disc: {}", file, e.getMessage());
+        LOGGER.warn("Cannot copy a file from the disc: {}", e.getClass().getSimpleName());
       }
       long before = done;
       done += size(file);

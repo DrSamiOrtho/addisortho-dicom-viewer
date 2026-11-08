@@ -244,7 +244,7 @@ public class IsoImageExport extends LocalExport {
                           makeISO(exportDir, staged.toFile(), isoLabel, jolietLabel, true, true)
                               != null);
                 } catch (IOException e) {
-                  LOGGER.error("Cannot save the disc image {}", exportFile, e);
+                  LOGGER.error("Cannot save the disc image: {}", e.getClass().getSimpleName());
                   message =
                       MessageFormat.format(
                           Messages.getString("iso.failed"), exportFile, ExportOutcome.reason(e));
@@ -330,7 +330,7 @@ public class IsoImageExport extends LocalExport {
               failure(this)
                   .ifPresent(
                       e -> {
-                        LOGGER.error("Cannot make the disc", e);
+                        LOGGER.error("Cannot make the disc: {}", e.getClass().getSimpleName());
                         message =
                             Messages.getString("burn.failed")
                                 + StringUtil.SPACE
@@ -460,7 +460,7 @@ public class IsoImageExport extends LocalExport {
         }
       }
     } catch (HandlerException e) {
-      LOGGER.error("Error when adding files to ISO", e);
+      LOGGER.error("Error when adding files to ISO: {}", e.getClass().getSimpleName());
       return null;
     }
 
@@ -502,7 +502,7 @@ public class IsoImageExport extends LocalExport {
       return exportFile;
 
     } catch (ConfigException | HandlerException | FileNotFoundException e) {
-      LOGGER.error("Error when building ISO", e);
+      LOGGER.error("Error when building ISO: {}", e.getClass().getSimpleName());
     }
     return null;
   }

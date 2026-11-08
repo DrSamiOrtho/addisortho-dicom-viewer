@@ -113,7 +113,7 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
             reported = true; // ExplorerTask.cancel() runs done() again on a finished task
             Optional<Throwable> error = LocalExport.failure(this);
             if (error.isPresent()) {
-              LOGGER.error("Cannot send DICOM", error.get());
+              LOGGER.error("Cannot send DICOM: {}", error.get().getClass().getSimpleName());
               showResult(
                   MessageFormat.format(
                       Messages.getString("ExportDicomView.failed"),
@@ -292,7 +292,7 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
           staged -> dcm.saveToFile(staged.toFile(), parameters) != null);
       outcome.saved();
     } catch (IOException | RuntimeException e) {
-      LOGGER.error("Cannot prepare a file to send", e);
+      LOGGER.error("Cannot prepare a file to send: {}", e.getClass().getSimpleName());
       outcome.failed(LocalExport.makeFileIDs(iuid), e);
     }
   }

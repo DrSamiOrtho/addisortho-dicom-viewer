@@ -130,7 +130,7 @@ public final class SavedFile {
       try {
         Desktop.getDesktop().open(folder);
       } catch (IOException | RuntimeException e) {
-        LOGGER.error("Cannot open the folder {}", folder, e);
+        LOGGER.error("Cannot open the folder: {}", e.getClass().getSimpleName());
         JOptionPane.showMessageDialog(
             parent, folder.getPath(), Messages.getString("open.folder"), JOptionPane.ERROR_MESSAGE);
       }

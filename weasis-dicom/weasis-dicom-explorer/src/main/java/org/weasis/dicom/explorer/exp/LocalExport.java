@@ -782,7 +782,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   private void reportResult(
       File target, File folder, ExportOutcome outcome, Throwable error, boolean cancelled) {
     if (error != null) {
-      LOGGER.error("Cannot export to {}", target, error);
+      LOGGER.error("Cannot export: {}", error.getClass().getSimpleName());
     }
     ExportOutcome.Status status = outcome.status(cancelled, error);
     if (status == ExportOutcome.Status.CANCELLED && outcome.written() == 0) {
@@ -820,7 +820,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
         try {
           publishZip(writeDir.toPath(), zipFile.toPath());
         } catch (IOException | RuntimeException e) {
-          LOGGER.error("Cannot export DICOM ZIP file: {}", zipFile, e);
+          LOGGER.error("Cannot export the DICOM ZIP file: {}", e.getClass().getSimpleName());
           outcome.lostAll(e);
         }
       }
@@ -946,7 +946,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
                   destinationFile.toPath(), s -> StreamUtil.copyFile(fileSrc.toPath(), s));
               outcome.saved();
             } catch (IOException | RuntimeException e) {
-              LOGGER.error("Cannot export file {}", label, e);
+              LOGGER.error("Cannot export file {}: {}", label, e.getClass().getSimpleName());
               outcome.failed(label, e);
             }
           } else if (object instanceof DicomImageElement img) {
@@ -976,7 +976,8 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
                 outcome.failed(label + " annotations", new IOException("They could not be saved"));
               }
             } catch (IOException | RuntimeException e) {
-              LOGGER.error("Cannot export image {} to {}", label, format, e);
+              LOGGER.error(
+                  "Cannot export image {} to {}: {}", label, format, e.getClass().getSimpleName());
               outcome.failed(label, e);
             }
           } else if (object instanceof MediaElement other) {
@@ -986,7 +987,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
         }
       }
     } catch (Exception e) {
-      LOGGER.error("Cannot extract media from DICOM", e);
+      LOGGER.error("Cannot extract media from DICOM: {}", e.getClass().getSimpleName());
       outcome.failed("export", e);
     }
   }
@@ -1188,7 +1189,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
     } catch (IOException e) {
       throw e;
     } catch (Exception e) {
-      LOGGER.error("Cannot export DICOM", e);
+      LOGGER.error("Cannot export DICOM: {}", e.getClass().getSimpleName());
       outcome.failed("export", e);
     } finally {
       if (writer != null) {
@@ -1263,7 +1264,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
       }
       outcome.saved();
     } catch (IOException | RuntimeException e) {
-      LOGGER.error("Cannot export DICOM file {}", iuid, e);
+      LOGGER.error("Cannot export DICOM file {}: {}", iuid, e.getClass().getSimpleName());
       outcome.failed(iuid, e);
     }
   }
@@ -1323,7 +1324,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
       writeInDicomDir(writer, written[0], node, outputFile.getName(), outputFile);
       return outputFile.getPath();
     } catch (IOException | RuntimeException e) {
-      LOGGER.error("Cannot save a presentation state", e);
+      LOGGER.error("Cannot save a presentation state: {}", e.getClass().getSimpleName());
       return null;
     }
   }

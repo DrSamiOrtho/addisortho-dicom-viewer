@@ -13,13 +13,17 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Predicate;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.ElementDictionary;
@@ -29,6 +33,7 @@ import org.dcm4che3.data.UID;
 import org.dcm4che3.data.VR;
 import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.util.UIDUtils;
+import org.weasis.dicom.codec.utils.DicomFileLabel;
 
 /**
  * Writes the stitch as a Secondary Capture in the pieces' patient and study (design section 7). The
@@ -137,6 +142,7 @@ final class StitchWriter {
           "Stitched draft; piece 1's spacing; not at the patient plane");
     }
 
+    sourceAcquisitionDate(s, a);
     copyIfAllAgree(s, a, Tag.PatientOrientation, VR.CS);
     if (!a.contains(Tag.PatientOrientation)) {
       a.setNull(Tag.PatientOrientation, VR.CS); // Type 2C: present, empty when not known
@@ -233,7 +239,9 @@ final class StitchWriter {
           .append(']')
           .append(",\"spacing\":\"")
           .append(p.spacing.basis().name())
-          .append("\"}");
+          .append("\",\"imageDate\":")
+          .append(imageDateJson(p))
+          .append('}');
     }
     sb.append("],\"seams\":[");
     for (int i = 0; i < s.seams.size(); i++) {
@@ -268,6 +276,32 @@ final class StitchWriter {
           .append('}');
     }
     return sb.append("]}").toString();
+  }
+
+  /**
+   * The day the pieces were taken, when they all say the same one. The stitch was made today, and
+   * that is its Content Date; it must never read as the day of the X-ray. Pieces taken on different
+   * days give no single date, and {@link #seamData} lists each.
+   */
+  private static void sourceAcquisitionDate(Stitch s, Attributes a) {
+    Set<LocalDate> days = new HashSet<>();
+    for (Piece p : s.pieces) {
+      Optional<DicomFileLabel.ImageDate> date = DicomFileLabel.imageDate(p.header);
+      if (date.isEmpty() || !date.get().acquired()) {
+        return;
+      }
+      days.add(date.get().day());
+    }
+    if (days.size() == 1) {
+      a.setString(
+          Tag.AcquisitionDate,
+          VR.DA,
+          days.iterator().next().format(DateTimeFormatter.BASIC_ISO_DATE));
+    }
+  }
+
+  private static String imageDateJson(Piece p) {
+    return DicomFileLabel.imageDate(p.header).map(d -> "\"" + d.label() + "\"").orElse("null");
   }
 
   /** LossyImageCompression is Type 1C: 01 when any piece was lossy, with its ratios and methods. */

@@ -267,7 +267,7 @@ public class AuView extends JPanel implements SeriesViewerListener {
               destination.getAbsoluteFile().getParentFile(),
               JOptionPane.INFORMATION_MESSAGE);
         } catch (IOException | RuntimeException ex) {
-          LOGGER.error("Cannot save audio file!", ex);
+          LOGGER.error("Cannot save audio file: {}", ex.getClass().getSimpleName());
           JOptionPane.showMessageDialog(
               this,
               MessageFormat.format(

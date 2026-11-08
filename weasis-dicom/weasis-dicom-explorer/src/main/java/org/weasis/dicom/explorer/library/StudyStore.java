@@ -13,6 +13,7 @@ import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.channels.FileChannel;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -217,6 +218,55 @@ public class StudyStore {
       studies.recordStored(folder, dataset, clock.millis());
     }
     return new Commit(Outcome.STORED, new StoredInstance(studyUid, seriesUid, sopUid, target));
+  }
+
+  /** Writes a new object into the file it is given. */
+  @FunctionalInterface
+  public interface DerivedWriter {
+    void write(Path file) throws IOException;
+  }
+
+  /**
+   * Saves an object made by this viewer, such as a stitch, into its study. When this returns, the
+   * file is on the disk under its real name, has been read back, and is in the catalog. A failure
+   * throws and leaves nothing behind.
+   *
+   * @return the stored object
+   */
+  public StoredInstance saveDerived(DerivedWriter writer) throws IOException {
+    prepare();
+    if (!hasFreeSpace()) {
+      throw new IOException("The disk is nearly full");
+    }
+    Path temp = newTempFile();
+    try {
+      writer.write(temp);
+      try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.WRITE)) {
+        channel.force(true); // a power cut after "saved" must not lose it
+      }
+      long size = Files.size(temp);
+      Attributes header = readHeader(temp);
+      String studyUid = header == null ? null : header.getString(Tag.StudyInstanceUID);
+      String seriesUid = header == null ? null : header.getString(Tag.SeriesInstanceUID);
+      String sopUid = header == null ? null : header.getString(Tag.SOPInstanceUID);
+      if (studyUid == null || seriesUid == null || sopUid == null) {
+        throw new IOException("The file written is not a complete DICOM object");
+      }
+      Commit commit = commit(temp, header, studyUid, seriesUid, sopUid);
+      if (commit.outcome() != Outcome.STORED) {
+        throw new IOException("It clashes with what the study holds and was not added");
+      }
+      Path stored = commit.instance().file();
+      Attributes back = readHeader(stored);
+      if (Files.size(stored) != size
+          || back == null
+          || !sopUid.equals(back.getString(Tag.SOPInstanceUID))) {
+        throw new IOException("The saved file could not be read back");
+      }
+      return commit.instance();
+    } finally {
+      Files.deleteIfExists(temp);
+    }
   }
 
   /** Whether the image belongs to the patient the study's folder already holds. */

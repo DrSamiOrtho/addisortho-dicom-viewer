@@ -74,7 +74,7 @@ public class XmlSerializer {
               }
             });
       } catch (Exception e) {
-        LOGGER.error("Cannot save xml: ", e);
+        LOGGER.error("Cannot save xml: {}", e.getClass().getSimpleName());
         return false;
       }
     }

@@ -119,19 +119,39 @@ public record StudyEntry(
   }
 
   /**
-   * One row per study. The managed copy is preferred, as it stays when a disc or folder goes,
-   * unless the same study found elsewhere has more images than were kept.
+   * One row per study. A study in both places opens from both, managed copy first: the library may
+   * hold a saved stitch the folder lacks, and the folder images that were never imported.
    */
   public static List<StudyEntry> merge(List<StudyEntry> managed, List<StudyEntry> found) {
     Map<String, StudyEntry> byStudy = new LinkedHashMap<>();
     managed.forEach(s -> byStudy.put(s.studyUid(), s));
     for (StudyEntry s : found) {
-      StudyEntry held = byStudy.get(s.studyUid());
-      if (held == null || s.imageCount() > held.imageCount()) {
-        byStudy.put(s.studyUid(), s);
-      }
+      byStudy.merge(s.studyUid(), s, StudyEntry::alsoIn);
     }
     return List.copyOf(byStudy.values());
+  }
+
+  /** This study, also found at the places of {@code other}. Images are not double counted. */
+  private StudyEntry alsoIn(StudyEntry other) {
+    Set<String> allContainers = new LinkedHashSet<>(containers);
+    allContainers.addAll(other.containers);
+    Set<String> allPlaces = new LinkedHashSet<>(places);
+    allPlaces.addAll(other.places);
+    return new StudyEntry(
+        studyUid,
+        patientName,
+        patientId,
+        birthDate,
+        sex,
+        studyDate,
+        studyDescription,
+        accession,
+        modalities,
+        Math.max(seriesCount, other.seriesCount),
+        Math.max(imageCount, other.imageCount),
+        List.copyOf(allContainers),
+        List.copyOf(allPlaces),
+        temporary && other.temporary);
   }
 
   /** The patient name as people write it: the DICOM {@code ^} separators become spaces. */

@@ -332,21 +332,72 @@ class StudyLibraryStoreTest {
   }
 
   @Test
-  void theManagedCopyIsTheRowShownUnlessMoreWasFoundElsewhere() {
-    StudyEntry managed = entry("A", 3, "/library/a");
+  void aStudyInBothPlacesIsOneRowThatOpensFromBoth() {
+    List<StudyEntry> merged =
+        StudyEntry.merge(List.of(entry("A", 1, "/library/a")), List.of(entry("A", 5, "/disc/a")));
+
+    assertEquals(1, merged.size());
+    assertEquals(List.of("/library/a", "/disc/a"), merged.getFirst().containers());
+    assertEquals(5, merged.getFirst().imageCount());
     assertEquals(
-        "/library/a",
-        StudyEntry.merge(List.of(managed), List.of(entry("A", 3, "/disc/a")))
-            .getFirst()
-            .containers()
-            .getFirst());
-    assertEquals(
-        "/disc/a",
-        StudyEntry.merge(List.of(managed), List.of(entry("A", 5, "/disc/a")))
-            .getFirst()
-            .containers()
-            .getFirst());
-    assertEquals(2, StudyEntry.merge(List.of(managed), List.of(entry("B", 1, "/b"))).size());
+        2,
+        StudyEntry.merge(List.of(entry("A", 1, "/library/a")), List.of(entry("B", 1, "/b")))
+            .size());
+  }
+
+  private Path derived(Path file) throws IOException {
+    return write(file, image("7.7", "00123", (byte) 5), "1.2.3");
+  }
+
+  @Test
+  void aDerivedObjectIsDurableAndCataloguedWhenSaveReturns() throws IOException {
+    StoredInstance saved = store.saveDerived(this::derived);
+
+    assertTrue(Files.isRegularFile(saved.file()));
+    assertEquals(root, saved.file().getParent().getParent());
+    assertEquals(1, catalog.studies().getFirst().imageCount());
+    catalog.save();
+
+    open();
+    assertEquals(1, catalog.studies().getFirst().imageCount());
+    assertEquals("7.7", StudyStore.readHeader(saved.file()).getString(Tag.SOPInstanceUID));
+  }
+
+  @Test
+  void aWriterThatFailsLeavesNothingAndIsNotSaved() throws IOException {
+    org.junit.jupiter.api.Assertions.assertThrows(
+        IOException.class,
+        () ->
+            store.saveDerived(
+                f -> {
+                  Files.write(f, new byte[16]);
+                  throw new IOException("disk failure");
+                }));
+
+    assertTrue(catalog.studies().isEmpty());
+    try (Stream<Path> left = Files.list(root.resolve(".incoming"))) {
+      assertEquals(0, left.count());
+    }
+  }
+
+  @Test
+  void aFileThatIsNotDicomIsNotSaved() throws IOException {
+    org.junit.jupiter.api.Assertions.assertThrows(
+        IOException.class, () -> store.saveDerived(f -> Files.writeString(f, "not DICOM")));
+
+    assertTrue(catalog.studies().isEmpty());
+  }
+
+  @Test
+  void aDerivedObjectForAnotherPatientIsRefusedAndKept() throws IOException {
+    commit(image("1.1", "00123", (byte) 1), "1.2.3");
+
+    org.junit.jupiter.api.Assertions.assertThrows(
+        IOException.class,
+        () -> store.saveDerived(f -> write(f, image("7.7", "00999", (byte) 5), "1.2.3")));
+
+    assertEquals(1, quarantined());
+    assertEquals(1, catalog.studies().getFirst().imageCount());
   }
 
   private static StudyEntry entry(String uid, int images, String place) {

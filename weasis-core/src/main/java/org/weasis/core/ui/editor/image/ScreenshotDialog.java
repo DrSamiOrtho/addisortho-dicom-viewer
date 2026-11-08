@@ -298,7 +298,7 @@ public class ScreenshotDialog<I extends ImageElement> extends JDialog {
       try {
         SavedFile.write(destinationFile.toPath(), staged -> writeImage(image, staged, extension));
       } catch (IOException | RuntimeException e) {
-        LOGGER.error("Cannot save the picture to {}", destinationFile, e);
+        LOGGER.error("Cannot save the picture: {}", e.getClass().getSimpleName());
         JOptionPane.showMessageDialog(
             this,
             MessageFormat.format(

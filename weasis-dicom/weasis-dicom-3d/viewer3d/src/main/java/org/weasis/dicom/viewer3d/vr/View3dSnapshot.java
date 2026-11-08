@@ -232,7 +232,7 @@ public final class View3dSnapshot {
           destination.toAbsolutePath().getParent().toFile(),
           JOptionPane.INFORMATION_MESSAGE);
     } catch (IOException | RuntimeException e) {
-      LOGGER.error("Cannot save the 3D picture to {}", file, e);
+      LOGGER.error("Cannot save the 3D picture: {}", e.getClass().getSimpleName());
       JOptionPane.showMessageDialog(
           view,
           Messages.getString("view.jpeg.error"),
