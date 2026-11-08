@@ -166,8 +166,7 @@ public class DicomSpecialElement extends MediaElement implements DicomElement {
         }
       }
     } else {
-      MediaElement.saveToFile(reader, output);
-      return new Attributes();
+      return MediaElement.saveToFile(reader, output) ? new Attributes() : null;
     }
     return null;
   }

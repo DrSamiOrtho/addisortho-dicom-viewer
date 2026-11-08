@@ -21,6 +21,9 @@ import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.image.RenderedImage;
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.text.MessageFormat;
 import java.util.Objects;
 import java.util.Optional;
 import javax.swing.ButtonGroup;
@@ -28,6 +31,7 @@ import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JRadioButton;
 import javax.swing.JSpinner;
@@ -38,6 +42,8 @@ import javax.swing.WindowConstants;
 import net.miginfocom.swing.MigLayout;
 import org.opencv.core.MatOfInt;
 import org.opencv.imgcodecs.Imgcodecs;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.weasis.core.Messages;
 import org.weasis.core.api.gui.util.ActionW;
 import org.weasis.core.api.gui.util.GuiUtils;
@@ -45,12 +51,14 @@ import org.weasis.core.api.image.SimpleOpManager;
 import org.weasis.core.api.media.data.ImageElement;
 import org.weasis.core.api.service.WProperties;
 import org.weasis.core.ui.util.ColorLayerUI;
+import org.weasis.core.ui.util.SavedFile;
 import org.weasis.core.util.StringUtil;
 import org.weasis.opencv.data.PlanarImage;
 import org.weasis.opencv.op.ImageConversion;
 import org.weasis.opencv.op.ImageIOHandler;
 
 public class ScreenshotDialog<I extends ImageElement> extends JDialog {
+  private static final Logger LOGGER = LoggerFactory.getLogger(ScreenshotDialog.class);
   public static final String P_LAST_DIR = "screenshot.last.dir";
   static final String DICOM = "DICOM"; // NON-NLS
 
@@ -213,11 +221,12 @@ public class ScreenshotDialog<I extends ImageElement> extends JDialog {
               }
             }
           }
-          saveImageFile(result, mustBeReleased);
+          if (saveImageFile(result, mustBeReleased)) {
+            doClose();
+          }
         });
 
     getRootPane().setDefaultButton(saveButton);
-    saveButton.addActionListener(evt -> doClose());
     panel.add(
         GuiUtils.getFlowLayoutPanel(
             FlowLayout.TRAILING, BLOCK_SEPARATOR, ITEM_SEPARATOR_LARGE, saveButton, clipButton));
@@ -226,8 +235,17 @@ public class ScreenshotDialog<I extends ImageElement> extends JDialog {
     this.setContentPane(panel);
   }
 
-  private void saveImageFile(PlanarImage image, boolean mustBeReleased) {
-    if (image != null) {
+  /**
+   * @return true only when the picture is confirmed at its destination; the dialog stays open
+   *     otherwise, so the user can choose another place
+   */
+  private boolean saveImageFile(PlanarImage image, boolean mustBeReleased) {
+    if (image == null) {
+      JOptionPane.showMessageDialog(
+          this, Messages.getString("screenshot.no.image"), getTitle(), JOptionPane.WARNING_MESSAGE);
+      return false;
+    }
+    try {
       WProperties localPersistence = GuiUtils.getUICore().getLocalPersistence();
       String targetDirectoryPath = localPersistence.getProperty(P_LAST_DIR, "");
       SystemFileChooser fileChooser = new SystemFileChooser(targetDirectoryPath);
@@ -246,36 +264,57 @@ public class ScreenshotDialog<I extends ImageElement> extends JDialog {
           new FileNameExtensionFilter(Format.TIFF.title, Format.TIFF.extension));
       fileChooser.setFileFilter(filter);
 
-      if (fileChooser.showSaveDialog(null) == SystemFileChooser.APPROVE_OPTION
-          && fileChooser.getSelectedFile() != null) {
-        File file = fileChooser.getSelectedFile();
-        filter = (FileNameExtensionFilter) fileChooser.getFileFilter();
-        String extension = filter == null ? Format.PNG.extension : filter.getExtensions()[0];
-        String extFile = "." + extension;
-        String filename =
-            file.getName().endsWith(extFile) ? file.getPath() : file.getPath() + extFile;
+      if (fileChooser.showSaveDialog(null) != SystemFileChooser.APPROVE_OPTION
+          || fileChooser.getSelectedFile() == null) {
+        return false;
+      }
+      File file = fileChooser.getSelectedFile();
+      filter = (FileNameExtensionFilter) fileChooser.getFileFilter();
+      String extension = filter == null ? Format.PNG.extension : filter.getExtensions()[0];
+      String extFile = "." + extension;
+      String filename =
+          file.getName().endsWith(extFile) ? file.getPath() : file.getPath() + extFile;
 
-        File destinationFile = new File(filename);
-        if (Format.PNG.extension.equals(extension)) {
-          ImageIOHandler.writePNG(image.toMat(), destinationFile.toPath());
-        } else {
-          MatOfInt map = new MatOfInt();
-          if (Format.JPEG.extension.equals(extension)) {
-            map.fromArray(Imgcodecs.IMWRITE_JPEG_QUALITY, 90);
-          } else if (Format.JPEG_XL.extension.equals(extension)) {
-            int quality = preservePixelCheckBox.isSelected() ? 100 : 90;
-            map.fromArray(Imgcodecs.IMWRITE_JPEGXL_QUALITY, quality);
-          }
-          ImageIOHandler.writeImage(image.toMat(), destinationFile.toPath(), map);
-        }
-        if (mustBeReleased) {
-          ImageConversion.releasePlanarImage(image);
-        }
-        if (destinationFile.canRead()) {
-          localPersistence.setProperty(P_LAST_DIR, destinationFile.getParentFile().getPath());
-        }
+      File destinationFile = new File(filename);
+      try {
+        SavedFile.write(destinationFile.toPath(), staged -> writeImage(image, staged, extension));
+      } catch (IOException | RuntimeException e) {
+        LOGGER.error("Cannot save the picture to {}", destinationFile, e);
+        JOptionPane.showMessageDialog(
+            this,
+            MessageFormat.format(
+                Messages.getString("screenshot.failed"), destinationFile, SavedFile.reason(e)),
+            getTitle(),
+            JOptionPane.ERROR_MESSAGE);
+        return false;
+      }
+      localPersistence.setProperty(P_LAST_DIR, destinationFile.getAbsoluteFile().getParent());
+      SavedFile.showSaved(
+          this,
+          getTitle(),
+          MessageFormat.format(Messages.getString("screenshot.saved"), destinationFile),
+          destinationFile.getAbsoluteFile().getParentFile(),
+          JOptionPane.INFORMATION_MESSAGE);
+      return true;
+    } finally {
+      if (mustBeReleased) {
+        ImageConversion.releasePlanarImage(image);
       }
     }
+  }
+
+  private boolean writeImage(PlanarImage image, Path staged, String extension) {
+    if (Format.PNG.extension.equals(extension)) {
+      return ImageIOHandler.writePNG(image.toMat(), staged);
+    }
+    MatOfInt map = new MatOfInt();
+    if (Format.JPEG.extension.equals(extension)) {
+      map.fromArray(Imgcodecs.IMWRITE_JPEG_QUALITY, 90);
+    } else if (Format.JPEG_XL.extension.equals(extension)) {
+      int quality = preservePixelCheckBox.isSelected() ? 100 : 90;
+      map.fromArray(Imgcodecs.IMWRITE_JPEGXL_QUALITY, quality);
+    }
+    return ImageIOHandler.writeImage(image.toMat(), staged, map);
   }
 
   private void setImageRadioAction(boolean enable) {

@@ -550,8 +550,7 @@ public class DicomImageElement extends ImageElement implements DicomElement {
   public Attributes saveToFile(File output, DicomExportParameters params) {
     boolean hasTransformation = params.dicomEditors() != null && !params.dicomEditors().isEmpty();
     if (!hasTransformation && params.syntax() == null) {
-      super.saveToFile(output);
-      return new Attributes();
+      return super.saveToFile(output) ? new Attributes() : null;
     }
 
     DicomMetaData metaData = getMediaReader().getDicomMetaData();

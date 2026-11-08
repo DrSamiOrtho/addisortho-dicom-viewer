@@ -33,6 +33,7 @@ import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.text.MessageFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
@@ -55,6 +56,7 @@ import org.weasis.core.util.StringUtil;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.exp.CheckTreeModel;
 import org.weasis.dicom.explorer.exp.ExplorerTask;
+import org.weasis.dicom.explorer.exp.ExportOutcome;
 import org.weasis.dicom.explorer.exp.LocalExport;
 
 public class IsoImageExport extends LocalExport {
@@ -144,6 +146,9 @@ public class IsoImageExport extends LocalExport {
 
   @Override
   public void exportDICOM(final CheckTreeModel model, JProgressBar info) throws IOException {
+    if (!confirmSelection(model)) {
+      return;
+    }
     String patient = checkBoxNameLabel.isSelected() ? getPatientOfDisc(model) : null;
     final String isoLabel = isoVolumeId(patient);
     final String jolietLabel = jolietVolumeId(patient);
@@ -179,14 +184,21 @@ public class IsoImageExport extends LocalExport {
                 Properties pref = getPreferences();
                 pref.setProperty(INC_DICOMDIR, Boolean.TRUE.toString());
                 pref.setProperty(CD_COMPATIBLE, Boolean.TRUE.toString());
-                writeDicom(this, exportDir, model, pref);
+                ExportOutcome outcome = new ExportOutcome();
+                writeDicom(this, exportDir, model, pref, outcome);
                 File readmeFile = ResourceUtil.getResource("isowriter/README.htm"); // NON-NLS
                 StreamUtil.copyFile(
                     readmeFile.toPath(), new File(exportDir, "README.HTM").toPath());
 
                 if (checkBoxAddJpeg.isSelected()) {
                   writeOther(
-                      this, new File(exportDir, "JPEG"), model, Format.JPEG, new Properties());
+                      this,
+                      new File(exportDir, "JPEG"),
+                      model,
+                      Format.JPEG,
+                      new Properties(),
+                      null,
+                      outcome);
                 }
 
                 String localPath = getLocalViewerPath();
@@ -208,6 +220,14 @@ public class IsoImageExport extends LocalExport {
                 }
 
                 if (this.isCancelled()) {
+                  return false;
+                }
+                if (outcome.status(false, null) != ExportOutcome.Status.COMPLETED) {
+                  message =
+                      MessageFormat.format(
+                          Messages.getString("burn.incomplete"),
+                          outcome.failed(),
+                          outcome.firstProblem());
                   return false;
                 }
                 if (makeISO(exportDir, exportFile, isoLabel, jolietLabel, true, true) == null) {
@@ -281,6 +301,13 @@ public class IsoImageExport extends LocalExport {
               dicomModel.firePropertyChange(
                   new ObservableEvent(
                       ObservableEvent.BasicAction.LOADING_STOP, dicomModel, null, this));
+              failure(this)
+                  .ifPresent(
+                      e ->
+                          message =
+                              Messages.getString("burn.failed")
+                                  + StringUtil.SPACE
+                                  + ExportOutcome.reason(e));
               if (message != null) {
                 JOptionPane.showMessageDialog(
                     WinUtil.getValidComponent(WinUtil.getParentWindow(IsoImageExport.this)),
