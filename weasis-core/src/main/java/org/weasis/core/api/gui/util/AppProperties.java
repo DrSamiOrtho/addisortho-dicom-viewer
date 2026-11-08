@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.core.api.gui.util;
 
 import com.formdev.flatlaf.util.SystemInfo;
@@ -42,6 +43,13 @@ public final class AppProperties {
   /** The version of the application (for display) */
   public static final String WEASIS_VERSION =
       System.getProperty("weasis.version", "0.0.0"); // NON-NLS
+
+  /**
+   * The Addis Ortho product version, the one people see (Sami, 7 Nov 2026). The installer workflow
+   * reads it from this line for the installers' version and file names. WEASIS_VERSION stays the
+   * engine's: the launcher compares it for its cache and preferences.
+   */
+  public static final String AO_VERSION = "1.0"; // NON-NLS
 
   /** The name of the application (for display) */
   public static final String WEASIS_NAME = System.getProperty("weasis.name", "Weasis"); // NON-NLS

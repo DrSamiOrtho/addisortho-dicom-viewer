@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d;
 
 import java.awt.Point;
@@ -19,13 +20,13 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import javax.swing.BoundedRangeModel;
 import javax.swing.ButtonGroup;
 import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JRadioButtonMenuItem;
-import javax.swing.KeyStroke;
 import org.dcm4che3.img.lut.PresetWindowLevel;
 import org.joml.Quaterniond;
 import org.osgi.framework.BundleContext;
@@ -70,6 +71,9 @@ import org.weasis.dicom.viewer3d.geometry.ArcballMouseListener;
 import org.weasis.dicom.viewer3d.geometry.Axis;
 import org.weasis.dicom.viewer3d.geometry.Camera;
 import org.weasis.dicom.viewer3d.geometry.CameraView;
+import org.weasis.dicom.viewer3d.geometry.LassoMouseListener;
+import org.weasis.dicom.viewer3d.geometry.PickMouseListener;
+import org.weasis.dicom.viewer3d.geometry.RollMouseListener;
 import org.weasis.dicom.viewer3d.geometry.View;
 import org.weasis.dicom.viewer3d.geometry.ViewData;
 import org.weasis.dicom.viewer3d.vr.CrosshairCutMode;
@@ -83,6 +87,9 @@ import org.weasis.opencv.op.lut.LutShape;
 
 public class EventManager extends ImageViewerEventManager<DicomImageElement> {
   private static EventManager instance;
+
+  /** Told when the mouse tool of a button changes, so the 3D tools bar follows. */
+  private final List<Runnable> mouseToolListeners = new CopyOnWriteArrayList<>();
 
   public static synchronized EventManager getInstance() {
     if (instance == null) {
@@ -105,6 +112,7 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
     setAction(newOpacityAction());
 
     setAction(newVolumeShadingAction());
+    setAction(newVolumeSmoothAction());
     setAction(newVolumeProjection());
     setAction(newAxisRotationAction());
 
@@ -125,6 +133,14 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
     setAction(buildPanAction());
     setAction(newCrosshairCutModeAction());
     setAction(new BasicActionState(ActionW.RESET));
+
+    // Addis Ortho 3D tools, on the mouse buttons like the other actions.
+    setAction(new RollMouseListener());
+    setAction(new LassoMouseListener());
+    setAction(new PickMouseListener(ActionVol.KEEP_THIS, PickMouseListener.Mode.KEEP));
+    setAction(new PickMouseListener(ActionVol.REMOVE_THIS, PickMouseListener.Mode.REMOVE));
+    setAction(new PickMouseListener(ActionVol.LENGTH, PickMouseListener.Mode.LENGTH));
+    setAction(new PickMouseListener(ActionVol.ARROW, PickMouseListener.Mode.ARROW));
 
     final BundleContext context = AppProperties.getBundleContext(this.getClass());
     Preferences prefs = BundlePreferences.getDefaultPreferences(context);
@@ -445,6 +461,17 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
     };
   }
 
+  private ToggleButtonListener newVolumeSmoothAction() {
+    return new ToggleButtonListener(ActionVol.VOL_SMOOTH, true) {
+      @Override
+      public void actionPerformed(boolean selected) {
+        if (getSelectedView2dContainer() instanceof View3DContainer container) {
+          container.setVolumeSmoothing(selected);
+        }
+      }
+    };
+  }
+
   private ToggleButtonListener newVolumeProjection() {
     return new ToggleButtonListener(ActionVol.VOL_PROJECTION, false) {
       @Override
@@ -473,6 +500,25 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
       return pane.getSeries();
     }
     return null;
+  }
+
+  public void addMouseToolListener(Runnable listener) {
+    mouseToolListeners.add(listener);
+  }
+
+  public void removeMouseToolListener(Runnable listener) {
+    mouseToolListeners.remove(listener);
+  }
+
+  /** Tells the listeners that a mouse button's tool changed. */
+  public void fireMouseToolChanged() {
+    mouseToolListeners.forEach(Runnable::run);
+  }
+
+  @Override
+  public void changeLeftMouseAction(String command) {
+    super.changeLeftMouseAction(command);
+    fireMouseToolChanged();
   }
 
   @Override
@@ -562,6 +608,7 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
     if (!(view2d instanceof View3d canvas) || canvas.getVolTexture() == null) {
       enableActions(false);
       View3DContainer.UI.updateDynamicTools(view2d.getSeries());
+      fireMouseToolChanged();
       return false;
     }
 
@@ -597,6 +644,12 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
     Optional<ComboItemListener<CrosshairCutMode>> crosshairCutMode =
         getAction(ActionVol.CROSSHAIR_CUT_MODE);
     volumeLighting.ifPresent(a -> a.setSelectedWithoutTriggerAction(rendering.isShading()));
+    getAction(ActionVol.VOL_SMOOTH)
+        .ifPresent(
+            a -> {
+              a.setSelectedWithoutTriggerAction(canvas.getVolTexture().isSmoothing());
+              a.enableAction(true);
+            });
     volumeProjection.ifPresent(
         a -> a.setSelectedWithoutTriggerAction(canvas.getCamera().isOrthographicProjection()));
     volumeQuality.ifPresent(a -> a.setSliderValue(rendering.getQuality(), false));
@@ -629,6 +682,7 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
             : (SynchView) synchAction.getSelectedItem());
 
     view2d.updateGraphicSelectionListener(selectedView2dContainer);
+    fireMouseToolChanged();
     return true;
   }
 
@@ -852,7 +906,8 @@ public class EventManager extends ImageViewerEventManager<DicomImageElement> {
         for (final ResetTools action : ResetTools.values()) {
           final JMenuItem item = new JMenuItem(action.toString());
           if (ResetTools.ALL.equals(action)) {
-            item.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0));
+            item.setAccelerator(
+                ShortcutManager.getInstance().getKeyStroke(ShortcutManager.ID_VIEWER_ESCAPE));
           }
           item.addActionListener(e -> reset(action));
           menu.add(item);

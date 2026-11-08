@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Addis Ortho Trading PLC, 2026. X-ray templating: the Template button and the local server that runs the templating
+     page offline for the X-ray it hands over (DESIGN-2026-10-14-templating-3d.md). -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <artifactId>weasis-dicom-parent</artifactId>
+    <groupId>org.weasis.dicom</groupId>
+    <!--suppress MavenPropertyInParent -->
+    <version>${revision}${changelist}</version>
+    <relativePath>../weasis-dicom-parent/pom.xml</relativePath>
+  </parent>
+  <artifactId>weasis-dicom-templating</artifactId>
+  <packaging>jar</packaging>
+  <name>DICOM - X-ray templating (Addis Ortho) [${project.artifactId}]</name>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>biz.aQute.bnd</groupId>
+        <artifactId>bnd-maven-plugin</artifactId>
+        <configuration>
+          <bnd>
+            Private-Package: com.addisortho.viewer.templating.*
+          </bnd>
+        </configuration>
+      </plugin>
+      <plugin>
+        <!-- Addis Ortho's own files carry Addis Ortho's Apache-2.0 header, not the Weasis Team's -->
+        <groupId>com.diffplug.spotless</groupId>
+        <artifactId>spotless-maven-plugin</artifactId>
+        <configuration>
+          <java>
+            <licenseHeader>
+              <delimiter>(package|import|public|class|module) </delimiter>
+              <!-- @formatter:off -->
+              <content>
+/*
+ * Copyright (c) $YEAR Addis Ortho Trading PLC.
+ *
+ * This program and the accompanying materials are made available under the terms of the Apache
+ * License, Version 2.0 which is available at https://www.apache.org/licenses/LICENSE-2.0.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+              </content>
+              <!-- @formatter:on -->
+            </licenseHeader>
+          </java>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+  <dependencies>
+    <dependency>
+      <groupId>org.weasis.dicom</groupId>
+      <artifactId>weasis-dicom-codec</artifactId>
+      <version>${project.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.weasis.dicom</groupId>
+      <artifactId>weasis-dicom-explorer</artifactId>
+      <version>${project.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.weasis.dicom</groupId>
+      <artifactId>weasis-dicom-viewer2d</artifactId>
+      <version>${project.version}</version>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
+</project>

@@ -7,12 +7,14 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.codec.seg;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.VR;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.slf4j.Logger;
@@ -65,6 +67,36 @@ public final class SegBinaryMaskWorkaround {
     }
     int columns = dicom.getInt(Tag.Columns, 0);
     return columns > 0 && (columns % 8) != 0;
+  }
+
+  /**
+   * The SEG's 1-bit frames held in memory, for {@link #reDecodeFrame}: unpacking the bits in Java
+   * takes about a millisecond a frame, where the image pipeline takes some twenty (a minute for a
+   * few thousand frames). The Pixel Data is read once here, not once a frame.
+   *
+   * @return a dataset holding only the Pixel Data bytes and the frame size, or {@code null} when
+   *     the SEG is not 1-bit or its Pixel Data is not a plain byte array (compressed)
+   */
+  public static Attributes inMemoryBinaryFrames(Attributes dicom) {
+    if (dicom == null || dicom.getInt(Tag.BitsAllocated, 0) != 1) {
+      return null;
+    }
+    byte[] pixelData;
+    try {
+      pixelData = dicom.getBytes(Tag.PixelData);
+    } catch (java.io.IOException | RuntimeException e) {
+      return null;
+    }
+    if (pixelData == null) {
+      return null;
+    }
+    Attributes frames = new Attributes(5);
+    frames.setString(Tag.SOPInstanceUID, VR.UI, dicom.getString(Tag.SOPInstanceUID));
+    frames.setInt(Tag.Rows, VR.US, dicom.getInt(Tag.Rows, 0));
+    frames.setInt(Tag.Columns, VR.US, dicom.getInt(Tag.Columns, 0));
+    frames.setInt(Tag.BitsAllocated, VR.US, 1);
+    frames.setBytes(Tag.PixelData, VR.OB, pixelData);
+    return frames;
   }
 
   /**
@@ -131,7 +163,7 @@ public final class SegBinaryMaskWorkaround {
       }
       mat.put(y, 0, row);
     }
-    logOnce(dicom, "Re-decoded BINARY SEG with width=" + width + " (workaround active)");
+    logOnce(dicom, "Re-decoded BINARY SEG frames of width " + width + " from the raw Pixel Data");
     return out;
   }
 

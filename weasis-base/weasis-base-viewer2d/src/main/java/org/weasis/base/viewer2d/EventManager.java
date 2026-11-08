@@ -11,7 +11,6 @@ package org.weasis.base.viewer2d;
 
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,7 +21,6 @@ import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JSeparator;
-import javax.swing.KeyStroke;
 import org.osgi.framework.BundleContext;
 import org.osgi.service.prefs.Preferences;
 import org.weasis.core.api.gui.Insertable.Type;
@@ -36,6 +34,7 @@ import org.weasis.core.api.gui.util.ComboItemListener;
 import org.weasis.core.api.gui.util.Feature;
 import org.weasis.core.api.gui.util.Filter;
 import org.weasis.core.api.gui.util.GuiUtils;
+import org.weasis.core.api.gui.util.ShortcutManager;
 import org.weasis.core.api.gui.util.SliderChangeListener;
 import org.weasis.core.api.gui.util.SliderCineListener;
 import org.weasis.core.api.gui.util.SliderCineListener.TIME;
@@ -526,7 +525,8 @@ public class EventManager extends ImageViewerEventManager<ImageElement> implemen
         for (final ResetTools action : ResetTools.values()) {
           final JMenuItem item = new JMenuItem(action.toString());
           if (ResetTools.ALL.equals(action)) {
-            item.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0));
+            item.setAccelerator(
+                ShortcutManager.getInstance().getKeyStroke(ShortcutManager.ID_VIEWER_ESCAPE));
           }
           item.addActionListener(e -> reset(action));
           menu.add(item);
@@ -573,7 +573,8 @@ public class EventManager extends ImageViewerEventManager<ImageElement> implemen
           menu.add(menuItem);
           menuItem = new JMenuItem(Messages.getString("View2dContainer.-90"));
           menuItem.setIcon(ResourceUtil.getIcon(ActionIcon.ROTATE_COUNTERCLOCKWISE));
-          menuItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_L, InputEvent.ALT_DOWN_MASK));
+          menuItem.setAccelerator(
+              ShortcutManager.getInstance().getKeyStroke(ShortcutManager.ID_VIEWER_ROTATE_LEFT));
           menuItem.addActionListener(
               e ->
                   rotateAction
@@ -582,7 +583,8 @@ public class EventManager extends ImageViewerEventManager<ImageElement> implemen
           menu.add(menuItem);
           menuItem.setIcon(ResourceUtil.getIcon(ActionIcon.ROTATE_CLOCKWISE));
           menuItem = new JMenuItem(Messages.getString("View2dContainer.+90"));
-          menuItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_R, InputEvent.ALT_DOWN_MASK));
+          menuItem.setAccelerator(
+              ShortcutManager.getInstance().getKeyStroke(ShortcutManager.ID_VIEWER_ROTATE_RIGHT));
           menuItem.addActionListener(
               e ->
                   rotateAction
@@ -607,7 +609,8 @@ public class EventManager extends ImageViewerEventManager<ImageElement> implemen
                         Messages.getString("View2dContainer.flip_h"),
                         ResourceUtil.getIcon(ActionIcon.FLIP));
             menuItem.setAccelerator(
-                KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.ALT_DOWN_MASK));
+                ShortcutManager.getInstance()
+                    .getKeyStroke(ShortcutManager.ID_VIEWER_FLIP_HORIZONTAL));
             menu.add(menuItem);
           }
         }

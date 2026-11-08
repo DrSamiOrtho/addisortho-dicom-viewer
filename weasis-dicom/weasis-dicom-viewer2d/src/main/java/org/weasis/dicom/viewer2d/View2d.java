@@ -37,6 +37,7 @@ import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import javax.swing.Action;
 import javax.swing.JDialog;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
@@ -99,6 +100,7 @@ import org.weasis.core.ui.model.utils.bean.PanPoint.State;
 import org.weasis.core.ui.model.utils.exceptions.InvalidShapeException;
 import org.weasis.core.ui.model.utils.imp.DefaultViewModel;
 import org.weasis.core.ui.util.ColorLayerUI;
+import org.weasis.core.ui.util.DefaultAction;
 import org.weasis.core.ui.util.MouseEventDouble;
 import org.weasis.core.ui.util.TitleMenuItem;
 import org.weasis.core.util.LangUtil;
@@ -127,6 +129,7 @@ import org.weasis.dicom.viewer2d.KOComponentFactory.KOViewButton.eState;
 import org.weasis.dicom.viewer2d.fusion.FusionController;
 import org.weasis.dicom.viewer2d.fusion.FusionOp;
 import org.weasis.dicom.viewer2d.mpr.MprView.Plane;
+import org.weasis.dicom.viewer2d.video.SliceVideoExport;
 import org.weasis.opencv.data.PlanarImage;
 import org.weasis.opencv.op.lut.WlPresentation;
 
@@ -1415,5 +1418,17 @@ public class View2d extends DefaultView2d<DicomImageElement> {
       popupMenu.add(close);
     }
     return popupMenu;
+  }
+
+  /** The view export, then the video of a scroll through the slices (Addis Ortho). */
+  @Override
+  public List<Action> getExportActions() {
+    List<Action> list = new ArrayList<>(super.getExportActions());
+    list.add(
+        new DefaultAction(
+            Messages.getString("video.export"),
+            ActionW.EXPORT_VIEW.getIcon(),
+            _ -> SliceVideoExport.export(this)));
+    return list;
   }
 }

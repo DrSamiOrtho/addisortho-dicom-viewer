@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.codec;
 
 import java.io.BufferedInputStream;
@@ -408,7 +409,8 @@ public class DicomMediaIO implements DcmMediaReader {
       return Reading.READABLE;
     } catch (Exception | OutOfMemoryError e) {
       mimeType = UNREADABLE;
-      LOGGER.error("Cannot read DICOM:", e);
+      // Exception messages can hold the file path, and received files are named after the patient.
+      LOGGER.error("Cannot read DICOM: {}", e.getClass().getName());
       close();
       return Reading.ERROR;
     }
@@ -898,11 +900,7 @@ public class DicomMediaIO implements DcmMediaReader {
       DicomMetaData md = readMetaData();
       return md.getDicomObject();
     } catch (Exception e) {
-      if (LOGGER.isDebugEnabled()) {
-        LOGGER.error("Cannot read DICOM:", e);
-      } else {
-        LOGGER.error(e.getMessage());
-      }
+      LOGGER.error("Cannot read DICOM: {}", e.getClass().getName());
     }
     return null;
   }
@@ -912,11 +910,7 @@ public class DicomMediaIO implements DcmMediaReader {
     try {
       return readMetaData();
     } catch (Exception e) {
-      if (LOGGER.isDebugEnabled()) {
-        LOGGER.error("Cannot read DICOM:", e);
-      } else {
-        LOGGER.error(e.getMessage());
-      }
+      LOGGER.error("Cannot read DICOM: {}", e.getClass().getName());
     }
     return null;
   }

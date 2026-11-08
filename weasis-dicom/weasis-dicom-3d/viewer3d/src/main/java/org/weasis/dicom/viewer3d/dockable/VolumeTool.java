@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.dockable;
 
 import bibliothek.gui.dock.common.CLocation;
@@ -55,6 +56,9 @@ public class VolumeTool extends PluginTool {
     setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
     add(getWindowLevelPanel());
     add(getVolumetricPanel());
+    CropBoxPanel cropBoxPanel = new CropBoxPanel(spaceY);
+    EventManager.getInstance().addSeriesViewerListener(cropBoxPanel);
+    add(cropBoxPanel);
     add(getTransformPanel());
     add(GuiUtils.boxYLastElement(3));
     rootPane.setBorder(BorderFactory.createEmptyBorder()); // remove default line
@@ -147,6 +151,16 @@ public class VolumeTool extends PluginTool {
               JCheckBox box = b.createCheckBox(ActionVol.VOL_SHADING.getTitle());
               volumePanel.add(
                   GuiUtils.getFlowLayoutPanel(box, GuiUtils.boxHorizontalStrut(10), btnOptions));
+              volumePanel.add(GuiUtils.boxVerticalStrut(gabY));
+            });
+
+    EventManager.getInstance()
+        .getAction(ActionVol.VOL_SMOOTH)
+        .ifPresent(
+            b -> {
+              JCheckBox box = b.createCheckBox(ActionVol.VOL_SMOOTH.getTitle());
+              box.setToolTipText(Messages.getString("smooth.tip"));
+              volumePanel.add(GuiUtils.getFlowLayoutPanel(box));
               volumePanel.add(GuiUtils.boxVerticalStrut(gabY));
             });
     return volumePanel;

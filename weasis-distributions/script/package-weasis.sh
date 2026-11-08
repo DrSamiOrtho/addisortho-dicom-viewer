@@ -50,6 +50,8 @@ echo " --no-installer
 Build only the native binaries not the final installer"
 echo " --lite
 Build Addis Ortho Viewer Lite: 2D X-ray and CT viewing only (see prepare-lite.sh)"
+echo " --4gb
+Build Addis Ortho Viewer 4GB: every feature, for PCs with 4 GB of RAM (see launch-options.sh)"
 echo " --mac-signing-key-user-name
 Key user name of the certificate to sign the bundle"
 exit 0
@@ -82,6 +84,10 @@ shift # past argument
 EDITION="lite"
 shift # past argument
 ;;
+--4gb)
+EDITION="4gb"
+shift # past argument
+;;
 --mac-signing-key-user-name)
 CERTIFICATE="$2"
 shift # past argument
@@ -104,6 +110,12 @@ if [ "$EDITION" = "lite" ] ; then
   # CFBundleName must stay under 16 characters
   MAC_PACKAGE_NAME="AO Viewer Lite"
   LINUX_PACKAGE_NAME="addisortho-viewer-lite"
+elif [ "$EDITION" = "4gb" ] ; then
+  NAME="Addis Ortho Viewer 4GB"
+  IDENTIFIER="com.addisortho.viewer.lite4gb"
+  DESCRIPTION="Addis Ortho DICOM Viewer 4GB"
+  MAC_PACKAGE_NAME="AO Viewer 4GB"
+  LINUX_PACKAGE_NAME="addisortho-viewer-4gb"
 fi
 
 curPath=$(dirname "$(readlink -f "$0")")
@@ -230,6 +242,17 @@ if [ "$EDITION" = "lite" ] ; then
   bash "${curPath}/prepare-lite.sh" "$INPUT_PATH_UNIX/weasis" "${curPath}/resources/$machine" "$LITE_RES" \
     || die "Cannot prepare the lite edition"
   RES="$LITE_RES"
+elif [ "$EDITION" = "4gb" ] ; then
+  # jpackage takes the icon and the file properties from files named after the app: give this
+  # edition its own copies of the full edition's, and its own macOS bundle identifier.
+  RES4="${TEMP_PATH:-$OUTPUT_PATH_UNIX}-4gb-resources"
+  rm -rf "$RES4"; cp -R "${curPath}/resources/$machine" "$RES4"
+  for f in "$RES4"/"Addis Ortho Viewer"*; do
+    [ -f "$f" ] || continue
+    cp -f "$f" "$RES4/$NAME${f#"$RES4/Addis Ortho Viewer"}"
+  done
+  [ -f "$RES4/Info.plist" ] && sed -i.bak 's#<string>com.addisortho.viewer</string>#<string>com.addisortho.viewer.lite4gb</string>#' "$RES4/Info.plist" && rm -f "$RES4/Info.plist.bak"
+  RES="$RES4"
 fi
 
 # Optional deployment specific preparation of the input directory, absent from the public distribution
@@ -291,7 +314,7 @@ else
   fi
 fi
 # The lite edition has no Dicomizer
-[ "$EDITION" = "full" ] && launcherArgs=("--add-launcher" "${DICOMIZER_CONFIG}")
+[ "$EDITION" != "lite" ] && launcherArgs=("--add-launcher" "${DICOMIZER_CONFIG}")
 
 # On Linux the deb/rpm are built in a single jpackage step from --input (see below), so the
 # standalone app-image is only needed for the other platforms or for --no-installer builds.
@@ -307,10 +330,16 @@ fi
 
 if [ "$PACKAGE" = "YES" ] ; then
   if [ "$machine" = "windows" ] ; then
+    # Addis Ortho brand bitmaps of the MSI pages, read by main.wxs through this variable.
+    export AO_MSI_UI_DIR="$RES\\msi"
     if [ "$EDITION" = "lite" ] ; then
       # Own upgrade codes and jpackage's default MSI template (no weasis-addisortho:// scheme)
       [ "$arc" = "aarch64" ]  && UPGRADE_UID="ef84b678-2032-4f0a-b9c4-b5807f045b9a" || UPGRADE_UID="0cad2ecd-35e6-4aa7-9647-16f80dcc7a31"
       MSI_RES="$RES"
+    elif [ "$EDITION" = "4gb" ] ; then
+      # Own upgrade codes: installing it must not remove the full edition
+      [ "$arc" = "aarch64" ]  && UPGRADE_UID="a5a09c96-fab0-47e7-9fce-7e3a1b812bae" || UPGRADE_UID="a905d395-ba9f-4dc3-831c-53687cd447a6"
+      MSI_RES="$RES/msi/${arc}"
     else
       [ "$arc" = "aarch64" ]  && UPGRADE_UID="1d34dbc0-804b-491f-b9b7-cddec4b42771" || UPGRADE_UID="4179fa98-ca01-4739-b89e-92aff0702b48"
       MSI_RES="$RES/msi/${arc}"

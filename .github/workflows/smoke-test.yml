@@ -100,7 +100,7 @@ jobs:
           echo "EXTRA_DIR=$EXTRA_DIR" >> "$GITHUB_ENV"
           echo "EXTRA_DIR is $EXTRA_DIR"; ls -la "$EXTRA_DIR"
 
-      - name: Run the app under Xvfb, accept the disclaimer, screenshot
+      - name: Run the app under Xvfb, check there is no first-launch dialog, screenshot
         shell: bash {0}
         run: |
           source "$RUNNER_TEMP/lib.sh"
@@ -128,50 +128,8 @@ jobs:
           echo "--- windows at 6 s"; wmctrl -l
           grab linux-0-splash
 
-          for i in $(seq 1 180); do
-            disc_open && break
-            kill -0 $APP_PID 2>/dev/null || break
-            sleep 1
-          done
-          echo "waited $i s for the disclaimer"
-          sleep 3
-          echo "--- windows with disclaimer"; wmctrl -l
-          DISC=$(wmctrl -l | grep "First Time Launch")
-          if [ -n "$DISC" ]; then res PASS disclaimer-window "$DISC"; else res FAIL disclaimer-window "no window titled 'First Time Launch of ...' within 180 s"; fi
-          case "$DISC" in *"Addis Ortho DICOM Viewer"*) res PASS disclaimer-title-has-product-name "$DISC";; *) res FAIL disclaimer-title-has-product-name "$DISC";; esac
-          grab linux-1-disclaimer
-
-          accepted=""
-          W=$(xdotool search --name "First Time Launch" | head -1)
-          if [ -n "$W" ]; then
-            eval "$(xdotool getwindowgeometry --shell "$W")"
-            echo "dialog window $W: ${WIDTH}x${HEIGHT}+${X}+${Y}"
-            xdotool windowactivate "$W" 2>&1; sleep 1
-            # 'I accept' must be the default button: Return alone has to accept the disclaimer.
-            xdotool key --clearmodifiers Return; sleep 3
-            if disc_open; then
-              res FAIL disclaimer-default-button "Return did not close the dialog: 'I accept' is not the default button"
-              xdotool key --clearmodifiers space; sleep 3
-            elif kill -0 $APP_PID 2>/dev/null; then
-              res PASS disclaimer-default-button "Return closed the dialog and the app kept running"
-              accepted="Return key"
-            else
-              res FAIL disclaimer-default-button "the app exited after Return: the default button is 'No'"
-            fi
-            if [ -z "$accepted" ] && disc_open; then
-              echo "space did not close it either; clicking 'I accept' (bottom right: 150 px left of the right edge, 46 px above the bottom)"
-              xdotool mousemove $((X + WIDTH - 150)) $((Y + HEIGHT - 46)); sleep 1
-              grab linux-1b-pointer-on-button
-              xdotool click 1; sleep 3
-              disc_open || accepted="mouse click"
-            elif [ -z "$accepted" ]; then
-              accepted="keyboard"
-            fi
-          fi
-          if [ -n "$accepted" ]; then res PASS disclaimer-accepted "closed with $accepted"; else res FAIL disclaimer-accepted "dialog still open"; fi
-
           MAIN=""
-          for i in $(seq 1 120); do
+          for i in $(seq 1 180); do
             MAIN=$(wmctrl -l | grep -v "First Time Launch" | grep "Addis Ortho DICOM Viewer")
             [ -n "$MAIN" ] && break
             kill -0 $APP_PID 2>/dev/null || break
@@ -182,6 +140,8 @@ jobs:
           sleep 30
           echo "--- windows with main window"; wmctrl -l
           grab linux-2-main-after-DICOMDIR
+          # The first-launch disclaimer is turned off (weasis.show.disclaimer false in base.json).
+          if disc_open; then res FAIL no-first-launch-dialog "$(wmctrl -l | grep 'First Time Launch')"; else res PASS no-first-launch-dialog "no 'First Time Launch' window"; fi
           kill -0 $APP_PID 2>/dev/null && res PASS process-alive "pid $APP_PID alive after load" || res FAIL process-alive "pid $APP_PID exited"
 
           echo "--- second launch with three .dcm files (like 'Open with') is forwarded to the running instance"
@@ -332,11 +292,10 @@ jobs:
           echo "--- Contents/MacOS"; ls -la "$APP/Contents/MacOS"
           echo "--- Contents/Resources"; ls -la "$APP/Contents/Resources"
           echo "--- codesign"; codesign -dv "$APP" 2>&1 | head -12
-          JAR=$(find "$APP" -name weasis-launcher.jar | head -1)
-          echo "launcher jar: $JAR"
-          unzip -p "$JAR" org/weasis/launcher/messages.properties 2>&1 | grep -E "aoDisclaimer|first=|ok=|no="
-          unzip -p "$JAR" org/weasis/launcher/messages.properties 2>&1 | grep -q "is based on the open-source Weasis viewer. It is not a certified medical device (CE, FDA or EFDA)" \
-            && res PASS disclaimer-text-in-jar "aoDisclaimer text found in weasis-launcher.jar" || res FAIL disclaimer-text-in-jar "aoDisclaimer text not found"
+          CONF=$(find "$APP" -path "*/conf/base.json" | head -1)
+          echo "base config: $CONF"
+          python3 -c 'import json,sys; v=[p["value"] for p in json.load(open(sys.argv[1]))["weasisPreferences"] if p["code"]=="weasis.show.disclaimer"]; print(v); sys.exit(0 if v in ([False],["false"]) else 1)' "$CONF" \
+            && res PASS disclaimer-off-in-config "weasis.show.disclaimer is false in $CONF" || res FAIL disclaimer-off-in-config "weasis.show.disclaimer is not false in $CONF"
           exit 0
 
       - name: Launch the app and screenshot
@@ -416,28 +375,11 @@ jobs:
           if kill -0 $APP_PID 2>/dev/null; then res PASS process-alive-40s "pid $APP_PID alive"; else res FAIL process-alive-40s "pid $APP_PID exited"; fi
           ps -eo pid,etime,rss,args | grep -i "[A]ddis Ortho" | cut -c1-250
           echo "--- on-screen windows"; W=$(wins); echo "$W"
-          echo "$W" | grep -q "title=First Time Launch of Addis Ortho DICOM Viewer" && res PASS disclaimer-window "title: First Time Launch of Addis Ortho DICOM Viewer" || res FAIL disclaimer-window "not in the window list"
+          # The first-launch disclaimer is turned off (weasis.show.disclaimer false in base.json).
+          echo "$W" | grep -q "title=First Time Launch" && res FAIL no-first-launch-dialog "$(echo "$W" | grep 'title=First Time Launch' | head -1)" || res PASS no-first-launch-dialog "no 'First Time Launch' window"
           echo "--- System Events processes"; osascript -e 'tell application "System Events" to get name of every process whose background only is false' 2>&1
-          grab mac-1-disclaimer
-
-          echo "--- Return must press 'I accept' (the default button)"
-          read -r DW DH DX DY <<< "$(echo "$W" | grep 'title=First Time Launch' | head -1 | sed -E 's/.*\| ([0-9]+)x([0-9]+)\+(-?[0-9]+)\+(-?[0-9]+)$/\1 \2 \3 \4/')"
-          echo "dialog ${DW}x${DH}+${DX}+${DY}"
-          key "key code 36"; sleep 4
-          if echo "$(wins)" | grep -q "title=First Time Launch"; then
-            res FAIL disclaimer-default-button "Return did not close the dialog: 'I accept' is not the default button"
-            grab mac-2-after-return
-            echo "click 'I accept' instead (bottom right of the dialog)"
-            key "click at {$((DX + DW - 53)), $((DY + DH - 25))}"; sleep 4
-          elif kill -0 $APP_PID 2>/dev/null; then
-            res PASS disclaimer-default-button "Return closed the dialog and the app kept running"
-          else
-            res FAIL disclaimer-default-button "the app exited after Return: the default button is 'No'"
-          fi
-          echo "--- on-screen windows after accept"; W=$(wins); echo "$W"
-          echo "$W" | grep -q "title=First Time Launch" && res FAIL disclaimer-accepted "dialog still on screen" || res PASS disclaimer-accepted "dialog gone"
           sleep 35
-          if kill -0 $APP_PID 2>/dev/null; then res PASS process-alive-after-accept "pid $APP_PID alive"; else res FAIL process-alive-after-accept "pid $APP_PID exited"; fi
+          if kill -0 $APP_PID 2>/dev/null; then res PASS process-alive-75s "pid $APP_PID alive"; else res FAIL process-alive-75s "pid $APP_PID exited"; fi
           echo "--- on-screen windows with the main window"; W=$(wins); echo "$W"
           echo "$W" | grep -q "title=Addis Ortho DICOM Viewer" && res PASS main-window-title "$(echo "$W" | grep 'title=Addis Ortho DICOM Viewer' | head -1)" || res FAIL main-window-title "no window titled Addis Ortho DICOM Viewer"
           grab mac-3-main-after-DICOMDIR
@@ -679,19 +621,15 @@ jobs:
           if ($ent -and $ent[0].Publisher -eq 'Addis Ortho Trading PLC' -and $ent[0].DisplayName -eq 'Addis Ortho Viewer') { Res PASS apps-entry "$($ent[0].DisplayName) / $($ent[0].Publisher) / $($ent[0].DisplayVersion)" } else { Res FAIL apps-entry "entry: $($ent | Out-String)" }
           "--- file association .dcm"
           & reg query 'HKCR\.dcm' 2>&1 | Out-String | Write-Host
-          $jar = Get-ChildItem $dir -Recurse -Filter weasis-launcher.jar -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($jar) {
-            Add-Type -AssemblyName System.IO.Compression.FileSystem
-            $zip = [System.IO.Compression.ZipFile]::OpenRead($jar.FullName)
-            $entry = $zip.Entries | Where-Object { $_.FullName -eq 'org/weasis/launcher/messages.properties' }
-            $text = (New-Object System.IO.StreamReader($entry.Open())).ReadToEnd()
-            $zip.Dispose()
-            $text -split "`n" | Where-Object { $_ -match 'aoDisclaimer|first=|ok=|no=' } | Write-Host
-            if ($text -match 'is based on the open-source Weasis viewer. It is not a certified medical device \(CE, FDA or EFDA\)') { Res PASS disclaimer-text-in-jar "aoDisclaimer text found in $($jar.FullName)" } else { Res FAIL disclaimer-text-in-jar "aoDisclaimer text not found" }
-          }
+          $conf = Get-ChildItem $dir -Recurse -Filter base.json -ErrorAction SilentlyContinue | Where-Object { $_.Directory.Name -eq 'conf' } | Select-Object -First 1
+          if ($conf) {
+            $v = ((Get-Content $conf.FullName -Raw | ConvertFrom-Json).weasisPreferences | Where-Object { $_.code -eq 'weasis.show.disclaimer' }).value
+            "weasis.show.disclaimer in $($conf.FullName): $v"
+            if ("$v" -eq 'False' -or "$v" -eq 'false') { Res PASS disclaimer-off-in-config "weasis.show.disclaimer is false in $($conf.FullName)" } else { Res FAIL disclaimer-off-in-config "weasis.show.disclaimer is '$v' in $($conf.FullName)" }
+          } else { Res FAIL disclaimer-off-in-config "conf\base.json not found under $dir" }
           exit 0
 
-      - name: Launch the app, accept the disclaimer, screenshot
+      - name: Launch the app, check there is no first-launch dialog, screenshot
         shell: pwsh
         run: |
           . "$env:RUNNER_TEMP\lib.ps1"
@@ -708,40 +646,9 @@ jobs:
           "--- visible windows at 2 s"; Get-Wins
           Shot 'win-0-splash'
           Start-Sleep -Seconds 8
-          $disc = $null
-          for ($i = 0; $i -lt 150 -and -not $disc; $i++) {
-            $disc = Get-Wins | Where-Object { $_ -match 'First Time Launch' } | Select-Object -First 1
-            if (-not $disc) { Start-Sleep -Seconds 1 }
-          }
-          "waited $i s for the disclaimer"
-          Start-Sleep -Seconds 3
-          "--- visible windows with the disclaimer"; Get-Wins
-          if ($disc) { Res PASS disclaimer-window $disc } else { Res FAIL disclaimer-window "no window titled 'First Time Launch of ...' within 150 s" }
-          if ($disc -match 'Addis Ortho DICOM Viewer') { Res PASS disclaimer-title-has-product-name $disc } else { Res FAIL disclaimer-title-has-product-name "$disc" }
-          Shot 'win-1-disclaimer'
           $wsh = New-Object -ComObject WScript.Shell
-          $accepted = ''
-          if ($disc -match 'rect=(-?\d+),(-?\d+) (\d+)x(\d+)') {
-            $dx = [int]$Matches[1]; $dy = [int]$Matches[2]; $dw = [int]$Matches[3]; $dh = [int]$Matches[4]
-            "dialog ${dw}x${dh}+${dx}+${dy}; Enter must press 'I accept' (the default button)"
-            $wsh.AppActivate('First Time Launch') | Out-Null; Start-Sleep -Seconds 1
-            [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Seconds 4
-            if (Get-Wins | Where-Object { $_ -match 'First Time Launch' }) {
-              Res FAIL disclaimer-default-button "Enter did not close the dialog: 'I accept' is not the default button"
-              Shot 'win-1b-after-enter'
-              "clicking 'I accept' instead (139 px left of the right edge, 33 px above the bottom of the window rectangle)"
-              [WinList]::Click($dx + $dw - 139, $dy + $dh - 33); Start-Sleep -Seconds 3
-              if (-not (Get-Wins | Where-Object { $_ -match 'First Time Launch' })) { $accepted = 'mouse click' }
-            } elseif (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue) {
-              Res PASS disclaimer-default-button "Enter closed the dialog and the app kept running"
-              $accepted = 'Enter key'
-            } else {
-              Res FAIL disclaimer-default-button "the app exited after Enter: the default button is 'No'"
-            }
-          }
-          if ($accepted) { Res PASS disclaimer-accepted "closed with $accepted" } else { Res FAIL disclaimer-accepted "dialog still open" }
           $main = $null
-          for ($i = 0; $i -lt 120 -and -not $main; $i++) {
+          for ($i = 0; $i -lt 180 -and -not $main; $i++) {
             $main = Get-Wins | Where-Object { $_ -match 'title=Addis Ortho DICOM Viewer' -and $_ -notmatch 'First Time' } | Select-Object -First 1
             if (-not $main) { Start-Sleep -Seconds 1 }
           }
@@ -750,6 +657,9 @@ jobs:
           Start-Sleep -Seconds 40
           "--- visible windows with the main window"; Get-Wins
           Shot 'win-2-main-after-DICOMDIR'
+          # The first-launch disclaimer is turned off (weasis.show.disclaimer false in base.json).
+          $disc = Get-Wins | Where-Object { $_ -match 'First Time Launch' } | Select-Object -First 1
+          if ($disc) { Res FAIL no-first-launch-dialog $disc } else { Res PASS no-first-launch-dialog "no 'First Time Launch' window" }
           $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
           if ($alive) { Res PASS process-alive "pid $($proc.Id) alive, working set $([math]::Round($alive.WorkingSet64/1MB)) MB" } else { Res FAIL process-alive "pid $($proc.Id) exited" }
           "--- processes"

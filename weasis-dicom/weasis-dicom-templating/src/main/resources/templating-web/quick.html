@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en" data-mode="quick">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Quick templating · Addis Ortho</title>
+<link rel="icon" type="image/png" href="brand/favicon.png">
+<!-- Quick mode (30 Oct 2026; Sami: "as simple as possible ... on their phone ... bonesetter type simple add implant mirror and
+     tell them the measurements and sizes they need for both sides"; q2 the same day: a knee case of four views, AP and lateral
+     templated with shared sizes, a CT scout sized on the scanner's own scale, Add one part, a turn handle and a fine-move pad,
+     no "rep" on screen). One tap on the joint, implants as true-size outlines to drag, size and turn, copy to the other
+     side, and a card of sizes. The full planner (index.html) is unchanged; nothing here is saved to the patient list. 4 Nov 2026: keys and touch gestures, the Image panel
+     (brightness, contrast, invert, window, one-line commands) and Save (a plan file the user keeps; Quick never saves by itself). -->
+<style>
+  :root { --green: #034537; --lime: #A8FF30; --ink: #000; --line: #d5dedb; --warn: #8a5a00; --bad: #a40000; --bar: #0b1412; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body { height: 100vh; height: 100dvh; overflow: hidden; display: flex; flex-direction: column; background: #000;
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); }
+  button, select, input { font: inherit; }
+  header { background: var(--green); color: #fff; display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+    padding-top: max(6px, env(safe-area-inset-top)); padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+  header img { height: 28px; width: auto; display: block; }
+  header .grow { flex: 1 1 auto; min-width: 0; }
+  .seg { display: inline-flex; border: 1px solid #fff; border-radius: 8px; overflow: hidden; }
+  .seg button { background: transparent; color: #fff; border: 0; padding: 7px 9px; min-height: 38px; }
+  @media (max-width: 420px) { header img { display: none; } .seg button { padding: 7px 8px; } }
+  table.res tr.w td { color: #5a3d00; background: #fff8e6; }
+  table.res th[colspan] { padding-top: 12px; }
+  .seg button[aria-pressed="true"] { background: #fff; color: var(--green); font-weight: 600; }
+  .hb { background: #fff; color: var(--green); border: 0; border-radius: 8px; min-width: 40px; min-height: 38px; padding: 0 10px; font-weight: 600; }
+  .hb:disabled { opacity: .45; }
+  #tabs { background: #022d24; display: flex; gap: 6px; padding: 5px 8px; padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+  #tabs[hidden] { display: none; }
+  #tabs button { flex: 1 1 0; min-height: 36px; border-radius: 8px; border: 1px solid #5f8a7f; background: transparent; color: #fff; font-size: 15px; }
+  #tabs button[aria-pressed="true"] { background: #fff; color: var(--green); font-weight: 700; border-color: #fff; }
+  #zoom { position: absolute; right: 8px; top: 38%; display: grid; gap: 6px; }
+  #zoom[hidden] { display: none; }
+  #zoom button[aria-pressed="true"] { background: #fff; color: var(--green); }
+  .card .reso { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .card .reso .go { min-height: 44px; font-size: 15px; }
+  .card .chk { display: block; margin-top: 8px; font-size: 13px; color: #456; }
+  #zoom button { width: 42px; height: 42px; border-radius: 10px; border: 1px solid #3b4d48; background: rgba(29, 42, 39, .88); color: #fff; font-size: 20px; }
+  table.keys td { font-size: 14px; padding: 5px 6px; }
+  /* 4 Nov 2026: the strip under the header (Image, Save, keys) and the Image panel */
+  #strip { background: #022d24; display: flex; align-items: center; gap: 6px; padding: 4px 8px; padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); color: #cfe; font-size: 14px; }
+  #strip .grow { flex: 1 1 auto; }
+  .sb { background: transparent; color: #fff; border: 1px solid #5f8a7f; border-radius: 8px; min-height: 36px; padding: 0 12px; font-size: 15px; }
+  .sb[aria-pressed="true"] { background: #fff; color: var(--green); font-weight: 700; border-color: #fff; }
+  .sb:disabled { opacity: .45; }
+  .sb.dirty { border-color: var(--lime); box-shadow: inset 0 0 0 1px var(--lime); }
+  #saveState.dirty { color: #ffd27a; font-weight: 600; }
+  #imgp { position: absolute; left: 8px; bottom: 46px; width: min(360px, calc(100% - 16px)); background: rgba(0, 0, 0, .82); color: #fff; border: 1px solid #3b4d48; border-radius: 12px; padding: 6px 10px 8px; display: grid; gap: 4px; z-index: 4; }
+  #imgp[hidden] { display: none; }
+  #imgp .ihead { display: flex; justify-content: space-between; align-items: center; }
+  #imgp .ihead b { color: var(--lime); }
+  #imgp label { display: grid; grid-template-columns: 84px 1fr; align-items: center; gap: 6px; font-size: 14px; }
+  #imgp input[type=range] { width: 100%; min-height: 30px; }
+  #imgp .irow { display: flex; flex-wrap: wrap; gap: 6px; }
+  #imgp .irow[hidden] { display: none; }
+  #imgp .irow button, #imgp #imgX, #cmdF button { background: #1d2a27; color: #fff; border: 1px solid #3b4d48; border-radius: 8px; min-height: 36px; padding: 0 10px; font-size: 14px; }
+  #imgp .irow button[aria-pressed="true"] { outline: 2px solid var(--lime); }
+  #imgp .irow label { grid-template-columns: auto 90px; }
+  #imgp .irow input { min-height: 34px; width: 90px; border-radius: 6px; border: 0; padding: 0 6px; font-size: 15px; }
+  #cmdF { display: flex; gap: 6px; }
+  #cmd { flex: 1 1 auto; min-width: 0; min-height: 38px; border-radius: 8px; border: 1px solid var(--line); padding: 0 10px; font: 16px ui-monospace, Menlo, monospace; }
+  #cmdMsg { font-size: 13px; color: #cfe; }
+  #cmdMsg:empty { display: none; }
+  kbd { font: 600 13px ui-monospace, Menlo, monospace; background: #eef3f1; border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+  #pad { position: absolute; right: 8px; bottom: 50px; display: grid; grid-template-columns: repeat(3, 48px); grid-template-rows: repeat(3, 48px); gap: 4px;
+    background: rgba(0, 0, 0, .55); padding: 6px; border-radius: 12px; touch-action: none; }
+  #pad[hidden] { display: none; }
+  #pad button { border-radius: 10px; border: 1px solid #3b4d48; background: #1d2a27; color: #fff; font-size: 20px; }
+  #pad span { display: flex; align-items: center; justify-content: center; color: #cfe; font-size: 11px; text-align: center; line-height: 1.1; }
+  #stage { position: relative; flex: 1 1 auto; min-height: 0; touch-action: none; overflow: hidden; }
+  #cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #msg { position: absolute; left: 8px; right: 8px; top: 8px; background: rgba(3, 69, 55, .92); color: #fff; border-left: 4px solid var(--lime);
+    padding: 8px 10px; border-radius: 6px; font-size: 14px; pointer-events: none; }
+  #msg:empty { display: none; }
+  #stitchWarn { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 4; background: #fff3d6; color: #000; border-left: 4px solid #b07800; padding: 6px 8px; font-size: 12px; line-height: 1.35; border-radius: 4px; max-height: 30%; overflow: auto; }
+  #stitchWarn.red { background: #fde8e8; border-left-color: #9b1c1c; }
+  #scale { position: absolute; left: 8px; bottom: 8px; background: rgba(0, 0, 0, .7); color: #fff; border: 1px solid #456; border-radius: 16px;
+    padding: 6px 12px; font-size: 14px; min-height: 34px; }
+  #scale.bad { border-color: #e0a000; color: #ffd27a; }
+  #scale:empty { display: none; }
+  /* the bottom bar: the selected implant, then the actions */
+  #bar { background: var(--bar); color: #fff; padding: 6px 8px; padding-bottom: max(8px, env(safe-area-inset-bottom));
+    padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); display: grid; gap: 6px; }
+  .row { display: flex; gap: 6px; align-items: stretch; }
+  .row > * { flex: 1 1 0; min-width: 0; }
+  .bb { background: #1d2a27; color: #fff; border: 1px solid #3b4d48; border-radius: 10px; min-height: 46px; padding: 0 4px; font-size: 18px; }
+  .row2 .bb { font-size: 15px; padding: 0 2px; }
+  .bb.main { background: var(--green); border-color: var(--lime); font-weight: 600; }
+  .bb:disabled { opacity: .4; }
+  .bb.on { outline: 2px solid var(--lime); }
+  #pick { flex: 2.4 1 0; display: flex; align-items: center; gap: 6px; background: #1d2a27; border: 1px solid #3b4d48; border-radius: 10px; padding: 0 8px; }
+  #pick b { white-space: nowrap; color: var(--lime); font-size: 14px; flex: 0 0 auto; }
+  #pick select { flex: 1 1 0; width: 0; min-width: 52px; background: #fff; color: var(--green); border: 0; border-radius: 6px; min-height: 34px; font-size: 16px; font-weight: 600; }
+  /* sheets: start, menus, the result card */
+  .sheet { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); display: flex; align-items: flex-end; justify-content: center; z-index: 10; }
+  .sheet[hidden] { display: none; }
+  .sheet .card { background: #fff; width: 100%; max-width: 560px; max-height: 92dvh; overflow: auto; border-radius: 14px 14px 0 0;
+    padding: 14px 16px; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+  .card h2 { margin: 0 0 8px; color: var(--green); font-size: 19px; }
+  .card h3 { margin: 14px 0 6px; color: var(--green); font-size: 15px; }
+  .card p { margin: 6px 0; }
+  .card .note { font-size: 13px; color: #456; }
+  .card label.f { display: block; margin: 10px 0 4px; font-weight: 600; color: var(--green); }
+  .card select, .card input[type=text], .card input[type=number] { width: 100%; min-height: 44px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; font-size: 16px; background: #fff; }
+  .card .choice { display: flex; gap: 8px; }
+  .card .choice button { flex: 1 1 0; min-height: 48px; border-radius: 10px; border: 2px solid var(--green); background: #fff; color: var(--green); font-size: 16px; font-weight: 600; }
+  .card .choice button[aria-pressed="true"] { background: var(--green); color: #fff; }
+  .card .choice.wrap { flex-wrap: wrap; }
+  .card .choice.wrap button { flex: 1 1 40%; }
+  .card .go { width: 100%; min-height: 50px; margin-top: 14px; border: 0; border-radius: 10px; background: var(--green); color: #fff; font-size: 17px; font-weight: 600; }
+  .card .go.alt { background: #fff; color: var(--green); border: 2px solid var(--green); margin-top: 8px; }
+  .card .menu button { display: block; width: 100%; text-align: left; min-height: 48px; border: 0; border-bottom: 1px solid var(--line); background: #fff; color: var(--green); font-size: 16px; padding: 0 4px; }
+  .card .menu button:disabled { color: #9aa; }
+  .card a { color: var(--green); }
+  table.res { width: 100%; border-collapse: collapse; font-size: 15px; }
+  table.res th { text-align: left; color: var(--green); padding: 8px 6px 4px; border-bottom: 2px solid var(--green); }
+  table.res td { padding: 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.res td.k { color: #456; }
+  table.res td.v { font-size: 20px; font-weight: 700; color: var(--green); }
+  table.res td.v.sm { font-size: 14px; font-weight: 600; }
+  .ready { background: #eef7f1; border-radius: 8px; padding: 8px 10px; }
+  .warn { background: #fff4d6; border-left: 4px solid #e0a000; padding: 8px 10px; border-radius: 6px; font-size: 14px; color: #5a3d00; }
+  .stamp { background: var(--green); color: #fff; padding: 8px 10px; border-radius: 6px; font-size: 14px; }
+  #open { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: #fff; overflow: auto; }
+  #open[hidden] { display: none; }
+  #open .card { max-width: 480px; width: 100%; }
+  #open img { height: 64px; width: auto; display: block; margin-bottom: 10px; }
+  #open h1 { color: var(--green); font-size: 22px; margin: 0 0 8px; }
+  .filebtn { display: flex; align-items: center; justify-content: center; min-height: 56px; border-radius: 12px; background: var(--green); color: #fff; font-size: 18px; font-weight: 600; margin: 14px 0 8px; }
+  .filebtn input { display: none; }
+  .ptf input[type=text], .ptf input[type=number] { width: 100%; box-sizing: border-box; font: inherit; padding: 8px; }
+  .ptr { display: flex; gap: 10px; } .ptr span:first-child { flex: 0 0 76px; } .ptr span:last-child { flex: 1; min-width: 0; }
+</style>
+</head>
+<body>
+<header>
+  <img src="brand/logo-lime.png" alt="Addis Ortho" width="57" height="28">
+  <div class="seg" role="group" aria-label="Joint"><button id="jHip" aria-pressed="true">Hip</button><button id="jKnee" aria-pressed="false">Knee</button><button id="jTum" aria-pressed="false">Tumour</button><button id="jPfna" aria-pressed="false" hidden>PFNA</button></div>
+  <div class="seg" role="group" aria-label="Side of surgery"><button id="sR" aria-pressed="true">R</button><button id="sL" aria-pressed="false">L</button></div>
+  <span class="grow"></span>
+  <button class="hb" id="undoB" aria-label="Undo" disabled>↶</button>
+  <button class="hb" id="menuB" aria-label="Menu">☰</button>
+</header>
+<div id="strip">
+  <button class="sb" id="imgB" aria-pressed="false" aria-label="Image: brightness, contrast, invert, window, reset" title="Image (/ for a command)">Image</button>
+  <button class="sb" id="saveB" disabled aria-label="Save the case in My cases on this computer (Ctrl+S)" title="Save the case in My cases on this computer (Ctrl+S)">Save</button>
+  <button class="sb" id="resultB" disabled aria-label="Save the result as PNG, PDF or DICOM" title="The X-ray with the implants and the sizes, as PNG, PDF or DICOM">Result</button>
+  <span id="saveState" aria-live="polite"></span>
+  <span class="grow"></span>
+  <button class="sb" id="helpB" aria-label="Keys, gestures and image commands" title="Keys and gestures (?)">? Keys</button>
+</div>
+<input type="file" id="planFile" accept=".json,application/json" hidden>
+<nav id="tabs" aria-label="Knee films" hidden><button data-v="ap">AP</button><button data-v="lat">Lateral</button><button data-v="other">Other ▾</button></nav>
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <div id="msg"></div>
+  <div id="stitchWarn" hidden role="status"></div>
+  <button id="scale" aria-label="Scale and ball size"></button>
+  <div id="imgp" hidden role="group" aria-label="Image controls">
+    <div class="ihead"><b>Image</b><button id="imgX" aria-label="Close the image controls">&#10005;</button></div>
+    <label>Brightness <input id="lvB" type="range" min="0" max="100" step="1" aria-label="Brightness"></label>
+    <label>Contrast <input id="lvC" type="range" min="0" max="100" step="1" aria-label="Contrast"></label>
+    <div class="irow"><button id="lvInv" aria-pressed="false">Invert</button><button id="lvAuto">Auto</button><button id="lvFile">As in file</button><button id="lvDrag" aria-pressed="false" title="One finger drags brightness and contrast (W)">Drag levels</button><button id="lvReset">Reset</button></div>
+    <div class="irow" id="lvWin" hidden><label>Centre <input id="lvC0" type="number" inputmode="numeric" aria-label="Window centre"></label><label>Width <input id="lvW0" type="number" inputmode="numeric" min="1" aria-label="Window width"></label></div>
+    <form id="cmdF" autocomplete="off"><input id="cmd" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="b60 c70 i   (? lists them)" aria-label="Image command"><button type="submit">Go</button></form>
+    <div id="cmdMsg" role="status"></div>
+  </div>
+  <div id="zoom" hidden><button id="zHide" aria-pressed="false" aria-label="Hold to see the X-ray without the implants" title="Hold to see the X-ray without the implants (H)"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button><button id="zIn" aria-label="Zoom in" title="Zoom in (+)">+</button><button id="zOut" aria-label="Zoom out" title="Zoom out (−)">−</button><button id="zFit" aria-label="Fit the film" title="Fit the film (Ctrl+0)">⤢</button></div>
+  <div id="pad" hidden aria-label="Fine move, half a millimetre a tap">
+    <span></span><button data-d="0,-1" aria-label="Up">↑</button><span>0.5 mm<br>a tap</span>
+    <button data-d="-1,0" aria-label="Left">←</button><button id="padX" aria-label="Close fine move">✕</button><button data-d="1,0" aria-label="Right">→</button>
+    <span></span><button data-d="0,1" aria-label="Down">↓</button><span></span>
+  </div>
+  <div id="open">
+    <div class="card">
+      <img src="brand/logo-card.png" alt="Addis Ortho" width="130" height="64">
+      <h1>Quick templating</h1>
+      <p>For a quick look at sizes. Open the X-ray, tap the joint, then drag, turn and resize the implants.</p>
+      <p class="note">Hip or knee: choose at the top first. A knee case takes the AP, the lateral, the skyline and the long leg (or a CT scout); open the AP first and add the others from the tabs.</p>
+      <label class="filebtn">Open X-ray<input type="file" id="file" accept=".dcm,.dicom,application/dicom,image/png,image/jpeg,image/webp,image/*"></label>
+      <p><button type="button" id="joinBtn" class="filebtn">Join 2 to 4 films into one long leg</button></p>
+      <p><button type="button" id="casesBtn" class="filebtn" hidden>My cases</button></p>
+      <p class="note">DICOM, JPEG or PNG. An X-ray needs the calibration ball in the picture (25 mm unless your surgeon uses another; you can change it) or a known length: the sizes depend on it. A CT scout (DICOM) needs no ball: the scanner's own scale is used. The film stays on this phone.</p>
+      <p class="note" id="openErr" style="color:var(--bad)"></p>
+      <p class="warn" id="draftNote" hidden><span id="draftText"></span> <button class="go alt" id="draftX" type="button">Discard the unsaved plan</button></p>
+      <p class="note"><a href="./">Full planner</a> for a surgeon's plan (landmarks, leg length, offset, knee cuts, saved to the patient list).</p>
+    </div>
+  </div>
+</div>
+<div id="bar">
+  <div class="row">
+    <div id="pick"><b id="pickName">No implant</b><select id="sizeSel" aria-label="Size" disabled></select></div>
+    <button class="bb" id="minus" aria-label="Smaller" disabled>−</button>
+    <button class="bb" id="plus" aria-label="Larger" disabled>+</button>
+    <button class="bb" id="rotL" aria-label="Turn left" disabled>⟲</button>
+    <button class="bb" id="rotR" aria-label="Turn right" disabled>⟳</button>
+  </div>
+  <div class="row row2">
+    <button class="bb" id="placeB" disabled>Add</button>
+    <button class="bb" id="mirrorB" disabled>Copy ⇄</button>
+    <button class="bb" id="moveB" disabled aria-label="Fine move">✥ Move</button>
+    <button class="bb" id="measB" disabled>Measure</button>
+    <button class="bb main" id="doneB" disabled>Sizes</button>
+  </div>
+</div>
+<div class="sheet" id="sheet" hidden><div class="card" id="sheetCard"></div></div>
+<script type="module" src="quick.js"></script>
+</body>
+</html>

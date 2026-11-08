@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.vr;
 
 import java.awt.Dimension;
@@ -55,6 +56,12 @@ public class DicomVolTexture extends VolumeTexture implements MediaSeriesGroup {
   private final PropertyChangeListener crossHairRelay;
 
   private String pixelValueUnit;
+
+  /** Pre-filters the volume on upload and smooths its shading (see VolumeSmoother). */
+  private volatile boolean smoothing;
+
+  private volatile boolean fullyLoaded;
+  private volatile boolean loadFailed;
 
   public DicomVolTexture(
       Vector3i size, Volume<?, ?> v, PixelFormat pixelFormat, PropertyChangeSupport changeSupport) {
@@ -118,6 +125,15 @@ public class DicomVolTexture extends VolumeTexture implements MediaSeriesGroup {
               output.toMat(), new Dimension(width, height), Imgproc.INTER_LINEAR);
     }
     return output;
+  }
+
+  public boolean isSmoothing() {
+    return smoothing;
+  }
+
+  /** Takes effect on the next upload of the volume, see VolumeBuilder#rebuild(). */
+  public void setSmoothing(boolean smoothing) {
+    this.smoothing = smoothing;
   }
 
   public Vector3d getScale() {
@@ -237,11 +253,32 @@ public class DicomVolTexture extends VolumeTexture implements MediaSeriesGroup {
   }
 
   public void notifyFullyLoaded() {
+    fullyLoaded = true;
     firePropertyChange(this, DicomVolTextureFactory.FULLY_LOADED, this);
+  }
+
+  /** {@code true} once every slice of the volume is loaded and uploaded. */
+  public boolean isFullyLoaded() {
+    return fullyLoaded;
   }
 
   public void notifyPartiallyLoaded() {
     firePropertyChange(this, DicomVolTextureFactory.PARTIALLY_LOADED, this);
+  }
+
+  /** The upload stopped before the last slice: what is shown is only part of the volume. */
+  public void notifyLoadFailed() {
+    loadFailed = true;
+    firePropertyChange(this, DicomVolTextureFactory.LOAD_FAILED, this);
+  }
+
+  /** {@code true} when the last upload stopped short; cleared when an upload starts again. */
+  public boolean isLoadFailed() {
+    return loadFailed;
+  }
+
+  void clearLoadFailed() {
+    loadFailed = false;
   }
 
   public boolean isReadyForDisplay() {

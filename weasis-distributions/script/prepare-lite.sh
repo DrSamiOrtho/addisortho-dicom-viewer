@@ -2,7 +2,8 @@
 # Written by Addis Ortho Trading PLC, 2026.
 # Turns the weasis-native input directory and the jpackage resources of one platform into the
 # Addis Ortho Viewer Lite edition: a 2D DICOM viewer for X-ray and CT, without 3D, MPR/MIP toolbar,
-# RT, SR, ECG, audio, DICOM send, query/retrieve, CD burning, Dicomizer or translations.
+# RT, SR, ECG, audio, DICOM send, query/retrieve, CD burning, templating, stitching, the modality
+# receiver, Dicomizer or translations.
 # conf/lite.json switches off the matching bundles and toolbars; this script removes their files.
 #
 # Usage: prepare-lite.sh <weasis input dir> <resource dir of the platform> <output resource dir>
@@ -28,6 +29,7 @@ removed=(
   weasis-dicom-viewer3d jogamp
   weasis-dicom-rt weasis-dicom-sr weasis-dicom-au weasis-dicom-wave
   weasis-dicom-send weasis-dicom-qr weasis-dicom-isowriter
+  weasis-dicom-templating weasis-dicom-stitching weasis-dicom-receive weasis-dicom-bones
   weasis-base-viewer2d weasis-base-explorer weasis-acquire-explorer weasis-acquire-editor
   org.apache.felix.gogo.shell
 )

@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer;
 
 import java.util.Hashtable;
@@ -22,6 +23,7 @@ import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.ui.editor.ViewerPluginBuilder;
 import org.weasis.core.ui.util.Toolbar;
 import org.weasis.dicom.explorer.exp.ExportToolBar;
+import org.weasis.dicom.explorer.imp.DiscWatcher;
 import org.weasis.dicom.explorer.imp.ImportToolBar;
 import org.weasis.dicom.explorer.main.DicomExplorer;
 
@@ -42,6 +44,7 @@ public class DicomExplorerFactory implements DataExplorerViewFactory {
       toolbar.add(new ExportToolBar(7, explorer));
       ViewerPluginBuilder.DefaultDataModel.firePropertyChange(
           new ObservableEvent(ObservableEvent.BasicAction.NULL_SELECTION, explorer, null, null));
+      DiscWatcher.start(model);
     }
     return explorer;
   }
@@ -57,6 +60,7 @@ public class DicomExplorerFactory implements DataExplorerViewFactory {
 
   @Deactivate
   protected void deactivate(ComponentContext context) {
+    DiscWatcher.stop();
     if (explorer != null) {
       DataExplorerModel dataModel = explorer.getDataExplorerModel();
       dataModel.removePropertyChangeListener(explorer);

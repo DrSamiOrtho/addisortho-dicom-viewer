@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer.pr;
 
 import jakarta.xml.bind.JAXBContext;
@@ -434,7 +435,7 @@ public class DicomPrSerializer {
     attributes.setString(Tag.ContentLabel, VR.CS, GSPS);
     attributes.setString(Tag.ContentDescription, VR.LO, DESCRIPTION);
     attributes.setInt(Tag.SeriesNumber, VR.IS, DEFAULT_SERIES_NUMBER);
-    attributes.setString(Tag.SoftwareVersions, VR.LO, AppProperties.WEASIS_VERSION);
+    attributes.setString(Tag.SoftwareVersions, VR.LO, AppProperties.AO_VERSION);
     attributes.setString(
         Tag.SeriesDescription, VR.LO, String.join(" ", AppProperties.WEASIS_NAME, GSPS));
     attributes.setString(Tag.PresentationLUTShape, VR.CS, "IDENTITY"); // NON-NLS

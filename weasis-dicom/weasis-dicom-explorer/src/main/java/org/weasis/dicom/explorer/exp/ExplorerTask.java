@@ -17,6 +17,9 @@ import org.weasis.core.ui.tp.raven.spinner.SpinnerProgress;
 import org.weasis.dicom.param.CancelListener;
 
 public abstract class ExplorerTask<T, V> extends SwingWorker<T, V> {
+  /** Property fired with the text of the current step, e.g. "Unzipping". */
+  public static final String STEP_PROPERTY = "step"; // NON-NLS
+
   private final String message;
   private final boolean globalLoadingManager;
   private final SpinnerProgress bar;
@@ -65,6 +68,17 @@ public abstract class ExplorerTask<T, V> extends SwingWorker<T, V> {
 
   public boolean isSubTask() {
     return subTask;
+  }
+
+  /**
+   * Shows how far the task has got, from 0 to 100, and what it is doing. Safe from the worker
+   * thread: SwingWorker delivers both changes to listeners on the EDT.
+   */
+  protected void showProgress(String step, int percent) {
+    if (step != null) {
+      firePropertyChange(STEP_PROPERTY, null, step);
+    }
+    setProgress(Math.clamp(percent, 0, 100));
   }
 
   public void stopProgress() {

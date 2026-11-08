@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.pref;
 
 import java.awt.Color;
@@ -40,6 +41,7 @@ import org.weasis.dicom.viewer3d.View3DFactory;
 import org.weasis.dicom.viewer3d.geometry.Camera;
 import org.weasis.dicom.viewer3d.geometry.CameraView;
 import org.weasis.dicom.viewer3d.vr.RenderingLayer;
+import org.weasis.dicom.viewer3d.vr.SoftwareGl;
 
 public class Viewer3dPrefView extends AbstractItemDialogPage {
   private final JCheckBox enableOpenGL = new JCheckBox(Messages.getString("enable"));
@@ -51,6 +53,8 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
       new JComboBox<>(View3DContainer.LAYOUT_LIST.toArray(new MigLayoutModel[0]));
 
   private final JComboBox<CameraView> comboBoxOrientations = new JComboBox<>(CameraView.values());
+  private final JCheckBox openOnBone = new JCheckBox(Messages.getString("open.bone"));
+  private final JCheckBox softwareGl = new JCheckBox(Messages.getString("software.3d"));
   private final JSpinner spinnerMaxXY;
   private final JSpinner spinnerMaxZ;
 
@@ -123,6 +127,19 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
     enableOpenGL.setSelected(View3DFactory.isOpenglEnable());
     openglPanel.add(
         GuiUtils.getFlowLayoutPanel(ITEM_SEPARATOR_SMALL, ITEM_SEPARATOR, enableOpenGL));
+    // Addis Ortho: software 3D, for Windows PCs whose graphics chip has no OpenGL 3.3.
+    if (SoftwareGl.isAvailable()) {
+      softwareGl.setSelected(SoftwareGl.isChosen());
+      openglPanel.add(
+          GuiUtils.getFlowLayoutPanel(ITEM_SEPARATOR_SMALL, ITEM_SEPARATOR, softwareGl));
+    } else if (SoftwareGl.unavailableReason() != null) {
+      // Say why instead of hiding the choice, so a PC that lost the files can be put right.
+      openglPanel.add(
+          GuiUtils.getFlowLayoutPanel(
+              new JLabel(
+                  Messages.getString("software.3d.missing")
+                      .formatted(SoftwareGl.unavailableReason()))));
+    }
 
     OpenGLInfo info = View3DFactory.getOpenGLInfo();
     if (info == null) {
@@ -156,7 +173,11 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
       // This minimal version must match with the shader version
       Version minimalVersion = new Version(3, 3, 0);
       boolean versionIssue = !info.isVersionCompliant();
-      boolean software = info.looksSoftware();
+      boolean software = info.looksSoftware() && !SoftwareGl.isActive();
+      if (SoftwareGl.isActive()) {
+        openglPanel.add(
+            GuiUtils.getFlowLayoutPanel(new JLabel(Messages.getString("software.3d.active"))));
+      }
 
       if (versionIssue || software || info.max3dTextureSize() < RenderingLayer.MIN_TEXTURE_SIZE) {
         String alert =
@@ -250,6 +271,12 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
             labelLayout,
             comboBoxOrientations));
 
+    openOnBone.setToolTipText(Messages.getString("open.bone.tip"));
+    openOnBone.setSelected(
+        localPersistence.getBooleanProperty(
+            RenderingLayer.P_OPEN_CT_ON_BONE, RenderingLayer.DEFAULT_OPEN_CT_ON_BONE));
+    otherPanel.add(GuiUtils.getFlowLayoutPanel(openOnBone));
+
     otherPanel.add(
         GuiUtils.getFlowLayoutPanel(
             new JLabel(Messages.getString("bck.color")),
@@ -279,7 +306,7 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
   private Color getBackgroundColor() {
     return GuiUtils.getUICore()
         .getSystemPreferences()
-        .getColorProperty(RenderingLayer.P_BCK_COLOR, Color.GRAY);
+        .getColorProperty(RenderingLayer.P_BCK_COLOR, RenderingLayer.DEFAULT_BCK_COLOR);
   }
 
   private Color getLightColor() {
@@ -303,6 +330,13 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
     localPersistence.putIntProperty(
         RenderingLayer.P_MAX_TEX_Z,
         spinnerMaxZ.getValue() instanceof Integer val ? val : View3DFactory.getMax3dTextureSize());
+    localPersistence.putBooleanProperty(RenderingLayer.P_OPEN_CT_ON_BONE, openOnBone.isSelected());
+    if (SoftwareGl.isAvailable() && softwareGl.isSelected() != SoftwareGl.isChosen()) {
+      View3DFactory.useSoftwareGl(softwareGl.isSelected());
+      if (softwareGl.isSelected()) {
+        enableOpenGL.setSelected(true);
+      }
+    }
     boolean openglEnabled = enableOpenGL.isSelected();
     if (openglEnabled && !View3DFactory.isOpenglEnable()) {
       localPersistence.putBooleanProperty(View3DFactory.P_OPENGL_PREV_INIT, true);
@@ -319,13 +353,14 @@ public class Viewer3dPrefView extends AbstractItemDialogPage {
     WProperties preferences = GuiUtils.getUICore().getSystemPreferences();
     WProperties localPersistence = GuiUtils.getUICore().getLocalPersistence();
     enableOpenGL.setSelected(true);
+    openOnBone.setSelected(RenderingLayer.DEFAULT_OPEN_CT_ON_BONE);
     sliderDynamic.setValue(RenderingLayer.DEFAULT_DYNAMIC_QUALITY_RATE);
     int maxSize = View3DFactory.getMax3dTextureSize();
     localPersistence.putIntProperty(RenderingLayer.P_MAX_TEX_XY, maxSize);
     localPersistence.putIntProperty(RenderingLayer.P_MAX_TEX_Z, maxSize);
     spinnerMaxXY.setValue(maxSize);
     spinnerMaxZ.setValue(maxSize);
-    preferences.putColorProperty(RenderingLayer.P_BCK_COLOR, Color.GRAY);
+    preferences.putColorProperty(RenderingLayer.P_BCK_COLOR, RenderingLayer.DEFAULT_BCK_COLOR);
     preferences.putColorProperty(RenderingLayer.P_LIGHT_COLOR, Color.WHITE);
     preferences.put(View3DFactory.P_DEFAULT_LAYOUT, View3DContainer.VIEWS_vr.getId());
     preferences.put(Camera.P_DEFAULT_ORIENTATION, CameraView.INITIAL.name());

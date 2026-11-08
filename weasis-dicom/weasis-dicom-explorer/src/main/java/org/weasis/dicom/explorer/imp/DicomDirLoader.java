@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer.imp;
 
 import java.io.File;
@@ -47,6 +48,7 @@ import org.weasis.dicom.codec.utils.DicomMediaUtils;
 import org.weasis.dicom.codec.utils.PatientComparator;
 import org.weasis.dicom.codec.utils.SeriesInstanceList;
 import org.weasis.dicom.explorer.DicomModel;
+import org.weasis.dicom.explorer.DiscDrive;
 import org.weasis.dicom.explorer.wado.DownloadPriority;
 import org.weasis.dicom.explorer.wado.LoadSeries;
 import org.weasis.dicom.mf.SopInstance;
@@ -64,6 +66,7 @@ public class DicomDirLoader {
   private final WadoParameters wadoParameters;
   private final boolean writeInCache;
   private final File dcmDirFile;
+  private final int concurrentReads;
 
   public DicomDirLoader(File dcmDirFile, DataExplorerModel explorerModel, boolean writeInCache) {
     if (dcmDirFile == null || !dcmDirFile.canRead() || !(explorerModel instanceof DicomModel)) {
@@ -73,6 +76,15 @@ public class DicomDirLoader {
     this.writeInCache = writeInCache;
     this.dcmDirFile = dcmDirFile;
     wadoParameters = new WadoParameters("", true);
+    // Several images of a series are read at once, except straight off a CD/DVD where the drive
+    // would jump between them. Copied into the cache, a disc is still read one file after the
+    // other (SeriesDownloadManager): only the reading of the copies overlaps.
+    concurrentReads =
+        writeInCache || !DiscDrive.isOnDisc(dcmDirFile.toPath())
+            ? GuiUtils.getUICore()
+                .getSystemPreferences()
+                .getIntProperty(LoadSeries.CONCURRENT_DOWNLOADS_IN_SERIES, 4)
+            : 1;
     seriesList = new ArrayList<>();
   }
 
@@ -227,7 +239,8 @@ public class DicomDirLoader {
               TagW.DirectDownloadThumbnail,
               readDicomDirIcon(iconInstance, reader.getTransferSyntaxUID()));
           dicomSeries.setTag(TagW.ReadFromDicomdir, true);
-          final LoadSeries loadSeries = new LoadSeries(dicomSeries, dicomModel, 1, writeInCache);
+          final LoadSeries loadSeries =
+              new LoadSeries(dicomSeries, dicomModel, concurrentReads, writeInCache);
           loadSeries.setPriority(new DownloadPriority(patient, study, dicomSeries, false));
           seriesList.add(loadSeries);
         }

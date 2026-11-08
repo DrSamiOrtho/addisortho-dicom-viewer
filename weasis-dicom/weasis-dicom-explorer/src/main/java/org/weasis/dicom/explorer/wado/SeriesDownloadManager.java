@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer.wado;
 
 import java.io.IOException;
@@ -26,6 +27,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Stream;
 import javax.swing.JProgressBar;
 import org.dcm4che3.data.Attributes;
@@ -66,6 +68,7 @@ import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.codec.utils.DicomMediaUtils;
 import org.weasis.dicom.codec.utils.SeriesInstanceList;
 import org.weasis.dicom.explorer.DicomModel;
+import org.weasis.dicom.explorer.DiscDrive;
 import org.weasis.dicom.explorer.rs.RsQueryResult;
 import org.weasis.dicom.mf.SopInstance;
 import org.weasis.dicom.mf.WadoParameters;
@@ -84,6 +87,12 @@ public class SeriesDownloadManager {
   private static final Logger LOGGER = LoggerFactory.getLogger(SeriesDownloadManager.class);
 
   private static final int INSTANCE_PAGE_SIZE = 1000;
+
+  /**
+   * One series at a time reads a CD/DVD, file after file: an optical drive is fast when it reads
+   * straight on and slow at every jump of its head.
+   */
+  private static final ReentrantLock DISC_READ = new ReentrantLock(true);
 
   private final LoadSeries loadSeries;
   private final DicomModel dicomModel;
@@ -148,6 +157,12 @@ public class SeriesDownloadManager {
     SeriesInstanceList seriesInstanceList = loadSeries.getSeriesInstanceList();
     List<SopInstance> sopList = seriesInstanceList.getSortedList();
 
+    List<Path> discFiles = writeInCache ? discFiles(sopList, seriesInstanceList, wado) : null;
+    if (discFiles != null) {
+      copyFromDisc(discFiles);
+      return true;
+    }
+
     try (ExecutorService imageDownloader =
         ThreadUtil.newVirtualThreadPerTaskExecutor("Image Downloader")) {
       List<Callable<Boolean>> tasks = createDownloadTasks(sopList, seriesInstanceList, wado);
@@ -158,6 +173,116 @@ public class SeriesDownloadManager {
       Thread.currentThread().interrupt();
     }
     return true;
+  }
+
+  /**
+   * The files of the series in the order they lie on the disc, when they all come from a CD/DVD;
+   * null otherwise.
+   */
+  private List<Path> discFiles(
+      List<SopInstance> sopList, SeriesInstanceList seriesInstanceList, WadoParameters wado) {
+    if (sopList.isEmpty()
+        || !StringUtil.hasText(sopList.getFirst().getDirectDownloadFile())
+        || StringUtil.hasText(wado.getBaseURL())) {
+      return null;
+    }
+    List<Path> paths = new ArrayList<>(sopList.size());
+    for (SopInstance instance : sopList) {
+      String url = instance.getDirectDownloadFile();
+      Path file = null;
+      try {
+        URI uri = url == null ? null : URIUtils.getURI(url);
+        file = uri != null && URIUtils.isFileURI(uri) ? URIUtils.getAbsolutePath(uri) : null;
+      } catch (URISyntaxException e) {
+        LOGGER.debug("Not a local file: {}", url);
+      }
+      if (file == null) {
+        return null;
+      }
+      paths.add(file);
+    }
+    if (!DiscDrive.isOnDisc(paths.getFirst())) {
+      return null;
+    }
+    MediaSeriesGroup study = dicomModel.getParent(dicomSeries, DicomModel.study);
+    List<Path> files = new ArrayList<>(paths.size());
+    initializeProgressBar(sopList.size());
+    for (int i = 0; i < sopList.size(); i++) {
+      if (!shouldSkipInstance(seriesInstanceList, sopList.get(i), study)) {
+        files.add(paths.get(i));
+      }
+    }
+    // A disc is written folder by folder in name order, so this order reads it straight on.
+    files.sort(null);
+    return files;
+  }
+
+  /**
+   * Copies the series off the disc file after file, holding the drive for the whole series, while
+   * the copies are read into the viewer at the same time.
+   */
+  private void copyFromDisc(List<Path> files) {
+    dicomSeries.setTag(LoadSeries.DOWNLOAD_START_TIME, System.currentTimeMillis());
+    try (ExecutorService readers = ThreadUtil.newVirtualThreadPerTaskExecutor("Image Reader")) {
+      DISC_READ.lockInterruptibly();
+      try {
+        for (Path file : files) {
+          if (loadSeries.isCancelled()) {
+            break;
+          }
+          Path copy = copyToCache(file);
+          if (copy != null) {
+            readers.submit(() -> ingestCopy(copy));
+          }
+        }
+      } catch (IOException e) {
+        dicomSeries.setTag(LoadSeries.DOWNLOAD_ERRORS, errors.incrementAndGet());
+        LOGGER.error("Cannot copy from the disc", e);
+      } finally {
+        DISC_READ.unlock();
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    } finally {
+      progressBar.setIndeterminate(progressBar.getMaximum() < 3);
+    }
+  }
+
+  private void ingestCopy(Path copy) {
+    try {
+      downloadSemaphore.acquire();
+      try {
+        boolean isFirstImage =
+            dicomSeries.size(null) == 0 && seriesInitialized.compareAndSet(false, true);
+        ingest(copy, isFirstImage, false);
+      } finally {
+        downloadSemaphore.release();
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    } catch (IOException e) {
+      dicomSeries.setTag(LoadSeries.DOWNLOAD_ERRORS, errors.incrementAndGet());
+      LOGGER.error("Cannot read {}", copy, e);
+    }
+  }
+
+  /**
+   * Copies a local file into the application cache. Returns the copy, or null when the copy was
+   * interrupted or truncated.
+   */
+  private Path copyToCache(Path localFile) throws IOException {
+    Path tempFile = createTempFile();
+    LOGGER.debug("Copying DICOM instance {} to {}", localFile, tempFile.getFileName());
+    try (InputStream in = Files.newInputStream(localFile)) {
+      if (FileUtil.writeStream(
+              new DicomSeriesProgressMonitor(dicomSeries, in, false), tempFile, false)
+          >= 0) {
+        // Interrupted or truncated copy: do not ingest a partial instance.
+        FileUtil.delete(tempFile);
+        return null;
+      }
+    }
+    return Files.move(tempFile, DicomMediaIO.DICOM_EXPORT_DIR.resolve(tempFile.getFileName()));
   }
 
   private List<Callable<Boolean>> createDownloadTasks(
@@ -867,22 +992,10 @@ public class SeriesDownloadManager {
         throw new IOException("Local file not found: " + url);
       }
       try {
-        Path file = localFile;
-        if (writeInCache) {
-          Path tempFile = createTempFile();
-          LOGGER.debug("Copying DICOM instance {} to {}", localFile, tempFile.getFileName());
-          try (InputStream in = Files.newInputStream(localFile)) {
-            if (FileUtil.writeStream(
-                    new DicomSeriesProgressMonitor(dicomSeries, in, false), tempFile, false)
-                >= 0) {
-              // Interrupted or truncated copy: do not ingest a partial instance.
-              FileUtil.delete(tempFile);
-              return;
-            }
-          }
-          file = moveToExportDir(tempFile);
+        Path file = writeInCache ? copyToCache(localFile) : localFile;
+        if (file != null) {
+          ingest(file, isFirstImage, false);
         }
-        ingest(file, isFirstImage, false);
       } finally {
         progressBar.setIndeterminate(progressBar.getMaximum() < 3);
       }

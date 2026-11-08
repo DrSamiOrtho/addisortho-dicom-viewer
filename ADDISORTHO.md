@@ -15,8 +15,11 @@ in the installer licence page (`weasis-distributions/src/main/resources-native/L
 the third-party notice template; the About box states "GNU GPL version 3" (`weasis.copyrights` in
 `weasis-distributions/etc/config/base.json`). Keep all of them in step.
 
-It is not a certified medical device. It is for image review and surgical planning support only;
-the first-launch disclaimer must be accepted before the viewer opens.
+It is not a certified medical device. It is for image review and surgical planning support only.
+The release notes say so. There is no first-launch disclaimer: the owner turned it off on
+2026-10-23 (`weasis.show.disclaimer` is `false` in `weasis-distributions/etc/config/base.json`), and
+the smoke test checks that no "First Time Launch" window opens. Upstream's dialog code and text are
+unchanged, so turning the setting back on shows upstream's wording.
 
 ## Branches and upstream
 
@@ -67,13 +70,91 @@ and `WEASIS_PWD` (an app-specific password for notarisation).
    `release_tag` set to the tag name instead: the `release` job creates the tag on the built commit.
 3. Remove `--prerelease` from the `release` job when both platforms are signed.
 
+## Receive from modality
+
+The full viewer can receive images pushed by an X-ray machine or another modality over the hospital
+LAN, as a DICOM Storage SCP (`weasis-dicom/weasis-dicom-receive`). It answers C-STORE and C-ECHO, so
+the machine's "test connection" works. It is **off by default**. There is no encryption: use it only
+on the hospital LAN (TLS, forwarding to a PACS, worklist, storage commitment and auto-delete are not
+built). The 4GB edition includes it, off by default, as the full viewer does. The 2D Lite leaves it out
+(`lite.json`, `prepare-lite.sh`).
+
+Set up in **File, Preferences, Receive from modality**:
+
+| Setting | Default | Note |
+|---|---|---|
+| Receive images | off | |
+| AE title | `AOVIEWER` | 1 to 16 plain characters |
+| Port | `11112` | |
+| Listen address | empty (all network cards) | or one IP address of this computer |
+| Allowed senders | empty, so **every device is refused** | AE title and IP address, both exact |
+| Storage folder | `AddisOrthoReceived` in the home folder | deliberately not Documents, which is often synchronised to a cloud service |
+| Maximum connections | 4 | more are refused for now, and the machine can retry |
+| Maximum size of one image | 1024 MB | a larger one is refused |
+| Patient name in names | on | turn off if the folders may leave the hospital |
+
+On the X-ray machine, in its DICOM Send or PACS destination settings, enter the **AE title** and
+**port** above and the **IP address of this computer**. Add the machine to Allowed senders with its
+own (calling) AE title and IP address, and give it a fixed IP address: a changed address is refused.
+Then press the machine's test connection (C-ECHO). A refused device shows a notice with the AE title
+and address it used, which is the quickest way to find what to enter.
+
+**Windows firewall:** Windows blocks incoming connections until they are allowed. The first time the
+receiver listens Windows may ask: allow it on private or domain networks only. Without that prompt,
+add an inbound rule as an administrator (change the port if you changed it):
+
+    netsh advfirewall firewall add rule name="Addis Ortho Viewer DICOM" dir=in action=allow protocol=TCP localport=11112 profile=private,domain
+
+**macOS** may ask once to allow incoming connections for the app.
+
+What happens to an image: it is written to `<storage folder>/.incoming`, checked to be DICOM with a
+SOP Instance UID that matches the request and with study and series UIDs, then moved to the folder of
+its study. It is added to the explorer, whose study title counts "N images received". A notice with a
+**Show** button offers to open it in a new tab. A new arrival never opens, closes or replaces a viewer,
+and never changes the selected patient.
+
+Names (`ReceiveNaming`), with the arrival date of the file on this computer. The DICOM study date stays
+inside the file and is used for the age:
+
+    ABEBE KEBEDE_45Y_MRN77_2026-11-06_<first 12 hex digits of SHA-256 of the Study Instance UID>/
+        ABEBE KEBEDE_45Y_MRN77_2026-11-06_<SOP Instance UID>.dcm
+
+- Age is from the birth date to the study date (`45Y`, or `18M`, `12D` under 2 years). Without a birth
+  date it comes from the Patient's Age element. Without either it is left out.
+- A missing name or MRN is left out, and the folder then also holds the Study Instance UID.
+- Every part is sanitized: path separators, `..`, control and invisible characters, characters reserved
+  on Windows, reserved device names and trailing dots or spaces. Amharic stays. A long name is shortened
+  to keep the path within 250 characters.
+- A later image of the same study, even on another day, goes to the folder made on the first day. Its
+  own file name has its own arrival date.
+- An image with a SOP Instance UID already stored is answered with success, and the first copy is kept.
+
+Answers to the machine: `0xA700` (out of resources, the machine can resend) when less than 200 MB is
+free, the folder cannot be written or the image is above the limit; `0xC000` (cannot understand) for
+anything that is not valid DICOM. The user sees a plain notice for each, at most once a minute per
+kind, and the status line of the Preferences page shows why it is not listening (port in use, folder
+missing or not writable, wrong address).
+
+Retention: studies stay until the user deletes them. The Preferences page shows the folder size and
+the studies, and has Show (loads a kept study, for example after a restart), Open folder and Delete.
+Nothing is deleted automatically, so watch the disk.
+
+Patient names and MRNs are allowed in these file names by the owner's rule for clinical software, and
+must never reach the application log: the receiver logs UIDs, counts, AE titles and IP addresses only,
+never a storage path. Upstream log lines that wrote the name or a file path were changed for this
+(`LoadDicom`, `DicomModel`, `DicomMediaIO`, `DicomImageElement`). The deflated transfer syntax is not
+accepted; every sender must offer an uncompressed one.
+
+Not tested against a real X-ray machine.
+
 ## Lite edition
 
 Addis Ortho Viewer Lite is a second, smaller installer built from the same source for viewing X-ray
 and CT images in 2D: thumbnails, stack scrolling, window/level, zoom, rotation, measurements and
 annotations, DICOM CD (DICOMDIR) loading and image export. It leaves out the 3D viewer and JOGL, the
 MPR/MIP toolbar, RT, SR, ECG and audio, DICOM send and query/retrieve, CD burning, the non-DICOM
-image viewer, the Dicomizer and the translations (English only).
+image viewer, templating, stitching, the modality receiver, the Dicomizer and the translations (English
+only).
 
 - `weasis-distributions/etc/config/lite.json` is a profile, like `dicomizer.json`, read through
   `-Dfelix.extended.config.properties=file:conf/lite.json`: it stops those bundles, hides the
@@ -86,8 +167,8 @@ image viewer, the Dicomizer and the translations (English only).
   `javax.lang.model`) and its own single-instance port, 17180, so a second launch never hands files
   to a running full viewer. The runtime is not compressed with jlink: that halves its size on disk
   but makes the installer about 14 MB larger.
-- Build: `package-weasis.sh --lite`, or **Build installers** with `edition` set to `lite` or `both`
-  (the default; a tag always builds both and the release holds two .msi and four .pkg).
+- Build: `package-weasis.sh --lite`, or **Build installers** with `edition` set to `lite`, `both` or
+  `all` (the default; a tag always builds all three and the release holds three .msi and six .pkg).
 
 Measured on Linux with JDK 25 against `ao-4.7.3-1`: 117 MB installed instead of 150 MB, 25 bundles
 instead of 39; the runtime is 91 MB of it. MPR code still lives inside `weasis-dicom-viewer2d`
@@ -101,6 +182,22 @@ instead of 39; the runtime is 91 MB of it. MPR code still lives inside `weasis-d
 | Windows upgrade codes | x64 `0cad2ecd-35e6-4aa7-9647-16f80dcc7a31`, arm64 `ef84b678-2032-4f0a-b9c4-b5807f045b9a` |
 | Preference profile | `addisortho-lite` |
 | URL scheme | none |
+
+## 4GB edition
+
+Addis Ortho Viewer 4GB keeps every feature of the full viewer (3D, templating, stitching, the receiver)
+for PCs with 4 GB of RAM: a fixed 1 GB heap, the serial collector, a 256 MB image cache, a small 3D upload
+buffer, a 256-voxel 3D texture and no smooth segment surfaces. Older notes and the code call this "the Lite
+edition"; the code's `weasis.lite` property and `RenderingLayer.isLite()` mean this edition, not the 2D Lite.
+It was renamed on 6 Nov 2026 so that both can exist (Sami: keep both). No benchmark on a real 4 GB PC yet.
+
+| | 4GB value |
+|---|---|
+| Installed app and installer | Addis Ortho Viewer 4GB |
+| macOS bundle identifier | `com.addisortho.viewer.lite4gb` (CFBundleName `AO Viewer 4GB`) |
+| Windows upgrade codes | x64 `a905d395-ba9f-4dc3-831c-53687cd447a6`, arm64 `a5a09c96-fab0-47e7-9fce-7e3a1b812bae` |
+| Single-instance port | 17189 |
+| Build | `package-weasis.sh --4gb`, or **Build installers** with `edition` set to `4gb` or `all` |
 
 ## Identity
 
@@ -126,7 +223,7 @@ real Weasis on the same computer. Linux packaging is not maintained.
 2. Done. Help menu and leftover Weasis wording (see below).
 3. Done. `weasis-i18n-dist` is vendored (see below).
 4. Done. "Modified by Addis Ortho Trading PLC" lines (see below).
-5. Open. Smoke test both installers next to a real Weasis install: disclaimer, DICOMDIR from a CD,
+5. Open. Smoke test both installers next to a real Weasis install: no first-launch dialog, DICOMDIR from a CD,
    length and angle, About box (third-party link opens `THIRD-PARTY-NOTICES.txt`), Help menu (no
    update check, no bug report, no release notes), URL scheme, uninstall leaves Weasis untouched.
    `smoke-test.yml` automates most of it (not length and angle, nor a real Weasis next to it).
@@ -170,8 +267,27 @@ value is empty:
 
 `weasis-launcher/conf/base.json` still has upstream's values because its tests expect them. User
 visible strings now use the configured name (`weasis.name`): the shortcuts page title, the OAuth
-callback page and the Resource Monitor report. The dark theme is listed as "Flat Addis Ortho".
+callback page and the Resource Monitor report.
 Non-English translations come from `weasis-i18n-dist` and still say Weasis.
+
+### Look
+
+- Theme: the default dark theme, "Core Dark - Flat Addis Ortho", is `org.weasis.launcher.FlatWeasisTheme`
+  (the class name is the stored `weasis.theme` value, keep it). It extends FlatDarkLaf; every colour and
+  shape is in `weasis-launcher/src/main/resources/org/weasis/theme/FlatWeasisTheme.properties`. Surfaces
+  are near-black with a `#034537` cast, selection is white on `#034537`, and `#A8FF30` is only for small
+  accents (focus ring, tab underline, progress, slider). `controlDkShadow` and `windowBorder` are set
+  there because DockingFrames draws its tab outlines with them. Upstream's Monokai `Weasis.theme.json`
+  is removed. The light theme is upstream's FlatIntelliJ.
+- Start screen: `WelcomeLayerUI` (weasis-base-ui) is a `JLayer` around the docking area that paints the
+  wordmark (`svg/logo/AddisOrthoWordmark.svg`, the About logo without its black plate), "DICOM Viewer"
+  and a hint while the main working area holds no viewer. It only paints, so drops and clicks still
+  reach the working area. Image panes are never painted on: they stay neutral black.
+- Mark: on macOS the AO mark (`BrandMark`, `LogoIcon.SMALL`) sits at the left of the toolbar, as tall
+  as the toolbar buttons (it follows the button row, with or without text labels), because the menu
+  bar is in the screen and the title bar is native. Clicking it goes back to the start screen: after
+  a confirmation it closes every open viewer the way "Close All" does. On Windows FlatLaf shows the
+  frame icon in its title bar, so nothing is added there.
 
 ### Translations
 
@@ -198,3 +314,114 @@ that lack the line:
 
 The output should only hold the files `NOTICE` lists (JSON, images, `Licence.txt`) and files that Addis
 Ortho wrote entirely. Use the tag you merged last instead of `v4.7.3`.
+
+## Templating and 3D bones (14 Oct 2026)
+
+Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automatic or automatic, not reviewed.
+
+- `weasis-dicom/weasis-dicom-templating`: the **Template** button (2D viewer toolbar) opens the selected CR/DX/DR/RG
+  X-ray in the X-ray templating page, offline: a local server on 127.0.0.1 (port 47210 when free) with a one-time
+  token per X-ray serves the page's viewer build (Addis Ortho BE2, BE, cementless cup and total knee only) and takes
+  back the plan picture, which loads into the X-ray's study. The page lives in the templating project
+  (CENTER/EMR-POC/pacs-trial/templating, `build_viewer.sh`); copy it in with `sync-templating-web.sh`, which checks every
+  file against `BUILD.txt`. The protocol and its browser test: the templating project's `workflow/28o_templating_viewer.py`.
+  Needs `jdk.httpserver` in the installer runtime (`launch-options.sh`) and `com.sun.net.httpserver` in both `base.json`.
+- `weasis-dicom/weasis-dicom-bones` (3D view tool panels):
+  - **Bone STL**: one segment of a shown SEG as a binary STL, mm, DICOM LPS.
+  - **Bones** (rebuilt again 23 Oct 2026: find all, click to select). A CT opens in 3D as the plain isolated bone;
+    Find the bones (or Show the bones, once found) finds every bone at once (`grow/AutoSplit`, run by `FindWorker`): bone at 200 HU closed and marrow-filled, dense bone at 300 HU, a Euclidean distance
+    transform in mm, and a watershed that keeps two parts apart only where the neck is under 0.45 of the thinner part's
+    depth, at least 1 mm shallower, with 0.2 cm³ above it; pieces under 1 cm³ join the bone they touch most or lie
+    within 10 mm of. A CT over 16 M voxels in the crop is worked on a 2x (or coarser) grid. The 3D view then shows
+    Bones in colour (`SegmentationTool.Type.BONES`: the CT itself, only inside visible segments, tinted with the
+    segment colour, `segTint` in `vrFunctions.glsl`). A click on a bone in 3D, on an MPR or plain 2D slice (`SeedPicker.fromSliceClick`: the slice's own
+    geometry, as the cross-hair) or in the list selects it
+    (Shift, Ctrl or Cmd adds); Hide, Show only, Show all, Join, Split, Name and Delete act on the selection. Hidden and
+    selected are colour-table styles (`View3d.setSegmentStyles`, static, keyed by SEG instance, so a rebuilt 3D view
+    keeps them), not cuts and not a SEG rewrite. Split takes two clicks on one bone and floods it from both, brightest CT
+    first (`AutoSplit.splitBetween` with the CT), so the cut follows the darkest surface between them: the fracture
+    line or joint space, even where the parts press together over a broad face. Every step is an `EditHistory`
+    entry of the 3D view, so Ctrl+Z walks through bone steps, cuts and crops together. Bones are immutable (`Bone`,
+    `grow/BoxMask`); the SEG (series 902, segments numbered in list order) is rewritten in the background only when
+    voxels, names or colours change (`SegWriteWorker`, one at a time). More tools keeps the region grow (New bone, with
+    the region, bone and side picker of `BoneNames`), Erase piece (`grow/BoneSplit`) and the grow settings. Keep only
+    this and Remove this left the 3D tool bar (still in the mouse button menus). Natural look (a Bones panel switch)
+    shows the bones as the CT shows bone (`SEG_MASK_INCLUDE`), hidden ones still hidden; untick for the colours.
+  - **Make 3D bones**: runs the owner's TotalSegmentator pipeline (`planning/make_3d.sh`, free model: hip, shoulder,
+    spine) where it is installed, and opens its results in the study.
+- `viewer3d`: Smooth surfaces for segments, a crop box, and "Save 3D picture to the study" / "Copy 3D picture".
+  A CT opened on the bone is also isolated (22 Oct 2026, `vr/BoneIsolation`, one undoable cut after the crop; the
+  crop panel's Isolate bone runs it on demand): a plaster cast, the table, the pad and the soft tissue go because
+  they touch the outside air (found slice by slice in 2D) and bone does not. What touches no air is sorted by real
+  size (anisotropic voxels, mm3): a piece of 1 cm3 or more is bone, one under 5 mm3 is noise, one in between stays
+  only when the gap to a kept piece is under 4 mm, edge to edge in true mm (exact distance transform on the piece
+  grown by one voxel), spreading piece to piece for at most 4 links (fragments, sesamoids, carpals and phalanges stay;
+  the specks in a pad, a table board and a side marker go; a fragment displaced over 4 mm or a paediatric ossification
+  centre is lost, Undo or Whole volume restores it). Each kept piece is hole-filled on its own, so two bones never
+  enclose pad between them; metal stays whole only when it touches a bone before the 2-voxel widening and has no air
+  contact, a fixator pin only inside the bone (23 Oct 2026, after GPT-6 Astra's review).
+- `viewer3d` 3D tools bar (14 Oct, evening): the mouse tools rotate, roll, pan, zoom, window/level, scalpel, keep only
+  this, remove this, length and arrow; the six anatomical orientations (keys 1 to 6); fit (Ctrl+0) and reset scene
+  (Ctrl+R); shading (Ctrl+S); copy (Ctrl+C), JPEG (Ctrl+E), quick movie (F2) and view-state snapshots (K, [ and ]).
+  The scalpel (S, or Alt + left drag with any tool) draws a closed area; Delete cuts inside it and Enter outside it,
+  through the whole depth, with Ctrl+Z / Ctrl+Y undo and redo and Ctrl+Alt+0 restoring the volume. Keep only this and
+  remove this pick the structure under a click (CPU ray march of the renderer's own transfer function) and grow it over
+  the shown voxels above the visible threshold, with a light separation option. The cuts live in `KeptMask`, one bit
+  per texture voxel on the CPU (`isKeptVolumeVoxel` is the API for the bones bundle) and one byte per voxel on the GPU
+  (unit 7), which every rendering mode and the segment overlays sample. Rotation and zoom centre on the crop box when
+  it is on. Keys of the 3D view are listed in `Shortcuts3d`; T is the roll (M pans), unlike the 2D viewer.
+
+## Brand footer and Help links (18 Oct 2026)
+
+- Footer: view pictures saved or copied from the screenshot dialog (view mode) and 3D pictures (copied or saved
+  to the study) get a thin strip below the picture, white on `#034537`, naming `weasis.name`. The templating
+  page's saved picture (PNG, DICOM, saved to the viewer) says "Templated with Addis Ortho Viewer" at the foot of
+  its report column. One switch turns all of them off: Preferences, General (`addisortho.picture.footer`,
+  default on; the viewer adds `footer=0` to the templating page's address when it is off). Image mode (raw
+  pixels) and the explorer's image export are not touched. The templating page's "leave out the patient's
+  name" switch is unchanged.
+- `app.js` in `templating-web` was patched here (BUILD.txt updated), so the change must also go into the
+  templating project's `web/app.js` before the next `sync-templating-web.sh`, or the sync drops it.
+- Help, Download page (`addisortho.help.download`) and Help, Support (Telegram) (`addisortho.help.support`) in
+  `weasis-distributions/etc/config/base.json`; each is hidden when empty.
+
+## Long-leg stitching (27 Oct 2026, phase 1, draft)
+
+Design: `DESIGN-2026-10-27-long-leg-stitching.md` (reviewed by Fable and GPT-6 Astra). All outputs say draft,
+automatic, semi-automatic or manual, and not reviewed.
+
+- `weasis-dicom/weasis-dicom-stitching`: the **Stitch** button (2D viewer toolbar) opens a window for the selected
+  image's study. Radiographers often give every piece the same series description, so each row shows a picture
+  (`PiecePicture`, loaded in the background, same orientation and polarity as the match, never used for matching),
+  the file name unless it is only digits and dots, and the series, time, body part, view, side and comments the file
+  states; clicking a row shows that image large on the right. The user ticks two to four CR/DX/DR/RG pieces of one acquisition (none ticked at first), orders them
+  head to foot, and confirms one acquisition, projection, position, target leg and the part of the image to match on
+(whole width, or the left or right half as shown, for a film of both legs); none has a default. **Line up** matches each
+  seam (`SeamMatcher`, pure Java, no OpenCV keypoints needed): a coarse correlation of gradient magnitude on a 2 mm grid,
+  textured patches matched at 0.5 mm and a RANSAC rigid fit (scale locked, only checked), then the gates: peak uniqueness
+  (ruler ticks, repeats), edge direction over the bright part of the overlap (shaft-only overlaps), inliers spread across
+  the overlap, residual, rotation and its uncertainty, and independent held-back patches (at least two, the worst must
+  agree within 2 mm). Nothing
+  is ever "good": a seam is "check" or "failed". **Inspect seam** shows a checkerboard or difference of the overlap, arrow
+  keys nudge 0.1 mm (Shift 1 mm), [ and ] turn 0.1 degree, and matching points can be picked; three or more pairs get a
+  left-out check (spread at least 30 mm). A failed seam stays failed when only nudged. Changing the pieces, their order
+  or the band discards the seams, and a job started before the change is dropped. **Save to the study** writes a 16-bit Secondary Capture
+  (series 903, Modality of the pieces, "Long leg stitched (draft, ..., not reviewed)", DCM 113090 Image stitching,
+  SourceImageSequence with SpatialLocationsPreserved NO, seam data as JSON in private block "ADDIS ORTHO STITCH 1",
+  (0071,1001)) with the label burned into its own strip above the image and seam ticks at the edges, streamed strip by strip, and loads and opens it.
+- Scale: each piece is measured exactly as the viewer measures it (`Spacing.weasis` repeats
+  `DicomImageElement.initPixelConfiguration`); where the templating page would scale it differently the window says so.
+  Pieces on different spacing bases give an output without PixelSpacing ("No scale" in the label); pieces with and
+  without spacing cannot be joined. A piece without spacing is worked at 0.15 mm per pixel (never written out) with its
+  PixelAspectRatio kept. A piece with a VOI LUT gets a note: the stitch uses a straight window.
+- Phase 1 gaps (in the design, not built): no anatomical classifiers, so order is the user's; ruler and skin are not
+  excluded from the match automatically (a brightness filter stands in for "on bone"); no seam-aware uncertainty in the
+  templating page; no 4GB edition memory and time benchmark on a real 4 GB PC yet; the VOI LUT curve is not reproduced. Not tested inside the running viewer yet:
+  the window was driven from code with synthetic phantom pieces.
+
+## Shortcuts (6 Nov 2026)
+
+The version people see is `AppProperties.AO_VERSION` (1.0 since 7 Nov 2026): the installers' version and file names, the title bar, About, and DICOM SoftwareVersions. The workflow reads it from that line. `weasis.version` and the `revision` in `weasis-parent/pom.xml` stay the Weasis engine's, 4.7.3, because the launcher compares them; release tags still use them. Installed 4.7.3 builds are higher numbers: the Windows upgrade table removes them, and the macOS packages have the app's version check taken out so the new package replaces them.
+
+`SHORTCUTS.md` is the one list for the 2D viewer, the 3D view and both templating pages (RadiAnt's keys). Change a key there and in
+every place it names. The templating pages are release r44h: the r44g page files with the live bipolar library of 7 Nov 2026 (no size 55, catalogue codes). r44g (`dist/released-2026-11-07-r44g` in the templating project, r44f with `stage_r44g.py` and the new `cases.js`: Result puts the patient's name, age and record number on the file name, the report and the metadata of the PNG, PDF and DICOM, with one box to leave them out; the full page's prepare step is a small button; a PFNA choice on the full page opens the film in Quick's PFNA; Save keeps the case in My cases, a database in the browser on this computer, the .json staying as an export). r44f was (`dist/released-2026-11-06-r44f` in the templating project, made from `dist/released-2026-11-06-bipolar-keys` by `stage_r44e.py`, `stage_r44e_stitch.py` and `stage_r44f.py`; r44f adds the Addis Ortho PFNA range to the viewer, generic outlines, on Quick only; Nebula and the other makers stay cloud-only; with the viewer's hand-over added to Quick by build_viewer.sh; r44e: bipolar shell outline only, the result as PNG, PDF or DICOM, quiet notes with i buttons on the full page, stitch joins judged at 1 mm and no dead end when an end film's join fails): the full page as r44b, and the Quick page live since 5 Nov 2026 (bipolar hip, Image panel, plan files, Join films) with these keys on top. On Quick the live page's B, K, O, plain arrows, `[ ]` and plain 1, 2, 3 are gone here because the list gives them other meanings; the Image panel and the `/` command box stay. t.addisortho.com does not have these keys yet.

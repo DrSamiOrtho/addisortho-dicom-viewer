@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer.imp;
 
 import java.awt.Component;
@@ -30,6 +31,7 @@ import org.weasis.core.ui.util.DefaultAction;
 import org.weasis.core.ui.util.WtoolBar;
 import org.weasis.core.util.StringUtil;
 import org.weasis.dicom.explorer.DicomModel;
+import org.weasis.dicom.explorer.DiscDrive;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadDicomDir;
 import org.weasis.dicom.explorer.Messages;
@@ -67,7 +69,11 @@ public class ImportToolBar extends WtoolBar {
   public static void openImportDicomCdAction(
       Component parent, DicomModel model, String actionName) {
     File file = DicomDirImport.getDcmDirFromMedia();
-    if (file == null) {
+    File disc = file == null ? DiscDrive.findDisc() : null;
+    if (disc != null) {
+      // A disc without a DICOMDIR: copy it whole and open the copy.
+      DicomModel.LOADING_EXECUTOR.execute(new LoadDisc(disc.toPath(), model));
+    } else if (file == null) {
       int response =
           JOptionPane.showConfirmDialog(
               WinUtil.getValidComponent(SwingUtilities.getWindowAncestor(parent)),
@@ -84,6 +90,10 @@ public class ImportToolBar extends WtoolBar {
       if (loadSeries != null && !loadSeries.isEmpty()) {
         DicomModel.LOADING_EXECUTOR.execute(
             new LoadDicomDir(loadSeries, model, OpeningViewer.ALL_PATIENTS));
+      } else if (DiscDrive.isOnDisc(file.toPath())) {
+        LOGGER.warn("Unreadable DICOMDIR {}, copying the whole disc", file);
+        DicomModel.LOADING_EXECUTOR.execute(
+            new LoadDisc(DiscDrive.mountPoint(file.toPath()), model));
       } else {
         LOGGER.error("Cannot import DICOM from {}", file);
 

@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d.vr;
 
 import java.beans.PropertyChangeListener;
@@ -23,6 +24,7 @@ import org.weasis.core.api.media.data.MediaSeries.MEDIA_POSITION;
 import org.weasis.core.api.service.WProperties;
 import org.weasis.core.ui.editor.image.ViewProgress;
 import org.weasis.dicom.codec.DicomImageElement;
+import org.weasis.dicom.codec.display.Modality;
 import org.weasis.dicom.viewer2d.Messages;
 import org.weasis.dicom.viewer2d.mpr.BuildContext;
 import org.weasis.dicom.viewer2d.mpr.MPRGenerator;
@@ -38,6 +40,7 @@ public class DicomVolTextureFactory {
 
   public static final String FULLY_LOADED = "texture.fully.loaded";
   public static final String PARTIALLY_LOADED = "texture.partially.loaded";
+  public static final String LOAD_FAILED = "texture.load.failed";
 
   private final PropertyChangeSupport changeSupport;
 
@@ -96,8 +99,14 @@ public class DicomVolTextureFactory {
 
     WProperties localPersistence = GuiUtils.getUICore().getLocalPersistence();
     int maxTexSize = View3DFactory.getMax3dTextureSize();
-    int maxSizeXY = localPersistence.getIntProperty(RenderingLayer.P_MAX_TEX_XY, maxTexSize);
-    int maxSizeZ = localPersistence.getIntProperty(RenderingLayer.P_MAX_TEX_Z, maxTexSize);
+    // Addis Ortho: the Lite edition (PCs with 4 GB of RAM) builds a smaller 3D texture unless the
+    // user chose a size in the 3D preferences. Software 3D (drawn by the processor) does the same.
+    int defaultSize =
+        RenderingLayer.isLite() || SoftwareGl.isActive()
+            ? Math.min(maxTexSize, RenderingLayer.LITE_MAX_TEXTURE)
+            : maxTexSize;
+    int maxSizeXY = localPersistence.getIntProperty(RenderingLayer.P_MAX_TEX_XY, defaultSize);
+    int maxSizeZ = localPersistence.getIntProperty(RenderingLayer.P_MAX_TEX_Z, defaultSize);
     int width = volume.getSizeX();
     int height = volume.getSizeY();
     int depth = volume.getSizeZ();
@@ -124,8 +133,16 @@ public class DicomVolTextureFactory {
       throw new IllegalArgumentException("Pixel format not supported");
     }
 
-    return new DicomVolTexture(
-        new Vector3i(width, height, depth), volume, imageDataPixFormat, changeSupport);
+    DicomVolTexture texture =
+        new DicomVolTexture(
+            new Vector3i(width, height, depth), volume, imageDataPixFormat, changeSupport);
+    boolean onBone =
+        localPersistence.getBooleanProperty(
+            RenderingLayer.P_OPEN_CT_ON_BONE, RenderingLayer.DEFAULT_OPEN_CT_ON_BONE);
+    texture.setSmoothing(
+        texture.getModality() == Modality.CT
+            && (onBone || localPersistence.getBooleanProperty(RenderingLayer.P_SMOOTH_CT, true)));
+    return texture;
   }
 
   public void addPropertyChangeListener(PropertyChangeListener listener) {

@@ -7,6 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
+// Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.viewer3d;
 
 import com.jogamp.opengl.GL2ES2;
@@ -63,6 +64,7 @@ import org.weasis.core.ui.util.Toolbar;
 import org.weasis.core.ui.util.WtoolBar;
 import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.codec.TagD;
+import org.weasis.dicom.codec.display.Modality;
 import org.weasis.dicom.explorer.DicomViewerPlugin;
 import org.weasis.dicom.explorer.main.DicomExplorer;
 import org.weasis.dicom.viewer2d.LutToolBar;
@@ -75,6 +77,7 @@ import org.weasis.dicom.viewer3d.dockable.VolumeTool;
 import org.weasis.dicom.viewer3d.vr.DicomVolTexture;
 import org.weasis.dicom.viewer3d.vr.DicomVolTextureFactory;
 import org.weasis.dicom.viewer3d.vr.OpenglUtils;
+import org.weasis.dicom.viewer3d.vr.RenderingLayer;
 import org.weasis.dicom.viewer3d.vr.View3d;
 import org.weasis.dicom.viewer3d.vr.VolumeBuilder;
 
@@ -222,12 +225,8 @@ public class View3DContainer extends DicomViewerPlugin
           key,
           true)) {
         toolBars.add(
-            new ViewerToolBar<>(
-                eventManager,
-                eventManager.getMouseActions().getActiveButtons(),
-                preferences,
-                10,
-                false));
+            new View3dViewerToolBar(
+                eventManager, eventManager.getMouseActions().getActiveButtons(), preferences, 10));
       }
       //      if (InsertableUtil.getBooleanProperty(
       //          GuiUtils.getUICore().getSystemPreferences(),
@@ -273,6 +272,15 @@ public class View3DContainer extends DicomViewerPlugin
           key,
           true)) {
         toolBars.add(new View3DToolbar(50));
+      }
+      if (InsertableUtil.getBooleanProperty(
+          preferences,
+          bundleName,
+          componentName,
+          InsertableUtil.getCName(Volume3dToolBar.class),
+          key,
+          true)) {
+        toolBars.add(new Volume3dToolBar(60));
       }
 
       List<DockableTool> tools = UI.tools;
@@ -411,6 +419,32 @@ public class View3DContainer extends DicomViewerPlugin
     }
   }
 
+  /**
+   * Switches the smoothing of the loaded volume and uploads it again; for a CT the choice is kept
+   * for the next volume.
+   */
+  public void setVolumeSmoothing(boolean smooth) {
+    VolumeBuilder builder = volumeBuilder;
+    if (builder == null || builder.getVolTexture().isSmoothing() == smooth) {
+      return;
+    }
+    DicomVolTexture texture = builder.getVolTexture();
+    texture.setSmoothing(smooth);
+    if (texture.getModality() == Modality.CT) {
+      GuiUtils.getUICore()
+          .getLocalPersistence()
+          .putBooleanProperty(RenderingLayer.P_SMOOTH_CT, smooth);
+    }
+    synchronized (volumeBuilderLock) {
+      builder.rebuild();
+    }
+    for (ViewCanvas<DicomImageElement> view : cellManager) {
+      if (view instanceof View3d v) {
+        v.display();
+      }
+    }
+  }
+
   protected void startVolumeBuilder() {
     VolumeBuilder builder = volumeBuilder;
     if (!builder.isRunning() && !builder.isDone()) {
@@ -519,7 +553,9 @@ public class View3DContainer extends DicomViewerPlugin
   public void propertyChange(final PropertyChangeEvent event) {
     String command = event.getPropertyName();
     boolean fullyLoaded = DicomVolTextureFactory.FULLY_LOADED.equals(command);
-    if (fullyLoaded || DicomVolTextureFactory.PARTIALLY_LOADED.equals(command)) {
+    if (fullyLoaded
+        || DicomVolTextureFactory.PARTIALLY_LOADED.equals(command)
+        || DicomVolTextureFactory.LOAD_FAILED.equals(command)) {
       if (event.getNewValue() instanceof DicomVolTexture texture) {
         for (var view : cellManager) {
           if (view instanceof View3d v) {
@@ -639,7 +675,7 @@ public class View3DContainer extends DicomViewerPlugin
 
   @Override
   public List<Action> getExportActions() {
-    return null;
+    return selectedImagePane == null ? null : selectedImagePane.getExportActions();
   }
 
   @Override
