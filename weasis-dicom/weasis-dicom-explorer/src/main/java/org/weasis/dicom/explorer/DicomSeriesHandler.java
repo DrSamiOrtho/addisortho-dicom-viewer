@@ -30,7 +30,6 @@ import org.weasis.core.ui.editor.image.SynchData;
 import org.weasis.core.ui.editor.image.ViewCanvas;
 import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.codec.DicomSeries;
-import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.main.DicomExplorer;
 import org.weasis.dicom.explorer.main.SeriesSelectionModel;
 
@@ -98,10 +97,7 @@ public class DicomSeriesHandler extends SequenceHandler {
     return getDicomExplorer()
         .map(
             explorer -> {
-              var model = explorer.getDataExplorerModel();
-              var files = paths.stream().map(Path::toFile).toArray(File[]::new);
-              DicomModel.LOADING_EXECUTOR.execute(
-                  new LoadLocalDicom(files, true, model, OpeningViewer.ALL_PATIENTS));
+              explorer.importFiles(paths.stream().map(Path::toFile).toArray(File[]::new), true);
               return true;
             })
         .orElse(false);

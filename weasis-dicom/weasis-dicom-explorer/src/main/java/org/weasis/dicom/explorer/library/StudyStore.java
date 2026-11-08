@@ -183,8 +183,13 @@ public class StudyStore {
 
   /** Also brings the incoming folder back if the storage folder was removed and has returned. */
   public boolean hasFreeSpace() throws IOException {
+    return hasFreeSpace(0);
+  }
+
+  /** Whether {@code bytes} more would still leave the margin free. */
+  public boolean hasFreeSpace(long bytes) throws IOException {
     Files.createDirectories(incoming);
-    return freeSpace.of(incoming) >= MIN_FREE_BYTES;
+    return freeSpace.of(incoming) - bytes >= MIN_FREE_BYTES;
   }
 
   public Path newTempFile() {
@@ -275,7 +280,7 @@ public class StudyStore {
     }
   }
 
-  private static void flushFile(Path file) throws IOException {
+  static void flushFile(Path file) throws IOException {
     try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE)) {
       channel.force(true);
     }

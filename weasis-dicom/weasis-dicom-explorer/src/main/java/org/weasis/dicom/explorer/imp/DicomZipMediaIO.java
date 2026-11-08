@@ -63,6 +63,8 @@ import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadDicomDir;
 import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.Messages;
+import org.weasis.dicom.explorer.library.ArchiveGuard;
+import org.weasis.dicom.explorer.library.StudyLibrary;
 import org.weasis.dicom.explorer.wado.LoadSeries;
 import org.weasis.opencv.data.PlanarImage;
 
@@ -80,8 +82,8 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
   // autorun, macOS metadata). They are never DICOM, and the bundled viewer can be most of the zip.
   private static final Set<String> SKIPPED_EXTENSIONS =
       Set.of(
-          "exe", "dll", "msi", "cab", "jar", "so", "dylib", "sys", "inf", "ini", "bat", "cmd", "html",
-          "htm", "js", "css", "ico", "chm", "lnk"); // NON-NLS
+          "exe", "dll", "msi", "cab", "jar", "so", "dylib", "sys", "inf", "ini", "bat", "cmd",
+          "html", "htm", "js", "css", "ico", "chm", "lnk"); // NON-NLS
   private final URI uri;
   private final FileCache fileCache;
   private final DicomZipCodec codec;
@@ -116,6 +118,9 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
           dicomModel,
           OpeningViewer.ALL_PATIENTS,
           GuiUtils.getUICore().getApplicationWindow());
+      StudyLibrary.getInstance()
+          .retainDropped(
+              List.of(zipFile), false, GuiUtils.getUICore().getApplicationWindow(), dicomModel);
       return true;
     }
     return false;
@@ -221,6 +226,11 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
       Component parent,
       IntConsumer progress) {
     if (file != null && file.canRead()) {
+      if (ArchiveGuard.isRefused(file)) {
+        // The library copy of the same source tells the user; nothing is unpacked here either.
+        LOGGER.warn("Refused to unpack an archive that looks unsafe");
+        return;
+      }
       Path dir =
           FileUtil.createTempDir(
               AppProperties.buildAccessibleTempDirectory("tmp", "zip")); // NON-NLS
@@ -275,7 +285,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
     }
   }
 
-  static boolean isSkipped(String entryName) {
+  public static boolean isSkipped(String entryName) {
     String name = entryName.replace('\\', '/');
     if (name.startsWith("__MACOSX/") || name.contains("/__MACOSX/")) { // NON-NLS
       return true;

@@ -58,11 +58,11 @@ import org.weasis.core.ui.util.TitleMenuItem;
 import org.weasis.core.util.StringUtil;
 import org.weasis.dicom.codec.*;
 import org.weasis.dicom.explorer.*;
-import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.Messages;
 import org.weasis.dicom.explorer.exp.ExplorerTask;
 import org.weasis.dicom.explorer.exp.ExportToolBar;
 import org.weasis.dicom.explorer.imp.ImportToolBar;
+import org.weasis.dicom.explorer.imp.LocalOpen;
 import org.weasis.dicom.explorer.index.FindPatientDialog;
 import org.weasis.dicom.explorer.pref.download.DicomExplorerPrefView;
 
@@ -1402,10 +1402,7 @@ public class DicomExplorer extends PluginTool
 
   @Override
   public void importFiles(File[] files, boolean recursive) {
-    if (files != null) {
-      DicomModel.LOADING_EXECUTOR.execute(
-          new LoadLocalDicom(files, recursive, model, OpeningViewer.ALL_PATIENTS));
-    }
+    LocalOpen.open(files, recursive, model);
   }
 
   @Override

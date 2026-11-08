@@ -317,8 +317,9 @@ public final class FindPatientDialog extends JDialog {
   private void updateButtons() {
     boolean selected = table.getSelectedRow() >= 0;
     openButton.setEnabled(selected);
-    exportButton.setEnabled(selected);
-    sendButton.setEnabled(selected);
+    boolean study = selected && !selected().isLocalPicture();
+    exportButton.setEnabled(study);
+    sendButton.setEnabled(study);
     keepItem.setEnabled(temporaryFolder != null && !temporary.isEmpty());
   }
 

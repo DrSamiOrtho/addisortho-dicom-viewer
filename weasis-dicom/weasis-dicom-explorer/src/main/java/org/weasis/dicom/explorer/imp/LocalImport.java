@@ -303,7 +303,8 @@ public class LocalImport extends AbstractItemDialogPage implements ImportDicom {
           .importAndReport(
               List.copyOf(filesToImport),
               checkboxSearch.isSelected(),
-              WinUtil.getValidComponent(this));
+              WinUtil.getValidComponent(this),
+              dicomModel);
       resetSelection();
     }
   }

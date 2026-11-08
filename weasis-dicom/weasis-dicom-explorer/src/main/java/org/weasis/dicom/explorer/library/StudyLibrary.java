@@ -17,7 +17,10 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.MessageFormat;
+import java.time.Clock;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
@@ -27,6 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import javax.swing.JOptionPane;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.weasis.core.api.explorer.model.DataExplorerModel;
 import org.weasis.core.api.gui.util.AppProperties;
 import org.weasis.core.api.gui.util.GuiExecutor;
 import org.weasis.core.ui.util.SavedFile;
@@ -60,6 +64,7 @@ public final class StudyLibrary {
   // Guarded by this.
   private StudyStore store;
   private StudyCatalog catalog;
+  private PictureLibrary pictures;
 
   StudyLibrary(Path settingsFolder) {
     this.settingsFolder = settingsFolder;
@@ -109,6 +114,7 @@ public final class StudyLibrary {
     opened.attachCatalog(studies);
     store = opened;
     catalog = studies;
+    pictures = new PictureLibrary(opened, Clock.systemUTC());
     worker.execute(() -> reconcile(opened, studies));
   }
 
@@ -158,27 +164,103 @@ public final class StudyLibrary {
     return store().root().resolve(study.folder());
   }
 
+  /** The pictures kept apart from the DICOM studies, newest first. */
+  public List<PictureLibrary.LocalPicture> pictures() {
+    PictureLibrary held;
+    synchronized (this) {
+      store();
+      held = pictures;
+    }
+    return held.list();
+  }
+
+  /** When the outcome of a copy interrupts the user. */
+  private enum Notice {
+    ALWAYS,
+    ONLY_PROBLEMS
+  }
+
   /**
-   * Keeps a managed copy of the imported files in the background, then tells the user the result.
-   * The viewer opens the originals meanwhile, so nothing waits for this.
+   * Keeps a managed copy of what the user chose to import, in the background, then tells them the
+   * result. The viewer opens the originals meanwhile, so nothing waits for this.
    *
    * @param recursive also the subfolders of a folder
    */
-  public void importAndReport(List<File> paths, boolean recursive, Component parent) {
+  public void importAndReport(
+      List<File> paths, boolean recursive, Component parent, DataExplorerModel model) {
+    retain(paths, recursive, parent, model, Notice.ALWAYS, true);
+  }
+
+  /** Keeps the copy made of a disc. What else lies on a disc is its own, so no picture is asked. */
+  public void retainDisc(File copy, DataExplorerModel model) {
+    retain(List.of(copy), true, null, model, Notice.ALWAYS, false);
+  }
+
+  /**
+   * Keeps a managed copy of files dropped on the application. Dropping is how studies are read, so
+   * a copy that went well does not interrupt: only a problem does, and the study is in the library.
+   */
+  public void retainDropped(
+      List<File> paths, boolean recursive, Component parent, DataExplorerModel model) {
+    retain(paths, recursive, parent, model, Notice.ONLY_PROBLEMS, true);
+  }
+
+  private void retain(
+      List<File> paths,
+      boolean recursive,
+      Component parent,
+      DataExplorerModel model,
+      Notice notice,
+      boolean askAboutPictures) {
     StudyStore target = store();
+    new RetainTask(
+            model,
+            worker,
+            (cancelled, progress) -> {
+              LibraryImport.Report report;
+              try {
+                report =
+                    new LibraryImport(target, cancelled, ArchiveGuard.DEFAULT, progress)
+                        .run(paths, recursive);
+              } catch (IOException | RuntimeException e) {
+                LOGGER.error("Cannot import into the library: {}", e.getClass().getSimpleName());
+                report = LibraryImport.Report.failure(SavedFile.reason(e));
+              }
+              saveNow(target);
+              LibraryImport.Report done = report;
+              GuiExecutor.execute(() -> afterCopy(done, target, parent, notice, askAboutPictures));
+            })
+        .execute();
+  }
+
+  /** On the event dispatch thread: the only step that waits for the user. */
+  private void afterCopy(
+      LibraryImport.Report report,
+      StudyStore target,
+      Component parent,
+      Notice notice,
+      boolean askAboutPictures) {
+    List<Path> found = askAboutPictures ? report.pictures() : List.of();
+    if (found.isEmpty()) {
+      show(report, PictureLibrary.Result.NONE, target.root(), parent, notice);
+      return;
+    }
+    Optional<PictureIdentity> who = PictureConfirmDialog.ask(parent, found);
+    if (who.isEmpty()) {
+      show(report, PictureLibrary.Result.declined(found.size()), target.root(), parent, notice);
+      return;
+    }
+    PictureLibrary held = pictureLibraryOf(target);
     worker.execute(
         () -> {
-          LibraryImport.Report report;
-          try {
-            report = new LibraryImport(target, () -> false).run(paths, recursive);
-          } catch (IOException | RuntimeException e) {
-            LOGGER.error("Cannot import into the library: {}", e.getClass().getSimpleName());
-            report = new LibraryImport.Report(0, 0, 0, 1, 0, SavedFile.reason(e), false);
-          }
-          saveNow(target);
-          LibraryImport.Report done = report;
-          GuiExecutor.execute(() -> show(done, target.root(), parent));
+          PictureLibrary.Result result = held.keepAll(found, who.get());
+          fire();
+          GuiExecutor.execute(() -> show(report, result, target.root(), parent, Notice.ALWAYS));
         });
+  }
+
+  private synchronized PictureLibrary pictureLibraryOf(StudyStore target) {
+    return target == store ? pictures : new PictureLibrary(target, Clock.systemUTC());
   }
 
   private synchronized void saveNow(StudyStore target) {
@@ -191,36 +273,67 @@ public final class StudyLibrary {
     }
   }
 
-  private static void show(LibraryImport.Report r, Path root, Component parent) {
-    boolean bad = r.conflicts() > 0 || r.failed() > 0 || r.outOfSpace();
-    String title = Messages.getString("library.import.title");
-    if (r.stored() + r.alreadyHeld() + r.conflicts() + r.failed() == 0 && !r.outOfSpace()) {
+  private static void show(
+      LibraryImport.Report r, PictureLibrary.Result p, Path root, Component parent, Notice notice) {
+    boolean bad =
+        r.conflicts() > 0
+            || r.failed() > 0
+            || r.outOfSpace()
+            || r.archivesRefused() > 0
+            || r.nestedArchives() > 0
+            || p.conflicts() > 0
+            || p.failed() > 0
+            || p.outOfSpace();
+    boolean anything =
+        r.stored() + r.alreadyHeld() > 0 || r.cancelled() || p.kept() + p.alreadyHeld() > 0;
+    if (!bad && (!anything || notice == Notice.ONLY_PROBLEMS && !r.cancelled())) {
       return; // no DICOM in the selection: the viewer's own loading already says so
-    }
-    StringBuilder text =
-        new StringBuilder(
-            MessageFormat.format(
-                Messages.getString("library.import.saved"), r.stored(), root, r.alreadyHeld()));
-    if (r.conflicts() > 0) {
-      text.append("\n\n")
-          .append(
-              MessageFormat.format(Messages.getString("library.import.conflict"), r.conflicts()));
-    }
-    if (r.failed() > 0) {
-      text.append("\n\n")
-          .append(
-              MessageFormat.format(
-                  Messages.getString("library.import.failed"), r.failed(), r.firstProblem()));
-    }
-    if (r.outOfSpace()) {
-      text.append("\n\n").append(Messages.getString("library.import.space"));
     }
     SavedFile.showSaved(
         parent,
-        title,
-        text.toString(),
+        Messages.getString("library.import.title"),
+        message(r, p, root),
         root.toFile(),
         bad ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
+  }
+
+  private static String message(LibraryImport.Report r, PictureLibrary.Result p, Path root) {
+    List<String> parts = new ArrayList<>();
+    if (r.stored() + r.alreadyHeld() + r.conflicts() + r.failed() > 0 || r.cancelled()) {
+      parts.add(format("library.import.saved", r.stored(), root, r.alreadyHeld()));
+    }
+    if (r.conflicts() > 0) {
+      parts.add(format("library.import.conflict", r.conflicts()));
+    }
+    if (r.failed() > 0) {
+      parts.add(format("library.import.failed", r.failed(), r.firstProblem()));
+    }
+    if (r.archivesRefused() > 0) {
+      parts.add(format("library.import.archive", r.archivesRefused(), r.firstProblem()));
+    }
+    if (r.nestedArchives() > 0) {
+      parts.add(format("library.import.nested", r.nestedArchives()));
+    }
+    if (r.outOfSpace() || p.outOfSpace()) {
+      parts.add(Messages.getString("library.import.space"));
+    }
+    if (r.cancelled()) {
+      parts.add(Messages.getString("library.import.cancelled"));
+    }
+    if (p.kept() + p.alreadyHeld() > 0) {
+      parts.add(format("library.picture.kept", p.kept(), p.alreadyHeld()));
+    }
+    if (p.conflicts() > 0) {
+      parts.add(format("library.picture.conflict", p.conflicts()));
+    }
+    if (p.failed() > 0) {
+      parts.add(format("library.picture.failed", p.failed(), p.firstProblem()));
+    }
+    return String.join("\n\n", parts);
+  }
+
+  private static String format(String key, Object... values) {
+    return MessageFormat.format(Messages.getString(key), values);
   }
 
   private Properties loadSettings() {

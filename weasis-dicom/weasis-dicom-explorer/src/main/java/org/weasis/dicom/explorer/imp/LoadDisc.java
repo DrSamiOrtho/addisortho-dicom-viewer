@@ -56,7 +56,7 @@ public class LoadDisc extends LoadLocalDicom {
     LOGGER.info("Copied the disc in {} ms", (System.nanoTime() - start) / 1_000_000);
     if (!isCancelled()) {
       // Kept in the library too, so the study outlasts this temporary copy and the disc.
-      StudyLibrary.getInstance().importAndReport(List.of(dir.toFile()), true, null);
+      StudyLibrary.getInstance().retainDisc(dir.toFile(), dicomModel);
     }
     return new File[] {dir.toFile()};
   }
