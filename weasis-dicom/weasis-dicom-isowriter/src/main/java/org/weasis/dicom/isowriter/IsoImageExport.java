@@ -185,7 +185,7 @@ public class IsoImageExport extends LocalExport {
                 pref.setProperty(INC_DICOMDIR, Boolean.TRUE.toString());
                 pref.setProperty(CD_COMPATIBLE, Boolean.TRUE.toString());
                 ExportOutcome outcome = new ExportOutcome();
-                writeDicom(this, exportDir, model, pref, outcome);
+                writeDicom(this, exportDir, model, pref, outcome, null);
                 File readmeFile = ResourceUtil.getResource("isowriter/README.htm"); // NON-NLS
                 StreamUtil.copyFile(
                     readmeFile.toPath(), new File(exportDir, "README.HTM").toPath());
@@ -198,7 +198,8 @@ public class IsoImageExport extends LocalExport {
                       Format.JPEG,
                       new Properties(),
                       null,
-                      outcome);
+                      outcome,
+                      null);
                 }
 
                 String localPath = getLocalViewerPath();

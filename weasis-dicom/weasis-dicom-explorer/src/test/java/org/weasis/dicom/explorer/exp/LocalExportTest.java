@@ -91,7 +91,7 @@ class LocalExportTest {
     Properties pref = new Properties();
     pref.setProperty(LocalExport.INC_DICOMDIR, "true");
 
-    export.writeDicom(new NoTask(), patientDir, tree, pref, new ExportOutcome());
+    export.writeDicom(new NoTask(), patientDir, tree, pref, new ExportOutcome(), null);
 
     assertTrue(new File(patientDir, "DICOMDIR").isFile());
   }
@@ -105,7 +105,7 @@ class LocalExportTest {
     Properties pref = new Properties();
     pref.setProperty(LocalExport.INC_DICOMDIR, "false");
 
-    export.writeDicom(new NoTask(), patientDir, tree, pref, new ExportOutcome());
+    export.writeDicom(new NoTask(), patientDir, tree, pref, new ExportOutcome(), null);
 
     assertTrue(patientDir.isDirectory());
     assertFalse(new File(patientDir, "DICOMDIR").exists());
@@ -135,6 +135,22 @@ class LocalExportTest {
     assertTrue(LocalExport.failure(cancelled).isEmpty());
 
     assertTrue(LocalExport.failure(new FutureTask<>(() -> true)).isEmpty());
+  }
+
+  @Test
+  void readableNamesLeaveNoDicomdir() throws IOException {
+    DicomModel model = new DicomModel();
+    CheckTreeModel tree = new CheckTreeModel(model);
+    LocalExport export = new HeadlessExport(model, tree);
+    File patientDir = new File(tmp.toFile(), "DOE JOHN");
+    Properties pref = new Properties();
+    pref.setProperty(LocalExport.INC_DICOMDIR, "true");
+
+    export.writeDicom(
+        new NoTask(), patientDir, tree, pref, new ExportOutcome(), new ExportNaming(true, true));
+
+    assertTrue(patientDir.isDirectory());
+    assertFalse(new File(patientDir, "DICOMDIR").exists());
   }
 
   @Test
