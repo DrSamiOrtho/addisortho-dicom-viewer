@@ -157,6 +157,13 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
       if (t.isCancelled()) {
         return false;
       }
+      if (prepared.written() == 0 && prepared.failed() == 0) {
+        GuiExecutor.execute(
+            () ->
+                showResult(
+                    Messages.getString("ExportDicomView.nothing"), JOptionPane.WARNING_MESSAGE));
+        return false;
+      }
       if (prepared.failed() > 0) {
         GuiExecutor.execute(
             () ->
@@ -205,8 +212,12 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
     return dicomProgress;
   }
 
+  /**
+   * @return true only when a transfer really completed; false after a failure or a cancellation,
+   *     and on this page, which has no destination of its own
+   */
   protected boolean exportAction(List<String> files, DicomProgress dicomProgress) {
-    return true;
+    return false;
   }
 
   private void writeDicom(
@@ -274,6 +285,8 @@ public class ExportDicomView extends AbstractItemDialogPage implements ExportDic
                     dcm, false, new File(writeDir, path), null, node, seriesInstanceUID);
             if (prFile == null) {
               outcome.failed("presentation state", new IOException("It could not be written"));
+            } else {
+              outcome.saved();
             }
             return prFile;
           }

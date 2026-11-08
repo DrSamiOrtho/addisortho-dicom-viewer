@@ -139,9 +139,9 @@ public class SendDicomView extends ExportDicomView {
       if (state.getStatus() != Status.Success && state.getStatus() != Status.Cancel) {
         showErrorMessage(null, null, state);
         return false;
-      } else {
-        LOGGER.info("Dicom send: {}", state.getMessage());
       }
+      LOGGER.info("Dicom send: {}", state.getMessage());
+      return delivered(state.getStatus());
     } else if (selectedItem instanceof final DicomWebNode node) {
       AuthMethod auth = AuthenticationPersistence.getAuthMethod(node.getAuthMethodUid());
       if (!OAuth2ServiceFactory.NO_AUTH.equals(auth)) {
@@ -166,12 +166,26 @@ public class SendDicomView extends ExportDicomView {
           showErrorMessage(null, null, state);
           return false;
         }
+        return delivered(state.getStatus());
       } catch (Exception e) {
         showErrorMessage("StowRS error: {}", e, null); // NON-NLS
         return false;
       }
     }
-    return true;
+    // No destination was chosen, so nothing was or could be sent.
+    GuiExecutor.execute(
+        () ->
+            JOptionPane.showMessageDialog(
+                WinUtil.getValidComponent(exportTree),
+                Messages.getString("SendDicomView.no_destination"),
+                getTitle(),
+                JOptionPane.WARNING_MESSAGE));
+    return false;
+  }
+
+  /** Only a completed transfer counts: a cancelled one did not deliver the selection. */
+  static boolean delivered(int status) {
+    return status == Status.Success;
   }
 
   private void showErrorMessage(String title, Exception e, DicomState state) {

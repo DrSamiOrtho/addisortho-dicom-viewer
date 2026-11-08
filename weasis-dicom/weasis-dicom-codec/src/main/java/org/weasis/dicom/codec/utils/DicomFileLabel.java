@@ -23,6 +23,7 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Sequence;
 import org.dcm4che3.data.Tag;
 
 /**
@@ -85,6 +86,28 @@ public final class DicomFileLabel {
     }
     LocalDate study = date(header.getString(Tag.StudyDate));
     return study == null ? Optional.empty() : Optional.of(new ImageDate(study, false));
+  }
+
+  /**
+   * Every date one object can be labelled with: {@link #imageDate}, and each frame's day for an
+   * enhanced object, whose frames can run past midnight.
+   */
+  public static List<ImageDate> imageDates(Attributes header) {
+    List<ImageDate> dates = new ArrayList<>();
+    imageDate(header).ifPresent(dates::add);
+    Sequence frames =
+        header == null ? null : header.getSequence(Tag.PerFrameFunctionalGroupsSequence);
+    if (frames != null) {
+      for (Attributes frame : frames) {
+        Attributes content = frame.getNestedDataset(Tag.FrameContentSequence);
+        LocalDate day =
+            content == null ? null : date(content.getString(Tag.FrameAcquisitionDateTime));
+        if (day != null) {
+          dates.add(new ImageDate(day, true));
+        }
+      }
+    }
+    return dates;
   }
 
   private static String frameAcquisition(Attributes header, int groups) {

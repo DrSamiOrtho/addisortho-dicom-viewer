@@ -11,6 +11,7 @@ package org.weasis.dicom.explorer.exp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -22,13 +23,16 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.FutureTask;
 import java.util.zip.ZipFile;
 import javax.swing.JComponent;
 import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.tree.TreePath;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
@@ -37,6 +41,7 @@ import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.media.DicomDirWriter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.weasis.dicom.codec.DcmMediaReader;
 import org.weasis.dicom.codec.DicomElement;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.imp.DicomDirLoader;
@@ -289,6 +294,76 @@ class LocalExportTest {
     for (String uid : List.of("1.2.3", "1.2.840.113619.2.55.3.604688119", "9.9.9.9.1")) {
       assertTrue(LocalExport.makeFileIDs(uid).matches("[0-9A-Z]{1,8}"), uid);
     }
+  }
+
+  @Test
+  void theTwoUidsTheReviewFoundCollidingNowDiffer() {
+    assertNotEquals(
+        LocalExport.makeFileIDs("1.2.826.0.1.3680043.8.498.940401004822"),
+        LocalExport.makeFileIDs("1.2.826.0.1.3680043.8.498.905925362588"));
+  }
+
+  @Test
+  void twoInstancesNeverShareAMediaFileEvenIfTheirIdsCollide() {
+    Set<String> used = new HashSet<>();
+    File folder = tmp.toFile();
+    File first = LocalExport.freeMediaFile(folder, "1.2.3", used);
+    // what a real collision looks like: the first choice for another instance is already taken
+    File second = LocalExport.freeMediaFile(folder, "1.2.3", used);
+    assertNotEquals(first, second);
+    assertTrue(second.getName().matches("[0-9A-Z]{1,8}"), second.getName());
+  }
+
+  @Test
+  void anEarlierExportOfAnotherInstanceIsNotReplaced() throws Exception {
+    File taken = LocalExport.freeMediaFile(tmp.toFile(), "1.2.3", new HashSet<>());
+    writeSynthetic(taken, "9.9.9");
+
+    File free = LocalExport.freeMediaFile(tmp.toFile(), "1.2.3", new HashSet<>());
+
+    assertNotEquals(taken, free);
+  }
+
+  @Test
+  void theSameInstanceExportedAgainTakesItsOwnFileBack() throws Exception {
+    File own = LocalExport.freeMediaFile(tmp.toFile(), "1.2.3", new HashSet<>());
+    writeSynthetic(own, "1.2.3");
+
+    assertEquals(own, LocalExport.freeMediaFile(tmp.toFile(), "1.2.3", new HashSet<>()));
+  }
+
+  private static void writeSynthetic(File file, String sop) throws IOException {
+    Attributes a = syntheticImage();
+    a.setString(Tag.SOPInstanceUID, VR.UI, sop);
+    try (DicomOutputStream out = new DicomOutputStream(file)) {
+      out.writeDataset(a.createFileMetaInformation(UID.ExplicitVRLittleEndian), a);
+    }
+  }
+
+  private static DefaultMutableTreeNode imageDated(String day) {
+    Attributes header = new Attributes();
+    header.setString(Tag.AcquisitionDate, VR.DA, day);
+    DcmMediaReader reader = mock(DcmMediaReader.class);
+    when(reader.getDicomObject()).thenReturn(header);
+    DicomElement image = mock(DicomElement.class);
+    when(image.getMediaReader()).thenReturn(reader);
+    return new DefaultMutableTreeNode(image);
+  }
+
+  @Test
+  void aFolderDateCoversEveryImageOfASeries() throws Exception {
+    DefaultMutableTreeNode series = new DefaultMutableTreeNode("series");
+    DefaultMutableTreeNode first = imageDated("20260115");
+    DefaultMutableTreeNode second = imageDated("20260116");
+    series.add(first);
+    series.add(second);
+    CheckTreeModel tree = mock(CheckTreeModel.class);
+    when(tree.getCheckingPaths())
+        .thenReturn(new TreePath[] {new TreePath(first.getPath()), new TreePath(second.getPath())});
+    var method = LocalExport.class.getDeclaredMethod("selectedImageDates", CheckTreeModel.class);
+    method.setAccessible(true);
+
+    assertEquals(2, ((List<?>) method.invoke(null, tree)).size());
   }
 
   /**

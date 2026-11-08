@@ -96,6 +96,23 @@ class DicomFileLabelTest {
   }
 
   @Test
+  void everyFrameOfAnEnhancedObjectCounts() {
+    Attributes a = header();
+    a.remove(Tag.AcquisitionDate);
+    Sequence groups = a.newSequence(Tag.PerFrameFunctionalGroupsSequence, 2);
+    for (String time : new String[] {"20260112235900", "20260113000100"}) {
+      Attributes content = new Attributes();
+      content.setString(Tag.FrameAcquisitionDateTime, VR.DT, time);
+      Attributes group = new Attributes();
+      group.newSequence(Tag.FrameContentSequence, 1).add(content);
+      groups.add(group);
+    }
+    assertEquals(
+        "John Doe MRN 00123 2026-01-12 to 2026-01-13",
+        DicomFileLabel.folderLabel("John Doe", "00123", DicomFileLabel.imageDates(a)));
+  }
+
+  @Test
   void anUnreadableAcquisitionDateFallsThroughToTheStudyDate() {
     Attributes a = header();
     a.setString(Tag.AcquisitionDate, VR.DA, "00000000");

@@ -308,7 +308,7 @@ async function boot() {
   const q = new URLSearchParams(location.search);
   // wording that stays true once projects are saved to the server (Astra, 13 Oct: "nothing is uploaded" would not be)
   if (STANDALONE) $('foot').textContent = 'Addis Ortho Trading PLC · X-ray templating for surgeons. A planning aid: the plan is a draft and the surgeon decides. The X-ray opens in this browser; a saved project is stored for your team.';
-  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r44h). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
+  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r46). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
   pendingNote();
   for (const [text, fn] of kcOpenItems()) { const li = document.createElement('li'), a = document.createElement('a'); a.href = '#'; a.textContent = text; a.onclick = e => { e.preventDefault(); fn(); }; li.appendChild(a); $('openList').appendChild(li); }
   // the short part on top and the rest under the templated-patients list, so a phone sees the list without scrolling far
@@ -1204,7 +1204,8 @@ function pfrNeckRise(t) { const g = geomOf(t); return g ? -(headSet(t)[t.neck] ?
 const pfrLevelTxt = t => { const r = pfrNeckRise(t); return Math.abs(r) < 0.05 ? 'its head centre level (neck 0)' : `its neck-0 head centre level (with neck ${neckLabel(t, t.neck)} the head centre sits ${f1(Math.abs(r))} mm ${r > 0 ? 'higher' : 'lower'})`; };
 // r33 (24 Oct 2026): the proximal humeral replacement (Chunli, vendor-families/ao-phr.json): kind humeral-body, tumour 'phr'.
 // Placed with its head centre (the middle of its head face: hemispherical heads) on the native head and its axis along the
-// humeral shaft; the resection from the tip of the greater tuberosity; the stack as the PFR's (extension 35, stem collar L1).
+// humeral shaft; the resection from the tip of the greater tuberosity; r46 (8 Nov 2026): the stack by Chunli's rule (Kevin,
+// 4 Nov 2026), the marked lengths (upper end 47.5, extension 40, stem collar L1) minus 3 per connection (z.lengthRule).
 function isPhr(f) { return !!(f && f.kind === 'humeral-body' && f.tumour === 'phr'); }
 function phrPlace(slot) {
   const t = S.tpl[slot], f = S.fam[t.fam], g = geomOf(t), sh = lmGeom('humShaft'), hd = lmGeom('humHead');
@@ -1253,8 +1254,10 @@ function phrRows(R, t) {
   R.push(['Scale', 'lengths use this film\'s ball; the resection level lies further from it, where magnification may differ (not validated)', 'warn']);
 }
 // r37: Chunli confirmed (Kevin, 27 Oct 2026) that the PFR's Ø24 tapers and their 2.25 mm gap are the knee's; the shoulder's Ø22
-// system has no such answer, so its row keeps the gap as taken from the Ø24 figure
-const pfrGapNote = (z, phr) => `Each taper junction is taken as ${z.junctionGapMm} mm open after impaction (${phr ? "Chunli's figure for its Ø24 tapers, confirmed for the knee and the femoral replacement; taken for this Ø22 system, not confirmed" : "Chunli: the same Ø24 taper and gap as the knee, confirmed 27 Oct 2026"}): ${z.junctions} junction${z.junctions > 1 ? 's' : ''}, so the stack can sit up to about ${f1(z.junctions * 0.25)} mm longer or shorter: check the length with the trial.`;
+// system has its own rule since r46 (Kevin, 4 Nov 2026: marked lengths minus 3 per connection), printed by phrRuleNote
+const pfrGapNote = (z, phr) => phr && z.lengthRule ? phrRuleNote(z) : `Each taper junction is taken as ${z.junctionGapMm} mm open after impaction (${phr ? "Chunli's figure for its Ø24 tapers, confirmed for the knee and the femoral replacement; taken for this Ø22 system, not confirmed" : "Chunli: the same Ø24 taper and gap as the knee, confirmed 27 Oct 2026"}): ${z.junctions} junction${z.junctions > 1 ? 's' : ''}, so the stack can sit up to about ${f1(z.junctions * 0.25)} mm longer or shorter: check the length with the trial.`;
+// r46: the PHR's taper note from Chunli's rule; his 1.7 mm joined gap and the minus 3 differ by about 0.3 mm a junction
+const phrRuleNote = z => `Chunli's rule (Kevin, 4 Nov 2026): the length from the top of the upper end to the osteotomy is the marked lengths (upper end ${fmm(z.lengthRule.markedMm[0])}${z.lengthRule.markedMm[1] ? `, extension ${fmm(z.lengthRule.markedMm[1])}` : ''}, stem collar) minus ${fmm(z.lengthRule.perJunctionMm)} mm ${z.junctions > 1 ? `at each of its ${z.junctions} junctions` : 'at its one junction'}. Chunli also gives the joined taper gap as ${z.junctionGapMm} mm; the two differ by about 0.3 mm a junction, so the stack can sit up to about ${f1(z.junctions * 0.3)} mm longer or shorter: check the length with the trial.`;
 function tumAxis(t) {   // {p0, dir} in the template's frame: where the body's axis crosses the joint line, and up/down it into the bone
   const g = geomOf(t), z = sizeOf(t);
   if (!g || !g.stemPort || !z || !Number.isFinite(z.reconstructionMm)) return { p0: [0, 0], dir: [0, 1] };

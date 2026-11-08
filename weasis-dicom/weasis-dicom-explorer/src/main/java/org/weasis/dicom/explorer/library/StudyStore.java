@@ -257,6 +257,7 @@ public class StudyStore {
         throw new IOException("It clashes with what the study holds and was not added");
       }
       Path stored = commit.instance().file();
+      flushFolder(stored.getParent());
       Attributes back = readHeader(stored);
       if (Files.size(stored) != size
           || back == null
@@ -266,6 +267,15 @@ public class StudyStore {
       return commit.instance();
     } finally {
       Files.deleteIfExists(temp);
+    }
+  }
+
+  /** Makes the new file's name survive a power cut too, where the system allows it. */
+  private static void flushFolder(Path folder) {
+    try (FileChannel channel = FileChannel.open(folder, StandardOpenOption.READ)) {
+      channel.force(true);
+    } catch (IOException e) {
+      // Windows cannot open a folder this way; NTFS journals the rename itself
     }
   }
 
