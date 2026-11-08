@@ -596,7 +596,12 @@ final class StitchDialog extends JDialog {
             chosen.get(i),
             chosen.get(i + 1),
             seams.get(i),
-            (SeamMatcher.Band) band.getSelectedItem());
+            (SeamMatcher.Band) band.getSelectedItem(),
+            s -> {
+              List<Seam> trial = new ArrayList<>(seams);
+              trial.set(i, s);
+              return new Stitch(chosen, trial, choices(), cuts);
+            });
     editor.setVisible(true);
     editor
         .result()
