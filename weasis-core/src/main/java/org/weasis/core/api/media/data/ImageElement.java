@@ -49,6 +49,16 @@ import org.weasis.opencv.op.lut.WlParams;
 import org.weasis.opencv.op.lut.WlPresentation;
 
 public class ImageElement extends MediaElement {
+
+  /**
+   * A readable name for a picture of this image, without extension, or null when there is none.
+   *
+   * @param withPatient false leaves the patient's name, age and record number out
+   */
+  public String suggestedFileName(boolean withPatient) {
+    return null;
+  }
+
   private static final Logger LOGGER = LoggerFactory.getLogger(ImageElement.class);
 
   public static final ExecutorService IMAGE_LOADER =

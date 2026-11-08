@@ -19,9 +19,9 @@ import java.awt.datatransfer.Transferable;
 import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Date;
@@ -50,11 +50,13 @@ import org.weasis.core.api.util.ResourceUtil;
 import org.weasis.core.api.util.ResourceUtil.ActionIcon;
 import org.weasis.core.ui.editor.image.ViewTransferHandler;
 import org.weasis.core.ui.util.DefaultAction;
+import org.weasis.core.ui.util.SavedFile;
 import org.weasis.dicom.codec.DcmMediaReader;
 import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.codec.DicomMediaIO;
 import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.TagD;
+import org.weasis.dicom.codec.utils.DicomFileLabel;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.viewer2d.mip.MipView;
 import org.weasis.dicom.viewer3d.Messages;
@@ -209,7 +211,7 @@ public final class View3dSnapshot {
     JFileChooser chooser = new JFileChooser();
     chooser.setFileFilter(
         new FileNameExtensionFilter(Messages.getString("view.jpeg.files"), "jpg", "jpeg"));
-    chooser.setSelectedFile(Path.of("3d-view.jpg").toFile()); // NON-NLS
+    chooser.setSelectedFile(new File(suggestedName(view) + ".jpg")); // NON-NLS
     if (chooser.showSaveDialog(view) != JFileChooser.APPROVE_OPTION) {
       return;
     }
@@ -218,11 +220,18 @@ public final class View3dSnapshot {
     if (!name.endsWith(".jpg") && !name.endsWith(".jpeg")) { // NON-NLS
       file = file.resolveSibling(file.getFileName() + ".jpg"); // NON-NLS
     }
+    Path destination = file;
     try {
-      if (!ImageIO.write(frame.get().toImage(), "jpg", Files.newOutputStream(file))) { // NON-NLS
-        throw new IOException("No JPEG writer");
-      }
-    } catch (IOException e) {
+      SavedFile.write(
+          destination,
+          staged -> ImageIO.write(frame.get().toImage(), "jpg", staged.toFile())); // NON-NLS
+      SavedFile.showSaved(
+          view,
+          Messages.getString("3d.viewer"),
+          String.format(Messages.getString("view.jpeg.saved"), destination),
+          destination.toAbsolutePath().getParent().toFile(),
+          JOptionPane.INFORMATION_MESSAGE);
+    } catch (IOException | RuntimeException e) {
       LOGGER.error("Cannot save the 3D picture to {}", file, e);
       JOptionPane.showMessageDialog(
           view,
@@ -230,6 +239,13 @@ public final class View3dSnapshot {
           Messages.getString("3d.viewer"),
           JOptionPane.WARNING_MESSAGE);
     }
+  }
+
+  private static String suggestedName(View3d view) {
+    DicomVolTexture volTexture = view.getVolTexture();
+    MediaSeries<DicomImageElement> series = volTexture == null ? null : volTexture.getSeries();
+    String label = series == null ? "" : DicomFileLabel.imageLabel(sourceAttributes(series), true);
+    return label.isEmpty() ? "3d-view" : label + " 3D"; // NON-NLS
   }
 
   public static void copyToClipboard(View3d view) {

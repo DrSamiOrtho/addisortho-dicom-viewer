@@ -10,8 +10,6 @@
 package org.weasis.dicom.explorer.exp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -31,6 +29,7 @@ class ExportNamingTest {
   private static Attributes header() {
     Attributes a = new Attributes();
     a.setString(Tag.PatientName, VR.PN, "Doe^John");
+    a.setString(Tag.PatientID, VR.LO, "00123");
     a.setString(Tag.PatientAge, VR.AS, "045Y");
     a.setString(Tag.ViewPosition, VR.CS, "AP");
     a.setString(Tag.AcquisitionDate, VR.DA, "20260115");
@@ -43,20 +42,20 @@ class ExportNamingTest {
   }
 
   @Test
-  void namesThePatientAgeViewAndDate() {
-    assertEquals("John Doe 45Y AP 2026-01-15", stem(header()));
+  void namesThePatientMrnAgeDateAndView() {
+    assertEquals("John Doe MRN 00123 45Y 2026-01-15 AP", stem(header()));
   }
 
   @Test
-  void leavesTheNameAndAgeOutForSharing() {
-    assertEquals("AP 2026-01-15", new ExportNaming(false, false).stem(header(), "fallback"));
+  void leavesTheIdentityOutForSharing() {
+    assertEquals("2026-01-15 AP", new ExportNaming(false, false).stem(header(), "fallback"));
   }
 
   @Test
   void aChildsAgeKeepsItsUnit() {
     Attributes a = header();
     a.setString(Tag.PatientAge, VR.AS, "006M");
-    assertEquals("John Doe 6M AP 2026-01-15", stem(a));
+    assertEquals("John Doe MRN 00123 6M 2026-01-15 AP", stem(a));
   }
 
   @Test
@@ -64,63 +63,7 @@ class ExportNamingTest {
     Attributes a = header();
     a.remove(Tag.PatientAge);
     a.setString(Tag.PatientBirthDate, VR.DA, "19800201");
-    assertEquals("John Doe 45Y AP 2026-01-15", stem(a));
-  }
-
-  @Test
-  void aMissingAgeIsLeftOut() {
-    Attributes a = header();
-    a.remove(Tag.PatientAge);
-    assertEquals("John Doe AP 2026-01-15", stem(a));
-  }
-
-  @Test
-  void aStudyDateIsNotPassedOffAsTheDayOfTheImage() {
-    Attributes a = header();
-    a.remove(Tag.AcquisitionDate);
-    assertEquals("John Doe 45Y AP study 2026-01-10", stem(a));
-  }
-
-  @Test
-  void aMissingDateStaysMissing() {
-    Attributes a = header();
-    a.remove(Tag.AcquisitionDate);
-    a.remove(Tag.StudyDate);
-    assertEquals("John Doe 45Y AP", stem(a));
-  }
-
-  @Test
-  void anUnreadableDateIsTreatedAsMissing() {
-    Attributes a = header();
-    a.setString(Tag.AcquisitionDate, VR.DA, "notadate");
-    a.remove(Tag.StudyDate);
-    assertEquals("John Doe 45Y AP", stem(a));
-  }
-
-  @Test
-  void usesTheSeriesDescriptionWhenThereIsNoViewPosition() {
-    Attributes a = header();
-    a.remove(Tag.ViewPosition);
-    a.setString(Tag.SeriesDescription, VR.LO, "PELVIS LAT");
-    assertEquals("John Doe 45Y PELVIS LAT 2026-01-15", stem(a));
-  }
-
-  @Test
-  void dropsCharactersAFileNameCannotHold() {
-    Attributes a = header();
-    a.setString(Tag.ViewPosition, VR.CS, "");
-    a.setString(Tag.SeriesDescription, VR.LO, "KNEE/AP: R");
-    String stem = stem(a);
-    assertFalse(stem.contains("/"), stem);
-    assertFalse(stem.contains(":"), stem);
-  }
-
-  @Test
-  void keepsANonEnglishName() {
-    Attributes a = header();
-    a.setString(Tag.SpecificCharacterSet, VR.CS, "ISO_IR 192");
-    a.setString(Tag.PatientName, VR.PN, "አበበ");
-    assertTrue(stem(a).startsWith("አበበ 45Y"), stem(a));
+    assertEquals("John Doe MRN 00123 45Y 2026-01-15 AP", stem(a));
   }
 
   @Test

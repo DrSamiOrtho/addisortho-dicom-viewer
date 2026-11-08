@@ -12,7 +12,6 @@ package org.weasis.dicom.receive;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.text.Normalizer;
 import java.time.LocalDate;
 import java.time.Period;
 import java.time.format.DateTimeFormatter;
@@ -25,6 +24,7 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
+import org.weasis.dicom.codec.utils.DicomFileLabel;
 
 /**
  * Builds the folder and file names of received images:
@@ -48,10 +48,6 @@ final class ReceiveNaming {
   private static final int MAX_FOLDER_CHARS = 110;
   private static final int MAX_NAME_BYTES = 240;
 
-  private static final String RESERVED_CHARS = "<>:\"/\\|?*";
-  private static final Pattern RESERVED_DEVICE =
-      Pattern.compile(
-          "(CON|PRN|AUX|NUL|COM[0-9¹²³]|LPT[0-9¹²³])([ .].*)?", Pattern.CASE_INSENSITIVE);
   private static final Pattern DICOM_AGE = Pattern.compile("0*(\\d{1,3})([DWMY])");
   private static final DateTimeFormatter DICOM_DATE = DateTimeFormatter.ofPattern("uuuuMMdd");
   private static final DateTimeFormatter ARRIVAL_DATE = DateTimeFormatter.ISO_LOCAL_DATE;
@@ -169,40 +165,11 @@ final class ReceiveNaming {
 
   /** Makes one untrusted field safe as a part of a file name on Windows, macOS and Linux. */
   static String sanitize(String raw, int maxLength) {
-    String text = Normalizer.normalize(raw, Normalizer.Form.NFC);
-    StringBuilder out = new StringBuilder();
-    text.codePoints().forEach(cp -> out.appendCodePoint(isUnsafe(cp) ? ' ' : cp));
-    String clean = out.toString().replaceAll("\\s+", " ").replaceAll("\\.{2,}", ".");
-    clean = trimEnds(truncate(trimEnds(clean), maxLength));
-    return RESERVED_DEVICE.matcher(clean).matches() ? "_" + clean : clean;
-  }
-
-  private static boolean isUnsafe(int cp) {
-    if (RESERVED_CHARS.indexOf(cp) >= 0) {
-      return true;
-    }
-    return switch (Character.getType(cp)) {
-      case Character.CONTROL,
-          Character.FORMAT,
-          Character.SURROGATE,
-          Character.PRIVATE_USE,
-          Character.UNASSIGNED,
-          Character.LINE_SEPARATOR,
-          Character.PARAGRAPH_SEPARATOR ->
-          true;
-      default -> false;
-    };
+    return DicomFileLabel.sanitize(raw, maxLength);
   }
 
   private static String trimEnds(String text) {
     return text.replaceAll("^[. ]+", "").replaceAll("[. ]+$", "");
-  }
-
-  private static String truncate(String text, int maxCodePoints) {
-    if (text.codePointCount(0, text.length()) <= maxCodePoints) {
-      return text;
-    }
-    return text.substring(0, text.offsetByCodePoints(0, maxCodePoints));
   }
 
   /**

@@ -15,6 +15,7 @@ import jakarta.xml.bind.Marshaller;
 import jakarta.xml.bind.Unmarshaller;
 import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
 import java.io.Reader;
 import java.util.Map;
 import org.glassfish.jaxb.runtime.v2.ContextFactory;
@@ -25,6 +26,7 @@ import org.weasis.core.api.media.data.TagW;
 import org.weasis.core.api.util.GzipManager;
 import org.weasis.core.ui.model.GraphicModel;
 import org.weasis.core.ui.model.imp.XmlGraphicModel;
+import org.weasis.core.ui.util.SavedFile;
 
 public class XmlSerializer {
   private static final Logger LOGGER = LoggerFactory.getLogger(XmlSerializer.class);
@@ -44,7 +46,12 @@ public class XmlSerializer {
     return null;
   }
 
-  public static void writePresentation(ImageElement img, File destinationFile) {
+  /**
+   * Saves the image's annotations next to the destination file, if it has any.
+   *
+   * @return false when there are annotations and they could not be saved
+   */
+  public static boolean writePresentation(ImageElement img, File destinationFile) {
     GraphicModel model = (GraphicModel) img.getTagValue(TagW.PresentationModel);
     if (model != null && !model.getModels().isEmpty()) {
       File gpxFile = new File(destinationFile.getParent(), destinationFile.getName() + ".xml");
@@ -56,12 +63,22 @@ public class XmlSerializer {
         // output pretty printed
         jaxbMarshaller.setProperty(Marshaller.JAXB_FORMATTED_OUTPUT, true);
 
-        // jaxbMarshaller.marshal(model, System.out);
-        jaxbMarshaller.marshal(model, gpxFile);
+        SavedFile.write(
+            gpxFile.toPath(),
+            staged -> {
+              try {
+                jaxbMarshaller.marshal(model, staged.toFile());
+                return true;
+              } catch (JAXBException e) {
+                throw new IOException(e);
+              }
+            });
       } catch (Exception e) {
         LOGGER.error("Cannot save xml: ", e);
+        return false;
       }
     }
+    return true;
   }
 
   @SuppressWarnings("unchecked")

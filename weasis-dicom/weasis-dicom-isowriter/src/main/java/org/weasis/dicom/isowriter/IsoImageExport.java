@@ -50,6 +50,7 @@ import org.weasis.core.api.gui.util.AppProperties;
 import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.gui.util.WinUtil;
 import org.weasis.core.api.util.ResourceUtil;
+import org.weasis.core.ui.util.SavedFile;
 import org.weasis.core.util.FileUtil;
 import org.weasis.core.util.StreamUtil;
 import org.weasis.core.util.StringUtil;
@@ -150,12 +151,13 @@ public class IsoImageExport extends LocalExport {
       return;
     }
     String patient = checkBoxNameLabel.isSelected() ? getPatientOfDisc(model) : null;
+    String patientLabel = patient == null ? null : getSelectedPatientLabel(model);
     final String isoLabel = isoVolumeId(patient);
     final String jolietLabel = jolietVolumeId(patient);
     String fileName =
-        patient == null
+        patientLabel == null
             ? "cdrom-DICOM.iso" // NON-NLS
-            : FileUtil.getValidFileNameWithoutHTML(patient) + ".iso"; // NON-NLS
+            : FileUtil.getValidFileNameWithoutHTML(patientLabel) + ".iso"; // NON-NLS
     final boolean burn = checkBoxBurn.isEnabled() && checkBoxBurn.isSelected();
     if (burn) {
       // The image only goes to the disc: build it in the temporary folder, no file to choose.
@@ -171,6 +173,10 @@ public class IsoImageExport extends LocalExport {
       ExplorerTask<Boolean, String> task =
           new ExplorerTask<>(Messages.getString("exporting"), false) {
             private String message;
+            private int messageType = JOptionPane.ERROR_MESSAGE;
+            private File savedFolder;
+            // ExplorerTask.cancel() runs done() again when the task has already finished
+            private boolean reported;
 
             @Override
             protected Boolean doInBackground() throws Exception {
@@ -231,12 +237,25 @@ public class IsoImageExport extends LocalExport {
                           outcome.firstProblem());
                   return false;
                 }
-                if (makeISO(exportDir, exportFile, isoLabel, jolietLabel, true, true) == null) {
-                  message = Messages.getString("burn.failed");
+                try {
+                  SavedFile.write(
+                      exportFile.toPath(),
+                      staged ->
+                          makeISO(exportDir, staged.toFile(), isoLabel, jolietLabel, true, true)
+                              != null);
+                } catch (IOException e) {
+                  LOGGER.error("Cannot save the disc image {}", exportFile, e);
+                  message =
+                      MessageFormat.format(
+                          Messages.getString("iso.failed"), exportFile, ExportOutcome.reason(e));
                   return false;
                 }
                 if (burn) {
                   burnDisc(exportDir, exportFile, jolietLabel);
+                } else {
+                  message = MessageFormat.format(Messages.getString("iso.saved"), exportFile);
+                  messageType = JOptionPane.INFORMATION_MESSAGE;
+                  savedFolder = exportFile.getParentFile();
                 }
                 return true;
               } finally {
@@ -284,17 +303,23 @@ public class IsoImageExport extends LocalExport {
                 if (choice[0] == 1) {
                   SwingUtilities.invokeAndWait(() -> browseImgFile(isoFile.getName()));
                   if (outputFile != null && !outputFile.equals(isoFile)) {
-                    Files.copy(
-                        isoFile.toPath(), outputFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                    SavedFile.write(
+                        outputFile.toPath(),
+                        staged -> {
+                          Files.copy(isoFile.toPath(), staged, StandardCopyOption.REPLACE_EXISTING);
+                          return true;
+                        });
                     message = Messages.getString("burn.saved") + StringUtil.SPACE + outputFile;
+                    messageType = JOptionPane.INFORMATION_MESSAGE;
+                    savedFolder = outputFile.getAbsoluteFile().getParentFile();
                   }
                 }
                 return;
               }
               DiscBurner.Result result = DiscBurner.burn(exportDir, isoFile, label);
-              message =
-                  Messages.getString(
-                      result == DiscBurner.Result.DONE ? "burn.done" : "burn.failed");
+              boolean burned = result == DiscBurner.Result.DONE;
+              message = Messages.getString(burned ? "burn.done" : "burn.failed");
+              messageType = burned ? JOptionPane.INFORMATION_MESSAGE : JOptionPane.ERROR_MESSAGE;
             }
 
             @Override
@@ -304,17 +329,23 @@ public class IsoImageExport extends LocalExport {
                       ObservableEvent.BasicAction.LOADING_STOP, dicomModel, null, this));
               failure(this)
                   .ifPresent(
-                      e ->
-                          message =
-                              Messages.getString("burn.failed")
-                                  + StringUtil.SPACE
-                                  + ExportOutcome.reason(e));
-              if (message != null) {
-                JOptionPane.showMessageDialog(
+                      e -> {
+                        LOGGER.error("Cannot make the disc", e);
+                        message =
+                            Messages.getString("burn.failed")
+                                + StringUtil.SPACE
+                                + ExportOutcome.reason(e);
+                        messageType = JOptionPane.ERROR_MESSAGE;
+                        savedFolder = null;
+                      });
+              if (message != null && !reported) {
+                reported = true;
+                SavedFile.showSaved(
                     WinUtil.getValidComponent(WinUtil.getParentWindow(IsoImageExport.this)),
-                    message,
                     Messages.getString("cd.dvd.image"),
-                    JOptionPane.INFORMATION_MESSAGE);
+                    message,
+                    savedFolder,
+                    messageType);
               }
             }
           };
@@ -402,7 +433,10 @@ public class IsoImageExport extends LocalExport {
     }
   }
 
-  private File makeISO(
+  /**
+   * @return the disc image, or null when it could not be made or would have lacked a file
+   */
+  static File makeISO(
       File exportDir,
       File exportFile,
       String isoLabel,
@@ -427,6 +461,7 @@ public class IsoImageExport extends LocalExport {
       }
     } catch (HandlerException e) {
       LOGGER.error("Error when adding files to ISO", e);
+      return null;
     }
 
     try {

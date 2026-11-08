@@ -51,6 +51,7 @@ import org.weasis.dicom.codec.display.OverlayOp;
 import org.weasis.dicom.codec.display.ShutterOp;
 import org.weasis.dicom.codec.display.WindowAndPresetsOp;
 import org.weasis.dicom.codec.geometry.GeometryOfSlice;
+import org.weasis.dicom.codec.utils.DicomFileLabel;
 import org.weasis.dicom.codec.utils.Ultrasound;
 import org.weasis.dicom.param.AttributeEditorContext;
 import org.weasis.opencv.data.ImageCV;
@@ -544,6 +545,17 @@ public class DicomImageElement extends ImageElement implements DicomElement {
       }
     }
     return null;
+  }
+
+  @Override
+  public String suggestedFileName(boolean withPatient) {
+    try {
+      String label = DicomFileLabel.imageLabel(getMediaReader().getDicomObject(), withPatient);
+      return label.isEmpty() ? null : label;
+    } catch (RuntimeException e) {
+      LOGGER.warn("Cannot read the header to name a picture", e);
+      return null;
+    }
   }
 
   @Override

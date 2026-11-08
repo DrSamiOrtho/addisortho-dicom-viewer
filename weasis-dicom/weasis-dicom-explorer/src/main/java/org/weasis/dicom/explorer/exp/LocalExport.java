@@ -20,14 +20,17 @@ import java.awt.image.IndexColorModel;
 import java.awt.image.Raster;
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
@@ -35,7 +38,9 @@ import java.util.Set;
 import java.util.Vector;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
-import java.util.zip.ZipFile;
+import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
@@ -99,6 +104,7 @@ import org.weasis.dicom.codec.FileExtractor;
 import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.codec.TransferSyntax;
 import org.weasis.dicom.codec.display.WindowAndPresetsOp;
+import org.weasis.dicom.codec.utils.DicomFileLabel;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.DiscDrive;
 import org.weasis.dicom.explorer.HangingProtocols;
@@ -113,6 +119,16 @@ import org.weasis.opencv.data.PlanarImage;
 import org.weasis.opencv.op.ImageConversion;
 import org.weasis.opencv.op.ImageIOHandler;
 
+/**
+ * Saves the selection to a folder, a zip or, through {@code IsoImageExport}, a disc image.
+ *
+ * <p>An export is many separate writes, not one transaction. If it is interrupted: every file that
+ * has its real name is complete, because each is written under a hidden ".saving-" name first; a
+ * crash can leave one such hidden file, which is safe to delete. A DICOMDIR is finished only when
+ * its writer closes, so a folder from an interrupted export can hold files its DICOMDIR does not
+ * list, and is not a finished export. A zip or disc image gets its real name only when complete,
+ * and its working folder is removed afterwards. Exporting again makes a new patient folder.
+ */
 public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   private static final Logger LOGGER = LoggerFactory.getLogger(LocalExport.class);
 
@@ -220,6 +236,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
 
   protected List<JComponent> getAdditionalOption() {
     // Untick for an export leaving the hospital: the folder or zip is then not named.
+    checkBoxPatientFolder.setToolTipText(Messages.getString("LocalExport.patient_folder_tip"));
     checkBoxPatientFolder.setSelected(
         Boolean.parseBoolean(getPreferences().getProperty(PATIENT_FOLDER, "true")));
     checkBoxPatientFolder.addActionListener(
@@ -243,42 +260,54 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
     return text.isEmpty() ? null : text;
   }
 
-  /**
-   * The full name of the patient of the selection, first name first, or null when the selection
-   * holds several patients or none, or the patient has no name.
-   */
-  public static String getSelectedPatientName(CheckTreeModel model) {
-    MediaSeriesGroup pt = selectedPatientGroup(model);
-    String name = pt == null ? "" : fullName(pt);
-    return name.isEmpty() ? null : name;
-  }
-
   private static String fullName(MediaSeriesGroup pt) {
     return fullName(TagD.getTagValue(pt, Tag.PatientName, String.class));
   }
 
-  /**
-   * A DICOM person name ("Family^Given^Middle^Prefix^Suffix") as "Given Middle Family". A name
-   * without "^" is kept in its own order: it was typed as one text, usually first name first.
-   */
   static String fullName(String dicomName) {
-    if (dicomName == null) {
-      return "";
+    return DicomFileLabel.fullName(dicomName);
+  }
+
+  /**
+   * The name of the folder, zip or disc image of the selection: "Full Name MRN 00123 2026-01-15",
+   * or null when the selection holds several patients or none, or names nobody.
+   */
+  public static String getSelectedPatientLabel(CheckTreeModel model) {
+    MediaSeriesGroup pt = selectedPatientGroup(model);
+    if (pt == null) {
+      return null;
     }
-    // Only the alphabetic group: ideographic and phonetic groups follow "=".
-    String alphabetic = dicomName.split("=", -1)[0];
-    String[] parts = alphabetic.split("\\^", -1);
-    String text =
-        parts.length < 2
-            ? alphabetic
-            : String.join(
-                " ",
-                parts.length > 3 ? parts[3] : "",
-                parts[1],
-                parts.length > 2 ? parts[2] : "",
-                parts[0],
-                parts.length > 4 ? parts[4] : "");
-    return text.replaceAll("\\s+", " ").trim();
+    String label =
+        DicomFileLabel.folderLabel(
+            knownOrEmpty(fullName(pt)),
+            knownOrEmpty(TagD.getTagValue(pt, Tag.PatientID, String.class)),
+            selectedImageDates(model));
+    return label.isEmpty() ? null : label;
+  }
+
+  /** The viewer writes "UNKNOWN" for a missing identity; on a file name that would be invented. */
+  private static String knownOrEmpty(String value) {
+    return value == null || TagW.NO_VALUE.equals(value) ? "" : value;
+  }
+
+  /** The image dates of the selection, read from one image of each series. */
+  private static List<DicomFileLabel.ImageDate> selectedImageDates(CheckTreeModel model) {
+    List<DicomFileLabel.ImageDate> dates = new ArrayList<>();
+    Set<Object> seriesSeen = new HashSet<>();
+    TreePath[] paths = model.getCheckingPaths();
+    if (paths != null) {
+      for (TreePath path : paths) {
+        DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
+        if (node.getUserObject() instanceof DicomElement dcm && seriesSeen.add(node.getParent())) {
+          try {
+            DicomFileLabel.imageDate(dcm.getMediaReader().getDicomObject()).ifPresent(dates::add);
+          } catch (RuntimeException e) {
+            LOGGER.warn("Cannot read the date of a selected series", e);
+          }
+        }
+      }
+    }
+    return dates;
   }
 
   private static MediaSeriesGroup selectedPatientGroup(CheckTreeModel model) {
@@ -567,8 +596,12 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
       }
     }
     if (isSaveFileMode && patient != null) {
+      String zipName = FileUtil.getValidFileNameWithoutHTML(patient) + ".zip";
+      // new File("", name) would be the root of the disk on the very first export
       fileChooser.setSelectedFile(
-          new File(targetDirectoryPath, FileUtil.getValidFileNameWithoutHTML(patient) + ".zip"));
+          StringUtil.hasText(targetDirectoryPath)
+              ? new File(targetDirectoryPath, zipName)
+              : new File(zipName));
     }
 
     File selectedFile;
@@ -607,7 +640,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
       return;
     }
     Format format = (Format) comboBoxImgFormat.getSelectedItem();
-    String patient = checkBoxPatientFolder.isSelected() ? getSelectedPatientName(model) : null;
+    String patient = checkBoxPatientFolder.isSelected() ? getSelectedPatientLabel(model) : null;
     browseImgFile(format, patient);
     if (outputFolder != null) {
       File chosen = outputFolder.getCanonicalFile();
@@ -772,14 +805,17 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   private void writeDicomZip(
       ExplorerTask task, File zipFile, CheckTreeModel model, Properties pref, ExportOutcome outcome)
       throws IOException {
-    pref.setProperty(INC_DICOMDIR, Boolean.TRUE.toString());
-    pref.setProperty(CD_COMPATIBLE, Boolean.TRUE.toString());
+    // A zip always holds a standard DICOMDIR; that must not become the user's choice for later.
+    Properties zipPref = new Properties();
+    zipPref.putAll(pref);
+    zipPref.setProperty(INC_DICOMDIR, Boolean.TRUE.toString());
+    zipPref.setProperty(CD_COMPATIBLE, Boolean.TRUE.toString());
     File writeDir =
         FileUtil.createTempDir(
                 AppProperties.buildAccessibleTempDirectory("tmp", Format.DICOM_ZIP.extension))
             .toFile(); // NON-NLS
     try {
-      writeDicom(task, writeDir, model, pref, outcome, null);
+      writeDicom(task, writeDir, model, zipPref, outcome, null);
       if (!task.isCancelled() && outcome.written() > 0) {
         try {
           publishZip(writeDir.toPath(), zipFile.toPath());
@@ -794,14 +830,30 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   }
 
   static void publishZip(Path content, Path zipFile) throws IOException {
+    long expected;
+    try (Stream<Path> files = Files.walk(content)) {
+      expected = files.filter(Files::isRegularFile).count();
+    }
     SavedFile.write(
         zipFile,
         staged -> {
           ZipUtil.zip(content, staged);
-          try (ZipFile written = new ZipFile(staged.toFile())) {
-            return written.size() > 0;
-          }
+          return expected > 0 && readableEntries(staged) == expected;
         });
+  }
+
+  /** Reads the whole archive back, which checks each entry's size and checksum. */
+  private static long readableEntries(Path zip) throws IOException {
+    long files = 0;
+    try (ZipInputStream in = new ZipInputStream(Files.newInputStream(zip))) {
+      for (ZipEntry entry = in.getNextEntry(); entry != null; entry = in.getNextEntry()) {
+        in.transferTo(OutputStream.nullOutputStream());
+        if (!entry.isDirectory()) {
+          files++;
+        }
+      }
+    }
+    return files;
   }
 
   private static String instanceFileName(MediaElement img) {
@@ -885,10 +937,11 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
               // Get instance number instead SOPInstanceUID to handle multiframe
               String instance = namePrefix + label;
               String path = buildPath(dcm, keepNames, filePrefix != null, node);
+              String extension = FileUtil.getExtension(fileSrc.getName());
               File destinationFile =
-                  new File(
-                      new File(exportDir, path),
-                      instance + FileUtil.getExtension(fileSrc.getName()));
+                  naming != null && object instanceof DicomElement named
+                      ? namedFile(exportDir, dcm, named, keepNames, node, naming, label, extension)
+                      : new File(new File(exportDir, path), instance + extension);
               SavedFile.write(
                   destinationFile.toPath(), s -> StreamUtil.copyFile(fileSrc.toPath(), s));
               outcome.saved();
@@ -905,14 +958,23 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
               File destinationFile =
                   naming == null
                       ? new File(new File(exportDir, path), instance + "." + format.extension)
-                      : namedFile(exportDir, img, img, keepNames, node, naming, label, format);
+                      : namedFile(
+                          exportDir,
+                          img,
+                          img,
+                          keepNames,
+                          node,
+                          naming,
+                          label,
+                          "." + format.extension);
               SimpleOpManager manager =
                   img.buildSimpleOpManager(img16, padding, shutter, overlay, 1.0);
               writePicture(manager, destinationFile.toPath(), format, jpegQuality);
-              if (seriesGph.contains(img.getTagValue(TagD.get(Tag.SeriesInstanceUID)))) {
-                XmlSerializer.writePresentation(img, destinationFile);
-              }
               outcome.saved();
+              if (seriesGph.contains(img.getTagValue(TagD.get(Tag.SeriesInstanceUID)))
+                  && !XmlSerializer.writePresentation(img, destinationFile)) {
+                outcome.failed(label + " annotations", new IOException("They could not be saved"));
+              }
             } catch (IOException | RuntimeException e) {
               LOGGER.error("Cannot export image {} to {}", label, format, e);
               outcome.failed(label, e);
@@ -1053,7 +1115,8 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
                     ? new File(
                         new File(exportDir, buildPath(img, keepNames, cdCompatible, node, uidTags)),
                         iuid)
-                    : namedFile(exportDir, img, img, keepNames, node, naming, iuid, null);
+                    : namedFile(
+                        exportDir, img, img, keepNames, node, naming, iuid, DICOM_EXTENSION);
             DicomExportParameters dicomExportParameters =
                 new DicomExportParameters(
                     tsuid, onlyRaw, getAttributeEditors(editor), jpegQuality, compressionRatio);
@@ -1072,7 +1135,8 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
                         new File(
                             exportDir, buildPath(element, keepNames, cdCompatible, node, uidTags)),
                         iuid)
-                    : namedFile(exportDir, element, dcm, keepNames, node, naming, iuid, null);
+                    : namedFile(
+                        exportDir, element, dcm, keepNames, node, naming, iuid, DICOM_EXTENSION);
             DicomExportParameters dicomExportParameters =
                 new DicomExportParameters(
                     null, onlyRaw, getAttributeEditors(editor), jpegQuality, compressionRatio);
@@ -1090,15 +1154,17 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
                         naming == null
                             ? buildPath(dcm, keepNames, cdCompatible, node, getUIDs(editor, dcm))
                             : namedFolder(dcm, keepNames, node, naming);
+                    File folder = new File(exportDir, path);
+                    String prUid = UIDUtils.createUID();
+                    File prFile =
+                        naming == null
+                            ? new File(folder, keepNames ? prUid : makeFileIDs(prUid))
+                            : naming.uniqueFile(
+                                folder,
+                                naming.stem(headerOf(dcm), makeFileIDs(prUid)) + " PR",
+                                DICOM_EXTENSION);
                     String outputFile =
-                        buildAndWritePR(
-                            dcm,
-                            keepNames,
-                            new File(exportDir, path),
-                            writer,
-                            node,
-                            seriesInstanceUID,
-                            naming == null ? "" : DICOM_EXTENSION);
+                        writePresentationState(dcm, prFile, writer, node, seriesInstanceUID, prUid);
                     if (outputFile == null) {
                       outcome.failed(
                           "presentation state", new IOException("It could not be written"));
@@ -1139,7 +1205,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
 
   /**
    * @param fallback the name when the header cannot be read, carrying no patient details
-   * @param format the picture format, or null for a DICOM file
+   * @param extension with its dot, or empty
    */
   private static File namedFile(
       File exportDir,
@@ -1149,7 +1215,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
       DefaultMutableTreeNode node,
       ExportNaming naming,
       String fallback,
-      Format format) {
+      String extension) {
     Attributes header = null;
     try {
       header = dcm.getMediaReader().getDicomObject();
@@ -1159,7 +1225,18 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
     return naming.uniqueFile(
         new File(exportDir, namedFolder(element, keepNames, node, naming)),
         naming.stem(header, fallback),
-        format == null ? DICOM_EXTENSION : "." + format.extension);
+        extension);
+  }
+
+  private static Attributes headerOf(MediaElement element) {
+    try {
+      return element.getMediaReader() instanceof DcmMediaReader reader
+          ? reader.getDicomObject()
+          : null;
+    } catch (RuntimeException e) {
+      LOGGER.warn("Cannot read the header of an image", e);
+      return null;
+    }
   }
 
   /** One DICOM file, which goes in the DICOMDIR only once it is complete under its real name. */
@@ -1205,44 +1282,50 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
       DicomDirWriter writer,
       DefaultMutableTreeNode node,
       String seriesInstanceUID) {
-    return buildAndWritePR(img, keepNames, destinationDir, writer, node, seriesInstanceUID, "");
+    String prUid = UIDUtils.createUID();
+    File outputFile = new File(destinationDir, keepNames ? prUid : makeFileIDs(prUid));
+    return writePresentationState(img, outputFile, writer, node, seriesInstanceUID, prUid);
   }
 
-  private static String buildAndWritePR(
+  /**
+   * Writes the presentation state under a temporary name and gives it its real name once complete.
+   *
+   * @return the path of the saved file, or null when it, or its DICOMDIR entry, could not be saved
+   */
+  private static String writePresentationState(
       MediaElement img,
-      boolean keepNames,
-      File destinationDir,
+      File outputFile,
       DicomDirWriter writer,
       DefaultMutableTreeNode node,
       String seriesInstanceUID,
-      String extension) {
-    Attributes imgAttributes =
-        img.getMediaReader() instanceof DcmMediaReader reader ? reader.getDicomObject() : null;
-    if (imgAttributes != null) {
-      GraphicModel grModel = (GraphicModel) img.getTagValue(TagW.PresentationModel);
-      if (grModel != null && grModel.hasSerializableGraphics()) {
-        String prUid = UIDUtils.createUID();
-        File outputFile =
-            new File(destinationDir, (keepNames ? prUid : makeFileIDs(prUid)) + extension);
-        destinationDir.mkdirs();
-        Attributes prAttributes =
-            DicomPrSerializer.writePresentation(
-                grModel,
-                (img instanceof DicomImageElement ? (DicomImageElement) img : null),
-                outputFile,
-                seriesInstanceUID,
-                prUid);
-        if (prAttributes != null) {
-          try {
-            writeInDicomDir(writer, prAttributes, node, outputFile.getName(), outputFile);
-            return outputFile.getPath();
-          } catch (IOException e) {
-            LOGGER.error("Writing DICOMDIR", e);
-          }
-        }
-      }
+      String prUid) {
+    if (headerOf(img) == null) {
+      return null;
     }
-    return null;
+    GraphicModel grModel = (GraphicModel) img.getTagValue(TagW.PresentationModel);
+    if (grModel == null || !grModel.hasSerializableGraphics()) {
+      return null;
+    }
+    try {
+      Attributes[] written = new Attributes[1];
+      SavedFile.write(
+          outputFile.toPath(),
+          staged -> {
+            written[0] =
+                DicomPrSerializer.writePresentation(
+                    grModel,
+                    img instanceof DicomImageElement image ? image : null,
+                    staged.toFile(),
+                    seriesInstanceUID,
+                    prUid);
+            return written[0] != null;
+          });
+      writeInDicomDir(writer, written[0], node, outputFile.getName(), outputFile);
+      return outputFile.getPath();
+    } catch (IOException | RuntimeException e) {
+      LOGGER.error("Cannot save a presentation state", e);
+      return null;
+    }
   }
 
   public static String buildPath(
@@ -1411,7 +1494,8 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
 
   public static String makeFileIDs(String uid) {
     if (uid != null) {
-      return Integer.toHexString(uid.hashCode());
+      // A DICOMDIR file ID may only hold capitals, digits and "_" (DICOM PS3.10 section 8.2).
+      return Integer.toHexString(uid.hashCode()).toUpperCase(Locale.ROOT);
     }
     return null;
   }

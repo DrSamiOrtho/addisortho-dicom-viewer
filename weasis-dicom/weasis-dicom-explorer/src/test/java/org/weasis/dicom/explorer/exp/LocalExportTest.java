@@ -28,11 +28,18 @@ import java.util.Properties;
 import java.util.concurrent.FutureTask;
 import java.util.zip.ZipFile;
 import javax.swing.JComponent;
+import javax.swing.tree.DefaultMutableTreeNode;
 import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.UID;
+import org.dcm4che3.data.VR;
+import org.dcm4che3.io.DicomOutputStream;
+import org.dcm4che3.media.DicomDirWriter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weasis.dicom.codec.DicomElement;
 import org.weasis.dicom.explorer.DicomModel;
+import org.weasis.dicom.explorer.imp.DicomDirLoader;
 
 class LocalExportTest {
 
@@ -275,6 +282,93 @@ class LocalExportTest {
     assertTrue(partial.contains(target.getPath()), partial);
     assertTrue(partial.contains("IMG: Disk full"), partial);
     assertTrue(partial.contains("not complete"), partial);
+  }
+
+  @Test
+  void dicomdirFileIdsUseOnlyWhatTheStandardAllows() {
+    for (String uid : List.of("1.2.3", "1.2.840.113619.2.55.3.604688119", "9.9.9.9.1")) {
+      assertTrue(LocalExport.makeFileIDs(uid).matches("[0-9A-Z]{1,8}"), uid);
+    }
+  }
+
+  /**
+   * A real DICOMDIR and ZIP, for checking with a reader that is not this program. Set
+   * ao.export.sample to keep them; the data is synthetic.
+   */
+  @Test
+  void writesADicomdirAndZipAnotherReaderCanCheck() throws Exception {
+    String keep = System.getProperty("ao.export.sample");
+    Path root = keep == null ? tmp : Path.of(keep);
+    File media = root.resolve("media").toFile();
+    Files.createDirectories(media.toPath());
+    Attributes data = syntheticImage();
+    DicomElement dcm = mock(DicomElement.class);
+    when(dcm.saveToFile(any(), any()))
+        .thenAnswer(
+            call -> {
+              try (DicomOutputStream out = new DicomOutputStream(call.<File>getArgument(0))) {
+                out.writeDataset(data.createFileMetaInformation(UID.ExplicitVRLittleEndian), data);
+              }
+              return data;
+            });
+    ExportOutcome outcome = new ExportOutcome();
+    String sop = LocalExport.makeFileIDs(data.getString(Tag.SOPInstanceUID));
+    File image =
+        new File(
+            media,
+            String.join(
+                File.separator,
+                "DICOM",
+                LocalExport.makeFileIDs("patient"),
+                LocalExport.makeFileIDs(data.getString(Tag.StudyInstanceUID)),
+                LocalExport.makeFileIDs(data.getString(Tag.SeriesInstanceUID)),
+                sop));
+
+    try (DicomDirWriter writer = DicomDirLoader.open(new File(media, "DICOMDIR"))) {
+      LocalExport.saveDicomFile(
+          dcm,
+          image,
+          new DicomElement.DicomExportParameters(null, true, List.of(), 0, 0),
+          writer,
+          new DefaultMutableTreeNode(),
+          sop,
+          outcome);
+    }
+    assertEquals(1, outcome.written(), outcome.firstProblem());
+
+    Path zip = root.resolve("media.zip");
+    Files.deleteIfExists(zip);
+    LocalExport.publishZip(media.toPath(), zip);
+    try (ZipFile written = new ZipFile(zip.toFile())) {
+      assertNotNull(written.getEntry("DICOMDIR"));
+    }
+  }
+
+  private static Attributes syntheticImage() {
+    Attributes a = new Attributes();
+    a.setString(Tag.SOPClassUID, VR.UI, UID.ComputedRadiographyImageStorage);
+    a.setString(Tag.SOPInstanceUID, VR.UI, "1.2.826.0.1.3680043.8.498.1");
+    a.setString(Tag.StudyInstanceUID, VR.UI, "1.2.826.0.1.3680043.8.498.2");
+    a.setString(Tag.SeriesInstanceUID, VR.UI, "1.2.826.0.1.3680043.8.498.3");
+    a.setString(Tag.PatientName, VR.PN, "Synthetic^Test");
+    a.setString(Tag.PatientID, VR.LO, "00123");
+    a.setString(Tag.Modality, VR.CS, "CR");
+    a.setString(Tag.StudyDate, VR.DA, "20260110");
+    a.setString(Tag.StudyTime, VR.TM, "101500");
+    a.setString(Tag.StudyID, VR.SH, "1");
+    a.setString(Tag.AccessionNumber, VR.SH, "");
+    a.setInt(Tag.SeriesNumber, VR.IS, 1);
+    a.setInt(Tag.InstanceNumber, VR.IS, 1);
+    a.setInt(Tag.Rows, VR.US, 2);
+    a.setInt(Tag.Columns, VR.US, 2);
+    a.setInt(Tag.BitsAllocated, VR.US, 8);
+    a.setInt(Tag.BitsStored, VR.US, 8);
+    a.setInt(Tag.HighBit, VR.US, 7);
+    a.setInt(Tag.SamplesPerPixel, VR.US, 1);
+    a.setInt(Tag.PixelRepresentation, VR.US, 0);
+    a.setString(Tag.PhotometricInterpretation, VR.CS, "MONOCHROME2");
+    a.setBytes(Tag.PixelData, VR.OB, new byte[] {1, 2, 3, 4});
+    return a;
   }
 
   /** The export page without the viewer's preference store, which needs the running app. */

@@ -15,6 +15,7 @@ import java.awt.BorderLayout;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.text.MessageFormat;
 import java.util.List;
 import javax.sound.sampled.AudioFileFormat;
 import javax.sound.sampled.AudioFormat;
@@ -29,6 +30,7 @@ import javax.sound.sampled.SourceDataLine;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JSlider;
 import javax.swing.Timer;
@@ -47,6 +49,7 @@ import org.weasis.core.ui.editor.SeriesViewerEvent.EVENT;
 import org.weasis.core.ui.editor.SeriesViewerListener;
 import org.weasis.core.ui.editor.image.SequenceHandler;
 import org.weasis.core.ui.editor.image.ViewerPlugin;
+import org.weasis.core.ui.util.SavedFile;
 import org.weasis.dicom.codec.DicomMediaIO;
 import org.weasis.dicom.codec.DicomSpecialElement;
 import org.weasis.dicom.explorer.DicomSeriesHandler;
@@ -245,18 +248,32 @@ public class AuView extends JPanel implements SeriesViewerListener {
         String filename =
             file.getName().endsWith(extension) ? file.getPath() : file.getPath() + extension;
 
+        File destination = new File(filename);
+        String title = Messages.getString("AuView.export_audio");
         try (AudioInputStream audioStream =
             new AudioInputStream(
                 audioData.bulkData.openStream(),
                 audioData.audioFormat,
                 audioData.bulkData.length() / audioData.audioFormat.getFrameSize())) {
-          if (".wav".equals(extension)) {
-            AudioSystem.write(audioStream, AudioFileFormat.Type.WAVE, new File(filename));
-          } else {
-            AudioSystem.write(audioStream, AudioFileFormat.Type.AU, new File(filename));
-          }
-        } catch (IOException ex) {
+          AudioFileFormat.Type type =
+              ".wav".equals(extension) ? AudioFileFormat.Type.WAVE : AudioFileFormat.Type.AU;
+          SavedFile.write(
+              destination.toPath(),
+              staged -> AudioSystem.write(audioStream, type, staged.toFile()) > 0);
+          SavedFile.showSaved(
+              this,
+              title,
+              MessageFormat.format(Messages.getString("AuView.saved"), destination),
+              destination.getAbsoluteFile().getParentFile(),
+              JOptionPane.INFORMATION_MESSAGE);
+        } catch (IOException | RuntimeException ex) {
           LOGGER.error("Cannot save audio file!", ex);
+          JOptionPane.showMessageDialog(
+              this,
+              MessageFormat.format(
+                  Messages.getString("AuView.save_failed"), destination, SavedFile.reason(ex)),
+              title,
+              JOptionPane.ERROR_MESSAGE);
         }
       }
     }

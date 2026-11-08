@@ -263,6 +263,13 @@ public class ScreenshotDialog<I extends ImageElement> extends JDialog {
       fileChooser.addChoosableFileFilter(
           new FileNameExtensionFilter(Format.TIFF.title, Format.TIFF.extension));
       fileChooser.setFileFilter(filter);
+      String suggested = suggestedName();
+      if (suggested != null) {
+        fileChooser.setSelectedFile(
+            StringUtil.hasText(targetDirectoryPath)
+                ? new File(targetDirectoryPath, suggested)
+                : new File(suggested));
+      }
 
       if (fileChooser.showSaveDialog(null) != SystemFileChooser.APPROVE_OPTION
           || fileChooser.getSelectedFile() == null) {
@@ -276,6 +283,18 @@ public class ScreenshotDialog<I extends ImageElement> extends JDialog {
           file.getName().endsWith(extFile) ? file.getPath() : file.getPath() + extFile;
 
       File destinationFile = new File(filename);
+      // The chooser asked about the name it returned, not one this dialog added an extension to.
+      if (!destinationFile.equals(file)
+          && destinationFile.exists()
+          && JOptionPane.showConfirmDialog(
+                  this,
+                  MessageFormat.format(
+                      Messages.getString("screenshot.overwrite"), destinationFile.getName()),
+                  getTitle(),
+                  JOptionPane.YES_NO_OPTION)
+              != JOptionPane.YES_OPTION) {
+        return false;
+      }
       try {
         SavedFile.write(destinationFile.toPath(), staged -> writeImage(image, staged, extension));
       } catch (IOException | RuntimeException e) {
@@ -301,6 +320,16 @@ public class ScreenshotDialog<I extends ImageElement> extends JDialog {
         ImageConversion.releasePlanarImage(image);
       }
     }
+  }
+
+  /**
+   * The patient, MRN and date name of the picture. A view saved with "Anonymize" ticked does not
+   * show the patient, so its file name does not name them either.
+   */
+  private String suggestedName() {
+    I image = viewCanvas.getImage();
+    boolean anonymous = viewRadio.isSelected() && anonymize.isSelected();
+    return image == null ? null : image.suggestedFileName(!anonymous);
   }
 
   private boolean writeImage(PlanarImage image, Path staged, String extension) {
