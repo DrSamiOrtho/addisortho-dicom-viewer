@@ -9,11 +9,13 @@
  */
 package org.weasis.dicom.receive;
 
+import org.weasis.dicom.explorer.library.StoredInstance;
+
 /** Called on the threads of the network associations. */
 public interface ReceiveListener {
 
   /** A new image is stored. A resent image that was already stored is not reported. */
-  void onStored(ReceivedInstance instance);
+  void onStored(StoredInstance instance);
 
   /**
    * @param detail what is safe to show and log, never patient data: the sender of a rejected

@@ -32,6 +32,7 @@ import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.Messages;
+import org.weasis.dicom.explorer.library.StudyLibrary;
 
 /**
  * The patients on this computer: the folders to search, their index, kept up to date by one
@@ -78,6 +79,7 @@ public final class PatientIndexService {
     if (files == null) {
       files = store.loadIndex();
       studies = StudyEntry.of(files, false);
+      StudyLibrary.getInstance().addListener(this::fire);
     }
     if (!startupScanDone) {
       startupScanDone = true;
@@ -135,8 +137,14 @@ public final class PatientIndexService {
     return null;
   }
 
+  /** The studies of the managed library and of the searched folders, one row per study. */
   public List<StudyEntry> studies() {
-    return studies;
+    StudyLibrary library = StudyLibrary.getInstance();
+    List<StudyEntry> managed =
+        library.studies().stream()
+            .map(s -> StudyEntry.of(s, library.folderOf(s).toString()))
+            .toList();
+    return StudyEntry.merge(managed, studies);
   }
 
   public List<String> notIndexed() {

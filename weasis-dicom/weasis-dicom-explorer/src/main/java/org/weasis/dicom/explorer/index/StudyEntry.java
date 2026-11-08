@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import org.weasis.dicom.explorer.library.CatalogStudy;
 
 /**
  * One study found on the computer, gathered from its instances wherever they are: the same study in
@@ -96,6 +97,41 @@ public record StudyEntry(
   private static String parentOf(String path) {
     int i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
     return i <= 0 ? path : path.substring(0, i);
+  }
+
+  /** One study of the managed store, opened from its folder. */
+  public static StudyEntry of(CatalogStudy s, String folder) {
+    return new StudyEntry(
+        s.studyUid(),
+        s.patientName(),
+        s.patientId(),
+        s.birthDate(),
+        s.sex(),
+        s.studyDate(),
+        s.studyDescription(),
+        s.accession(),
+        String.join("/", s.modalities()),
+        s.series().size(),
+        s.imageCount(),
+        List.of(folder),
+        List.of(folder),
+        false);
+  }
+
+  /**
+   * One row per study. The managed copy is preferred, as it stays when a disc or folder goes,
+   * unless the same study found elsewhere has more images than were kept.
+   */
+  public static List<StudyEntry> merge(List<StudyEntry> managed, List<StudyEntry> found) {
+    Map<String, StudyEntry> byStudy = new LinkedHashMap<>();
+    managed.forEach(s -> byStudy.put(s.studyUid(), s));
+    for (StudyEntry s : found) {
+      StudyEntry held = byStudy.get(s.studyUid());
+      if (held == null || s.imageCount() > held.imageCount()) {
+        byStudy.put(s.studyUid(), s);
+      }
+    }
+    return List.copyOf(byStudy.values());
   }
 
   /** The patient name as people write it: the DICOM {@code ^} separators become spaces. */

@@ -7,9 +7,9 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
-package org.weasis.dicom.receive;
+package org.weasis.dicom.explorer.library;
 
 import java.nio.file.Path;
 
 /** One image stored by the receiver. */
-public record ReceivedInstance(String studyUid, String seriesUid, String sopUid, Path file) {}
+public record StoredInstance(String studyUid, String seriesUid, String sopUid, Path file) {}

@@ -39,6 +39,7 @@ import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.LocalPersistence;
 import org.weasis.dicom.explorer.Messages;
+import org.weasis.dicom.explorer.library.StudyLibrary;
 
 /**
  * Local DICOM import page for importing files and folders.
@@ -298,6 +299,11 @@ public class LocalImport extends AbstractItemDialogPage implements ImportDicom {
       DicomModel.LOADING_EXECUTOR.execute(
           new LoadLocalDicom(
               filesArray, checkboxSearch.isSelected(), dicomModel, getOpeningViewer()));
+      StudyLibrary.getInstance()
+          .importAndReport(
+              List.copyOf(filesToImport),
+              checkboxSearch.isSelected(),
+              WinUtil.getValidComponent(this));
       resetSelection();
     }
   }

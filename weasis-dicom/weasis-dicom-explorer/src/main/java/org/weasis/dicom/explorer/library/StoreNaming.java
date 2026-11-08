@@ -7,7 +7,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
-package org.weasis.dicom.receive;
+package org.weasis.dicom.explorer.library;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -33,11 +33,12 @@ import org.weasis.dicom.codec.utils.DicomFileLabel;
  * NAME_AGE_MRN_yyyy-MM-dd_studyKey / NAME_AGE_MRN_yyyy-MM-dd_sopInstanceUid.dcm
  * </pre>
  *
- * Every patient field comes from the network and is untrusted, so each one is sanitized and capped.
- * The date is the day the image arrived on this computer. A missing field is left out, and a folder
- * that lacks the name or the MRN carries the Study Instance UID instead.
+ * Every patient field is untrusted, so each one is sanitized and capped. The date is the image's
+ * own, after {@link DicomFileLabel}: never the day it arrived, which the catalog keeps separately.
+ * A missing field is left out, and a folder that lacks the name or the MRN carries the Study
+ * Instance UID instead.
  */
-final class ReceiveNaming {
+public final class StoreNaming {
 
   static final String FILE_EXTENSION = ".dcm";
   static final char SEPARATOR = '_';
@@ -50,18 +51,16 @@ final class ReceiveNaming {
 
   private static final Pattern DICOM_AGE = Pattern.compile("0*(\\d{1,3})([DWMY])");
   private static final DateTimeFormatter DICOM_DATE = DateTimeFormatter.ofPattern("uuuuMMdd");
-  private static final DateTimeFormatter ARRIVAL_DATE = DateTimeFormatter.ISO_LOCAL_DATE;
 
-  private ReceiveNaming() {}
+  private StoreNaming() {}
 
   /** The name of a study folder. Always ends with the study key, so that a study has one folder. */
-  static String folderName(
-      Attributes dataset, LocalDate arrival, boolean includeName, String studyUid) {
+  static String folderName(Attributes dataset, boolean includeName, String studyUid) {
     String name = includeName ? patientName(dataset) : "";
     String mrn = patientId(dataset);
     List<String> tail = new ArrayList<>();
-    tail.add(age(dataset, arrival));
-    tail.add(ARRIVAL_DATE.format(arrival));
+    tail.add(age(dataset));
+    tail.add(dateLabel(dataset));
     if ((includeName && name.isEmpty()) || mrn.isEmpty()) {
       tail.add(studyUid);
     }
@@ -70,15 +69,18 @@ final class ReceiveNaming {
   }
 
   /** The name of an image file, which keeps the whole SOP Instance UID so it can never collide. */
-  static String fileName(
-      Attributes dataset, LocalDate arrival, boolean includeName, String sopUid, int maxChars) {
+  static String fileName(Attributes dataset, boolean includeName, String sopUid, int maxChars) {
     String name = includeName ? patientName(dataset) : "";
-    List<String> tail = List.of(age(dataset, arrival), ARRIVAL_DATE.format(arrival), sopUid);
+    List<String> tail = List.of(age(dataset), dateLabel(dataset), sopUid);
     return fit(name, patientId(dataset), tail, maxChars - FILE_EXTENSION.length()) + FILE_EXTENSION;
   }
 
+  private static String dateLabel(Attributes dataset) {
+    return DicomFileLabel.imageDate(dataset).map(DicomFileLabel.ImageDate::label).orElse("");
+  }
+
   /** A short and stable key of the study, which finds the folder again on a later arrival day. */
-  static String studyKey(String studyUid) {
+  public static String studyKey(String studyUid) {
     try {
       byte[] digest =
           MessageDigest.getInstance("SHA-256").digest(studyUid.getBytes(StandardCharsets.US_ASCII));
@@ -106,14 +108,14 @@ final class ReceiveNaming {
     return Optional.of(base.substring(base.lastIndexOf(SEPARATOR) + 1));
   }
 
-  /** The alphabetic group of the person name in the order the machine sent it, with spaces. */
+  /** The alphabetic group of the person name, first name first. */
   static String patientName(Attributes dataset) {
     String raw = dataset.getString(Tag.PatientName);
     if (raw == null) {
       return "";
     }
     for (String group : raw.split("=")) {
-      String name = sanitize(group.replace('^', ' '), MAX_NAME_LENGTH);
+      String name = sanitize(DicomFileLabel.fullName(group), MAX_NAME_LENGTH);
       if (!name.isEmpty()) {
         return name;
       }
@@ -126,11 +128,12 @@ final class ReceiveNaming {
     return raw == null ? "" : sanitize(raw, MAX_MRN_LENGTH);
   }
 
-  /** Age at the study, from the birth date. Falls back to the Patient's Age element when absent. */
-  static String age(Attributes dataset, LocalDate arrival) {
+  /** Age on the day of the image, from the birth date, else the Patient's Age element. */
+  static String age(Attributes dataset) {
     Optional<LocalDate> birth = parseDate(dataset.getString(Tag.PatientBirthDate));
-    LocalDate reference = parseDate(dataset.getString(Tag.StudyDate)).orElse(arrival);
-    if (birth.isPresent() && !birth.get().isAfter(reference)) {
+    LocalDate reference =
+        DicomFileLabel.imageDate(dataset).map(DicomFileLabel.ImageDate::day).orElse(null);
+    if (birth.isPresent() && reference != null && !birth.get().isAfter(reference)) {
       return formatAge(birth.get(), reference);
     }
     String declared = dataset.getString(Tag.PatientAge);
@@ -210,7 +213,7 @@ final class ReceiveNaming {
         String.valueOf(SEPARATOR), parts.stream().filter(p -> !p.isEmpty()).toList());
   }
 
-  static String safeForLog(String value) {
+  public static String safeForLog(String value) {
     return value == null ? "" : value.replaceAll("[^\\x20-\\x7E]", "?");
   }
 }
