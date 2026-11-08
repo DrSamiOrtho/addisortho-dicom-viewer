@@ -156,6 +156,22 @@ class DicomFileLabelTest {
   }
 
   @Test
+  void theContextLineSaysWhoAndWhen() {
+    assertEquals(
+        "John Doe  |  MRN 00123  |  2026-01-15  |  CR", DicomFileLabel.contextLine(header()));
+  }
+
+  @Test
+  void theContextLineLabelsAStudyDateAndKeepsWhatIsMissingMissing() {
+    Attributes a = header();
+    a.remove(Tag.AcquisitionDate);
+    a.remove(Tag.PatientID);
+    assertEquals("John Doe  |  study 2026-01-10  |  CR", DicomFileLabel.contextLine(a));
+    assertEquals("", DicomFileLabel.contextLine(new Attributes()));
+    assertEquals("", DicomFileLabel.contextLine(null));
+  }
+
+  @Test
   void aFolderCarriesNameMrnAndDate() {
     assertEquals(
         "John Doe MRN 00123 2026-01-15",

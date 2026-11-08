@@ -261,6 +261,11 @@ public final class PatientIndexService {
 
   /** Opens a study in the viewer: its files, or the archives that hold it. */
   public static void open(StudyEntry study, DicomModel model) {
+    load(study, model, OpeningViewer.ALL_PATIENTS);
+  }
+
+  /** Brings a study into the viewer's list, opening viewers as {@code opening} says. */
+  public static void load(StudyEntry study, DicomModel model, OpeningViewer opening) {
     Set<File> files = new LinkedHashSet<>();
     for (String c : study.containers()) {
       File f = new File(c);
@@ -270,7 +275,7 @@ public final class PatientIndexService {
     }
     if (!files.isEmpty()) {
       DicomModel.LOADING_EXECUTOR.execute(
-          new LoadLocalDicom(files.toArray(new File[0]), false, model, OpeningViewer.ALL_PATIENTS));
+          new LoadLocalDicom(files.toArray(new File[0]), false, model, opening));
     }
   }
 }

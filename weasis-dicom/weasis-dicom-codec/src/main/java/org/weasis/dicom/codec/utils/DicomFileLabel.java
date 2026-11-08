@@ -178,6 +178,31 @@ public final class DicomFileLabel {
     return assemble(name, id, "", rangeLabel(dates), "", "");
   }
 
+  /**
+   * The line that says whose images are open: "John Doe | MRN 00123 | 2026-01-15 | CR". Unlike a
+   * file name it needs no cleaning, and a date known only from the study says so.
+   */
+  public static String contextLine(Attributes header) {
+    if (header == null) {
+      return "";
+    }
+    List<String> parts = new ArrayList<>();
+    String name = fullName(header.getString(Tag.PatientName));
+    String mrn = header.getString(Tag.PatientID);
+    String modality = header.getString(Tag.Modality);
+    if (!name.isEmpty()) {
+      parts.add(name);
+    }
+    if (mrn != null && !mrn.isBlank()) {
+      parts.add("MRN " + mrn.trim()); // NON-NLS
+    }
+    imageDate(header).map(ImageDate::label).ifPresent(parts::add);
+    if (modality != null && !modality.isBlank()) {
+      parts.add(modality.trim());
+    }
+    return String.join("  |  ", parts);
+  }
+
   private static String rangeLabel(Collection<ImageDate> dates) {
     if (dates.isEmpty()) {
       return "";
