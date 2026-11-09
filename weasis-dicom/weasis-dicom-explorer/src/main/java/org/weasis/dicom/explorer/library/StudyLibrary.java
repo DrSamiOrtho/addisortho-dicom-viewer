@@ -187,12 +187,17 @@ public final class StudyLibrary {
    */
   public void importAndReport(
       List<File> paths, boolean recursive, Component parent, DataExplorerModel model) {
-    retain(paths, recursive, parent, model, Notice.ALWAYS, true);
+    retain(paths, recursive, parent, model, Notice.ALWAYS, true, false);
   }
 
   /** Keeps the copy made of a disc. What else lies on a disc is its own, so no picture is asked. */
   public void retainDisc(File copy, DataExplorerModel model) {
-    retain(List.of(copy), true, null, model, Notice.ALWAYS, false);
+    retain(List.of(copy), true, null, model, Notice.ALWAYS, false, false);
+  }
+
+  /** Keeps the images a DICOMDIR refers to, and nothing else that lies beside it. */
+  public void retainReferenced(List<File> files, DataExplorerModel model) {
+    retain(files, false, null, model, Notice.ALWAYS, false, true);
   }
 
   /**
@@ -201,7 +206,7 @@ public final class StudyLibrary {
    */
   public void retainDropped(
       List<File> paths, boolean recursive, Component parent, DataExplorerModel model) {
-    retain(paths, recursive, parent, model, Notice.ONLY_PROBLEMS, true);
+    retain(paths, recursive, parent, model, Notice.ONLY_PROBLEMS, true, false);
   }
 
   private void retain(
@@ -210,7 +215,8 @@ public final class StudyLibrary {
       Component parent,
       DataExplorerModel model,
       Notice notice,
-      boolean askAboutPictures) {
+      boolean askAboutPictures,
+      boolean everyFileIsDicom) {
     StudyStore target = store();
     new RetainTask(
             model,
@@ -220,6 +226,7 @@ public final class StudyLibrary {
               try {
                 report =
                     new LibraryImport(target, cancelled, ArchiveGuard.DEFAULT, progress)
+                        .expectingOnlyDicom(everyFileIsDicom)
                         .run(paths, recursive);
               } catch (IOException | RuntimeException e) {
                 LOGGER.error("Cannot import into the library: {}", e.getClass().getSimpleName());

@@ -32,6 +32,7 @@ import org.weasis.core.api.util.ResourceUtil.OtherIcon;
 import org.weasis.core.util.StringUtil;
 import org.weasis.dicom.explorer.*;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
+import org.weasis.dicom.explorer.library.StudyLibrary;
 import org.weasis.dicom.explorer.wado.LoadSeries;
 
 public class DicomDirImport extends AbstractItemDialogPage implements ImportDicom {
@@ -156,7 +157,7 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
             file = f;
           }
         } catch (Exception e) {
-          LOGGER.error("Cannot read {}", path);
+          LOGGER.error("Cannot read a DICOMDIR path");
         }
       }
     }
@@ -171,7 +172,7 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
         DicomModel.LOADING_EXECUTOR.execute(
             new LoadDicomDir(loadSeries, dicomModel, getOpeningViewer()));
       } else {
-        LOGGER.error("Cannot import DICOM from {}", file);
+        LOGGER.error("Cannot import the DICOM of a DICOMDIR");
 
         int response =
             JOptionPane.showConfirmDialog(
@@ -202,6 +203,10 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
     if (file != null && file.canRead()) {
       DicomDirLoader dirImport = new DicomDirLoader(file, dicomModel, writeInCache);
       loadSeries = dirImport.readDicomDir();
+      // The study must outlast the disc: the viewer's copy is only for this session.
+      if (loadSeries != null && !loadSeries.isEmpty()) {
+        StudyLibrary.getInstance().retainReferenced(dirImport.referencedFiles(), dicomModel);
+      }
     }
     return loadSeries;
   }

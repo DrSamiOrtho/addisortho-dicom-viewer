@@ -104,7 +104,7 @@ public final class DiscWatcher {
 
   private static void openDisc(File root, File dicomDir, DicomModel dicomModel) {
     if (dicomDir != null) {
-      LOGGER.info("CD/DVD inserted, opening {}", dicomDir);
+      LOGGER.info("CD/DVD inserted, opening its DICOMDIR");
       List<LoadSeries> loadSeries = DicomDirImport.loadDicomDir(dicomDir, dicomModel, true);
       if (loadSeries != null && !loadSeries.isEmpty()) {
         DicomModel.LOADING_EXECUTOR.execute(
@@ -112,7 +112,7 @@ public final class DiscWatcher {
         return;
       }
     }
-    LOGGER.info("CD/DVD inserted without a readable DICOMDIR, copying {}", root);
+    LOGGER.info("CD/DVD inserted without a readable DICOMDIR, copying it");
     DicomModel.LOADING_EXECUTOR.execute(new LoadDisc(root.toPath(), dicomModel));
   }
 }

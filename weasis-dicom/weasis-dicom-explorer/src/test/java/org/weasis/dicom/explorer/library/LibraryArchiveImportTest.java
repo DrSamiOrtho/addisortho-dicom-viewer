@@ -402,6 +402,69 @@ class LibraryArchiveImportTest {
     assertEquals(1, report.notDicom());
   }
 
+  private Path file(String name, byte[] content) throws IOException {
+    Path path = tmp.resolve(name);
+    Files.createDirectories(path.getParent());
+    Files.write(path, content);
+    return path;
+  }
+
+  private LibraryImport.Report referenced(Path... files) throws IOException {
+    return new LibraryImport(store, () -> false)
+        .expectingOnlyDicom(true)
+        .run(Stream.of(files).map(Path::toFile).toList(), false);
+  }
+
+  @Test
+  void imagesADicomdirNamesAreKeptAndOutliveTheDisc() throws IOException {
+    Path one = file("disc/A/IM1", bytes(image(STUDY_A, "1.2.3.1", "001", (byte) 1)));
+    Path two = file("disc/A/IM2", bytes(image(STUDY_A, "1.2.3.2", "001", (byte) 2)));
+
+    LibraryImport.Report report = referenced(one, two);
+    Files.delete(one);
+    Files.delete(two);
+
+    assertEquals(2, report.stored());
+    assertEquals(2, storedFiles().size());
+    for (Path stored : storedFiles()) {
+      assertTrue(StudyStore.isComplete(stored));
+    }
+  }
+
+  @Test
+  void anotherFileBesideThoseADicomdirNamesIsNotKept() throws IOException {
+    Path named = file("disc/IM1", bytes(image(STUDY_A, "1.2.3.1", "001", (byte) 1)));
+    file("disc/OTHER", bytes(image(STUDY_B, "1.2.3.9", "002", (byte) 9)));
+
+    referenced(named);
+
+    assertEquals(1, storedFiles().size());
+  }
+
+  @Test
+  void aNamedImageThatIsMissingOrUnreadableIsReported() throws IOException {
+    Path good = file("disc/IM1", bytes(image(STUDY_A, "1.2.3.1", "001", (byte) 1)));
+    Path missing = tmp.resolve("disc/GONE");
+    Path broken = file("disc/IM3", "not an image".getBytes(StandardCharsets.UTF_8));
+
+    LibraryImport.Report report = referenced(good, missing, broken);
+
+    assertEquals(1, report.stored());
+    assertEquals(2, report.failed());
+    assertEquals(0, report.notDicom());
+  }
+
+  @Test
+  void openingTheSameDiscAgainAddsNothing() throws IOException {
+    Path one = file("disc/IM1", bytes(image(STUDY_A, "1.2.3.1", "001", (byte) 1)));
+    referenced(one);
+
+    LibraryImport.Report again = referenced(one);
+
+    assertEquals(0, again.stored());
+    assertEquals(1, again.alreadyHeld());
+  }
+
   @Test
   void aFileThatOnlyLooksLikeAnArchiveIsReported() throws IOException {
     Path fake = tmp.resolve("bad.zip");

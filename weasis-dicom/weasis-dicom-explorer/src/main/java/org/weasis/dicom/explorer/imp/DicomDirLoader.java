@@ -13,9 +13,13 @@ package org.weasis.dicom.explorer.imp;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.BulkData;
 import org.dcm4che3.data.Fragments;
@@ -63,6 +67,7 @@ public class DicomDirLoader {
 
   private final DicomModel dicomModel;
   private final ArrayList<LoadSeries> seriesList;
+  private final Set<File> referencedFiles = new LinkedHashSet<>();
   private final WadoParameters wadoParameters;
   private final boolean writeInCache;
   private final File dcmDirFile;
@@ -86,6 +91,14 @@ public class DicomDirLoader {
                 .getIntProperty(LoadSeries.CONCURRENT_DOWNLOADS_IN_SERIES, 4)
             : 1;
     seriesList = new ArrayList<>();
+  }
+
+  /**
+   * Every file the DICOMDIR read so far refers to, including one that is missing: the library copy
+   * reports that one instead of passing over it.
+   */
+  public List<File> referencedFiles() {
+    return List.copyOf(referencedFiles);
   }
 
   public List<LoadSeries> readDicomDir() {
@@ -213,8 +226,13 @@ public class DicomDirLoader {
             Integer frame =
                 DicomUtils.getIntegerFromDicomElement(instance, Tag.InstanceNumber, null);
             SopInstance sop = seriesInstanceList.getSopInstance(sopInstanceUID, frame);
+            // Listed even when the series already has it: the disc may have come out during the
+            // first copy, and putting it back must be able to finish the job.
+            File file = toFileName(instance, reader);
+            if (file != null) {
+              referencedFiles.add(file);
+            }
             if (sop == null) {
-              File file = toFileName(instance, reader);
               if (file != null) {
                 if (file.exists()) {
                   sop = new SopInstance(sopInstanceUID, frame);
@@ -364,6 +382,16 @@ public class DicomDirLoader {
     return null;
   }
 
+  /** A DICOMDIR names files below its own folder only; a name made to climb out is refused. */
+  static boolean isInside(File folder, File file) {
+    try {
+      Path base = folder.toPath().toAbsolutePath().normalize();
+      return file.toPath().toAbsolutePath().normalize().startsWith(base);
+    } catch (InvalidPathException e) {
+      return false;
+    }
+  }
+
   private File toFileName(Attributes dcmObject, DicomDirReader reader) {
     String[] fileID = dcmObject.getStrings(Tag.ReferencedFileID);
     if (fileID == null || fileID.length == 0) {
@@ -374,6 +402,10 @@ public class DicomDirLoader {
       sb.append(File.separatorChar).append(fileID[i]);
     }
     File file = new File(reader.getFile().getParent(), sb.toString());
+    if (!isInside(reader.getFile().getAbsoluteFile().getParentFile(), file)) {
+      LOGGER.warn("Ignoring a DICOMDIR entry that points outside its folder");
+      return null;
+    }
     if (!file.exists()) {
       // Try to find lower case relative path, it happens sometimes when mounting cdrom on Linux
       File fileLowerCase = new File(reader.getFile().getParent(), sb.toString().toLowerCase());
