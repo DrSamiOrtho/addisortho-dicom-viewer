@@ -103,9 +103,14 @@ public final class DiscWatcher {
   }
 
   private static void openDisc(File root, File dicomDir, DicomModel dicomModel) {
+    int unavailable = 0;
+    String firstUnavailable = null;
     if (dicomDir != null) {
       LOGGER.info("CD/DVD inserted, opening its DICOMDIR");
-      List<LoadSeries> loadSeries = DicomDirImport.loadDicomDir(dicomDir, dicomModel, true);
+      DicomDirImport.Opened opened = DicomDirImport.loadDicomDir(dicomDir, dicomModel, true);
+      List<LoadSeries> loadSeries = opened.series();
+      unavailable = opened.unavailable();
+      firstUnavailable = opened.firstUnavailable();
       if (loadSeries != null && !loadSeries.isEmpty()) {
         DicomModel.LOADING_EXECUTOR.execute(
             new LoadDicomDir(loadSeries, dicomModel, OpeningViewer.ALL_PATIENTS));
@@ -113,6 +118,7 @@ public final class DiscWatcher {
       }
     }
     LOGGER.info("CD/DVD inserted without a readable DICOMDIR, copying it");
-    DicomModel.LOADING_EXECUTOR.execute(new LoadDisc(root.toPath(), dicomModel));
+    DicomModel.LOADING_EXECUTOR.execute(
+        new LoadDisc(root.toPath(), dicomModel, unavailable, firstUnavailable));
   }
 }

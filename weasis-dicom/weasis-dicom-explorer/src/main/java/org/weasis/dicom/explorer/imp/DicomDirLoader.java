@@ -13,6 +13,7 @@ package org.weasis.dicom.explorer.imp;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -68,6 +69,7 @@ public class DicomDirLoader {
   private final DicomModel dicomModel;
   private final ArrayList<LoadSeries> seriesList;
   private final Set<File> referencedFiles = new LinkedHashSet<>();
+  private boolean incomplete;
   private final WadoParameters wadoParameters;
   private final boolean writeInCache;
   private final File dcmDirFile;
@@ -101,6 +103,11 @@ public class DicomDirLoader {
     return List.copyOf(referencedFiles);
   }
 
+  /** Whether part of the DICOMDIR could not be read, so that more images may exist than listed. */
+  public boolean isIncomplete() {
+    return incomplete;
+  }
+
   public List<LoadSeries> readDicomDir() {
     Attributes dcmPatient;
     MediaSeriesGroup patient = null;
@@ -116,6 +123,7 @@ public class DicomDirLoader {
       }
     } catch (IOException e) {
       LOGGER.error("Cannot read DICOMDIR ! {}", e.getClass().getSimpleName());
+      incomplete = true;
     }
 
     if (patient != null) {
@@ -360,6 +368,7 @@ public class DicomDirLoader {
       return reader.findLowerDirectoryRecordInUse(dcmObject, true);
     } catch (IOException e) {
       LOGGER.error("Cannot read first DICOMDIR entry! {}", e.getClass().getSimpleName());
+      incomplete = true;
     }
     return null;
   }
@@ -369,6 +378,7 @@ public class DicomDirLoader {
       return reader.findNextDirectoryRecordInUse(dcmObject, true);
     } catch (IOException e) {
       LOGGER.error("Cannot read next DICOMDIR entry! {}", e.getClass().getSimpleName());
+      incomplete = true;
     }
     return null;
   }
@@ -378,21 +388,39 @@ public class DicomDirLoader {
       return reader.findFirstRootDirectoryRecordInUse(true);
     } catch (IOException e) {
       LOGGER.error("Cannot find Patient in DICOMDIR ! {}", e.getClass().getSimpleName());
+      incomplete = true;
     }
     return null;
   }
 
-  /** A DICOMDIR names files below its own folder only; a name made to climb out is refused. */
+  /**
+   * A DICOMDIR names files below its own folder only. A name made to climb out is refused, and so
+   * is a link inside the folder that leads out of it. A file that does not exist is left to be
+   * reported as missing.
+   */
   static boolean isInside(File folder, File file) {
     try {
       Path base = folder.toPath().toAbsolutePath().normalize();
-      return file.toPath().toAbsolutePath().normalize().startsWith(base);
-    } catch (InvalidPathException e) {
+      Path target = file.toPath().toAbsolutePath().normalize();
+      if (!target.startsWith(base)) {
+        return false;
+      }
+      return !Files.exists(target) || target.toRealPath().startsWith(base.toRealPath());
+    } catch (IOException | InvalidPathException e) {
       return false;
     }
   }
 
   private File toFileName(Attributes dcmObject, DicomDirReader reader) {
+    File found = locate(dcmObject, reader);
+    if (found != null && !isInside(reader.getFile().getAbsoluteFile().getParentFile(), found)) {
+      LOGGER.warn("Ignoring a DICOMDIR entry that points outside its folder");
+      return null;
+    }
+    return found;
+  }
+
+  private File locate(Attributes dcmObject, DicomDirReader reader) {
     String[] fileID = dcmObject.getStrings(Tag.ReferencedFileID);
     if (fileID == null || fileID.length == 0) {
       return null;
@@ -402,10 +430,6 @@ public class DicomDirLoader {
       sb.append(File.separatorChar).append(fileID[i]);
     }
     File file = new File(reader.getFile().getParent(), sb.toString());
-    if (!isInside(reader.getFile().getAbsoluteFile().getParentFile(), file)) {
-      LOGGER.warn("Ignoring a DICOMDIR entry that points outside its folder");
-      return null;
-    }
     if (!file.exists()) {
       // Try to find lower case relative path, it happens sometimes when mounting cdrom on Linux
       File fileLowerCase = new File(reader.getFile().getParent(), sb.toString().toLowerCase());

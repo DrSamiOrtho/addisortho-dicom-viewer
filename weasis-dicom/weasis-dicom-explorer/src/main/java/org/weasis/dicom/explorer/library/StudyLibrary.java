@@ -196,8 +196,9 @@ public final class StudyLibrary {
   }
 
   /** Keeps the images a DICOMDIR refers to, and nothing else that lies beside it. */
-  public void retainReferenced(List<File> files, DataExplorerModel model) {
-    retain(files, false, null, model, Notice.ALWAYS, false, true, 0, null);
+  public void retainReferenced(
+      List<File> files, DataExplorerModel model, int unreadPart, String unreadName) {
+    retain(files, false, null, model, Notice.ALWAYS, false, true, unreadPart, unreadName);
   }
 
   /**

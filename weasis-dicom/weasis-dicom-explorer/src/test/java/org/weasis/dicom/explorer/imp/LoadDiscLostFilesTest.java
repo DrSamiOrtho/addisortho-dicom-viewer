@@ -42,6 +42,18 @@ class LoadDiscLostFilesTest {
   }
 
   @Test
+  void aDiscThatCannotBeListedIsReportedNotThrown() throws IOException {
+    LoadDisc.Copied copied =
+        LoadDisc.copyReportingFailure(
+            tmp.resolve("ejected"),
+            Files.createDirectories(tmp.resolve("out")),
+            _ -> {},
+            () -> false);
+
+    assertEquals(1, copied.failed());
+  }
+
+  @Test
   void aCompleteCopyReportsNothingLost() throws IOException {
     Path disc = Files.createDirectories(tmp.resolve("disc"));
     Files.writeString(disc.resolve("IM1"), "one");
