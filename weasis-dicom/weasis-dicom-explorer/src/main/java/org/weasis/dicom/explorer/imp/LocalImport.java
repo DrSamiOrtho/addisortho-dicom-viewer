@@ -298,7 +298,8 @@ public class LocalImport extends AbstractItemDialogPage implements ImportDicom {
 
       DicomModel.LOADING_EXECUTOR.execute(
           new LoadLocalDicom(
-              filesArray, checkboxSearch.isSelected(), dicomModel, getOpeningViewer()));
+                  filesArray, checkboxSearch.isSelected(), dicomModel, getOpeningViewer())
+              .withArchiveFailuresReportedByLibrary());
       StudyLibrary.getInstance()
           .importAndReport(
               List.copyOf(filesToImport),

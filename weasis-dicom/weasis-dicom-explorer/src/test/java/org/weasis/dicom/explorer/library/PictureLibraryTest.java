@@ -143,6 +143,46 @@ class PictureLibraryTest {
   }
 
   @Test
+  void aDamagedKeptCopyIsNotReportedAsAlreadyThere() throws IOException {
+    Path source = jpeg("a.jpg", (byte) 1);
+    library.keep(source, SOMEONE);
+    Path kept = library.list().getFirst().file();
+    assertTrue(kept.toFile().setWritable(true));
+    Files.write(kept, new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF});
+
+    PictureLibrary.Result result = library.keepAll(List.of(source), SOMEONE);
+
+    assertEquals(0, result.alreadyHeld());
+    assertEquals(1, result.failed());
+    assertTrue(result.firstProblem().contains("a.jpg"));
+  }
+
+  @Test
+  void severalTickedPicturesNeedAnExplicitSamePatientConfirmation() {
+    assertEquals("library.picture.none", PictureConfirmDialog.selectionProblem(0, true));
+    assertEquals("library.picture.same.required", PictureConfirmDialog.selectionProblem(2, false));
+    assertNull(PictureConfirmDialog.selectionProblem(2, true));
+    assertNull(PictureConfirmDialog.selectionProblem(1, false));
+  }
+
+  @Test
+  void aReviewThumbnailIsSmallAndAPictureThatCannotBeReadHasNone() throws IOException {
+    Path png = tmp.resolve("large.png");
+    assertTrue(
+        javax.imageio.ImageIO.write(
+            new java.awt.image.BufferedImage(1200, 600, java.awt.image.BufferedImage.TYPE_INT_RGB),
+            "png",
+            png.toFile()));
+    Path broken = jpeg("broken.jpg", (byte) 1);
+
+    java.awt.image.BufferedImage small = PictureConfirmDialog.thumbnail(png, 96);
+
+    assertEquals(96, small.getWidth());
+    assertEquals(48, small.getHeight());
+    assertNull(PictureConfirmDialog.thumbnail(broken, 96));
+  }
+
+  @Test
   void aFileMerelyNamedLikeAPictureIsRefused() throws IOException {
     Path fake = tmp.resolve("fake.jpg");
     Files.writeString(fake, "not a picture at all");
@@ -243,7 +283,7 @@ class PictureLibraryTest {
   }
 
   @Test
-  void aPictureBesideDicomIsNotOffered() throws IOException {
+  void aPictureBesideDicomIsStillOfferedForReview() throws IOException {
     Path disc = Files.createDirectories(tmp.resolve("disc"));
     writeDicom(disc.resolve("IM1"));
     Files.move(jpeg("logo.jpg", (byte) 1), disc.resolve("logo.jpg"));
@@ -251,6 +291,7 @@ class PictureLibraryTest {
     LibraryImport.Report report = importing(disc);
 
     assertEquals(1, report.stored());
-    assertTrue(report.pictures().isEmpty());
+    assertEquals(1, report.pictures().size());
+    assertFalse(Files.exists(root.resolve(".pictures")));
   }
 }

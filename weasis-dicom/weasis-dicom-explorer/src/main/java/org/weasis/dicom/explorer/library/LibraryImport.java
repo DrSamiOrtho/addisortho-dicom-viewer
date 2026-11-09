@@ -17,6 +17,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.BooleanSupplier;
@@ -43,6 +45,8 @@ final class LibraryImport {
   private static final int SUBFOLDERS = Integer.MAX_VALUE;
   private static final int BUFFER = 64 * 1024;
   private static final long SPACE_CHECK_BYTES = 64L << 20;
+  private static final int DICM_OFFSET = 128;
+  private static final byte[] DICM = {'D', 'I', 'C', 'M'};
 
   /**
    * What one import did.
@@ -56,7 +60,8 @@ final class LibraryImport {
    * @param archivesRefused archives that were not unpacked, or held no DICOM when chosen directly
    * @param nestedArchives archives found inside an archive, which are not opened
    * @param cancelled the user stopped it, so what is counted here is all that was kept
-   * @param pictures pictures the user may want to keep, once they say whose they are
+   * @param pictures every picture found, for the user to review: a folder can mix patients, and a
+   *     picture beside DICOM can be clinical as easily as a disc's artwork
    */
   record Report(
       int stored,
@@ -70,6 +75,10 @@ final class LibraryImport {
       int nestedArchives,
       boolean cancelled,
       List<Path> pictures) {
+
+    int dicomObjects() {
+      return stored + alreadyHeld + conflicts + failed;
+    }
 
     static Report failure(String problem) {
       return new Report(0, 0, 0, 1, 0, problem, false, 0, 0, false, List.of());
@@ -90,8 +99,7 @@ final class LibraryImport {
   private int archivesRefused;
   private int nestedArchives;
   private boolean wasCancelled;
-  private final List<Path> chosenPictures = new ArrayList<>();
-  private final List<Path> folderPictures = new ArrayList<>();
+  private final List<Path> pictures = new ArrayList<>();
 
   LibraryImport(StudyStore store, BooleanSupplier cancelled) {
     this(store, cancelled, ArchiveGuard.DEFAULT, _ -> {});
@@ -167,13 +175,13 @@ final class LibraryImport {
   private void importFile(Path file, boolean chosen) {
     Attributes source = usableHeader(file);
     if (source == null) {
-      if (isArchive(file) || (chosen && hasZipName(file))) {
+      if (isArchive(file) || hasZipName(file)) {
         importArchive(file, chosen);
         return;
       }
       notDicom++;
       if (PictureLibrary.formatOf(file) != null) {
-        (chosen ? chosenPictures : folderPictures).add(file);
+        pictures.add(file);
       }
       return;
     }
@@ -293,11 +301,15 @@ final class LibraryImport {
         refuse(name, Messages.getString("library.archive.unsafe"));
         return;
       }
-      for (ZipEntry entry : zip.stream().toList()) {
+      // One at a time: the reader finds an entry by its name unless it is the one just listed, so
+      // two entries of the same name read from a finished list would both give the same object.
+      Enumeration<? extends ZipEntry> entries = zip.entries();
+      while (entries.hasMoreElements()) {
+        ZipEntry entry = entries.nextElement();
         if (stopped()) {
           return;
         }
-        if (!entry.isDirectory() && !DicomZipMediaIO.isSkipped(entry.getName())) {
+        if (!entry.isDirectory() && worthUnpacking(zip, entry)) {
           importEntry(zip, entry, name);
         }
       }
@@ -309,6 +321,33 @@ final class LibraryImport {
     if (chosen && dicomSeen() == before && nestedArchives == nestedBefore && !stopped()) {
       refuse(name, Messages.getString("library.archive.empty"));
     }
+  }
+
+  /**
+   * A name can say a bundled viewer's file is not worth unpacking, but it cannot say a file is not
+   * an image: anything named so is still looked at, and kept out only if its first bytes are not
+   * those of DICOM.
+   */
+  private static boolean worthUnpacking(ZipFile zip, ZipEntry entry) {
+    if (!DicomZipMediaIO.isSkipped(entry.getName())) {
+      return true;
+    }
+    try (InputStream in = zip.getInputStream(entry)) {
+      return looksLikeDicom(in.readNBytes(DICM_OFFSET + DICM.length));
+    } catch (IOException | RuntimeException e) {
+      return true; // unpacking it will report what is wrong
+    }
+  }
+
+  /** The DICM mark of a DICOM file, or the first group of a data set that has no file header. */
+  static boolean looksLikeDicom(byte[] start) {
+    if (start.length >= DICM_OFFSET + DICM.length
+        && Arrays.equals(Arrays.copyOfRange(start, DICM_OFFSET, DICM_OFFSET + DICM.length), DICM)) {
+      return true;
+    }
+    return start.length >= 2
+        && ((start[1] == 0 && (start[0] == 8 || start[0] == 2))
+            || (start[0] == 0 && (start[1] == 8 || start[1] == 2)));
   }
 
   private void importEntry(ZipFile zip, ZipEntry entry, String archive) {
@@ -409,16 +448,7 @@ final class LibraryImport {
     }
   }
 
-  /**
-   * A picture chosen by hand is offered. One that only lies in a folder is offered when the folder
-   * held no DICOM: beside DICOM it is a disc's logo or a bundled viewer's artwork, not a clinical
-   * picture, and asking whose it is would be wrong.
-   */
   private Report report() {
-    List<Path> pictures = new ArrayList<>(chosenPictures);
-    if (dicomSeen() == 0) {
-      pictures.addAll(folderPictures);
-    }
     return new Report(
         stored,
         alreadyHeld,

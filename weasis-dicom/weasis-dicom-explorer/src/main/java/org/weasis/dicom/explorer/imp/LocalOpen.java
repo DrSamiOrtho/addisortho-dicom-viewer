@@ -45,7 +45,8 @@ public final class LocalOpen {
         recursive,
         (f, r) ->
             DicomModel.LOADING_EXECUTOR.execute(
-                new LoadLocalDicom(f, r, model, OpeningViewer.ALL_PATIENTS)),
+                new LoadLocalDicom(f, r, model, OpeningViewer.ALL_PATIENTS)
+                    .withArchiveFailuresReportedByLibrary()),
         (f, r) ->
             StudyLibrary.getInstance()
                 .retainDropped(f, r, GuiUtils.getUICore().getApplicationWindow(), model));

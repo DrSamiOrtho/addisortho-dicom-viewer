@@ -11,8 +11,15 @@ package org.weasis.dicom.explorer.library;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InterruptedIOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Enumeration;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -31,6 +38,7 @@ public final class ArchiveGuard {
       int maxEntries, long maxEntryBytes, long maxTotalBytes, long ratioCheckAbove, int maxRatio) {}
 
   static final Limits DEFAULT = new Limits(200_000, 64L << 30, 4L << 40, 2L << 30, 200);
+  private static final int COPY_BUFFER = 64 * 1024;
 
   enum Verdict {
     SAFE,
@@ -42,7 +50,60 @@ public final class ArchiveGuard {
     SUSPICIOUS_RATIO
   }
 
+  /** Unpacking passed a limit. Whatever was already unpacked must not be used. */
+  public static final class UnsafeArchive extends IOException {
+    public UnsafeArchive(String message) {
+      super(message);
+    }
+  }
+
+  /** What one unpacking may still write. Shared by the threads of that unpacking. */
+  public static final class Budget {
+    private final AtomicLong left;
+    private final BooleanSupplier cancelled;
+
+    public Budget(long bytes, BooleanSupplier cancelled) {
+      this.left = new AtomicLong(bytes);
+      this.cancelled = cancelled;
+    }
+
+    /** As much as the archive limit allows and the folder's disk can spare. */
+    public static Budget forFolder(Path folder, BooleanSupplier cancelled) throws IOException {
+      long spare = Files.getFileStore(folder).getUsableSpace() - StudyStore.MIN_FREE_BYTES;
+      return new Budget(Math.clamp(spare, 0, DEFAULT.maxTotalBytes()), cancelled);
+    }
+
+    void spend(int bytes) throws IOException {
+      if (cancelled.getAsBoolean()) {
+        throw new InterruptedIOException("Stopped");
+      }
+      if (left.addAndGet(-bytes) < 0) {
+        throw new UnsafeArchive("The archive unpacks to more than can safely be written");
+      }
+    }
+  }
+
   private ArchiveGuard() {}
+
+  /**
+   * Unpacks one entry, stopping at the size it declared: the directory read by {@link #inspect} is
+   * only a claim, and an entry can expand far beyond it.
+   */
+  public static void copy(InputStream in, Path target, long declaredSize, Budget budget)
+      throws IOException {
+    byte[] buffer = new byte[COPY_BUFFER];
+    long written = 0;
+    try (OutputStream out = Files.newOutputStream(target)) {
+      for (int n = in.read(buffer); n >= 0; n = in.read(buffer)) {
+        written += n;
+        if (written > declaredSize) {
+          throw new UnsafeArchive("An archive entry is larger than it declares");
+        }
+        budget.spend(n);
+        out.write(buffer, 0, n);
+      }
+    }
+  }
 
   static Verdict inspect(ZipFile zip, long archiveBytes, Limits limits) {
     if (zip.size() > limits.maxEntries()) {
@@ -78,8 +139,8 @@ public final class ArchiveGuard {
   }
 
   /**
-   * Whether the archive must not be unpacked. One that cannot be read at all is not refused here:
-   * the unpacking reports that itself.
+   * Whether the archive must not be unpacked. One whose directory cannot be read is not refused
+   * here, because the unpacking is bounded by {@link #copy} whatever this says.
    */
   public static boolean isRefused(File archive) {
     try (ZipFile zip = new ZipFile(archive, ZipFile.OPEN_READ, StandardCharsets.ISO_8859_1)) {

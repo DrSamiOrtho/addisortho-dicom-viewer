@@ -14,10 +14,10 @@ import java.awt.event.ActionListener;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -32,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 import java.util.function.IntConsumer;
 import java.util.zip.ZipEntry;
 import javax.swing.JLabel;
@@ -40,7 +41,7 @@ import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.Timer;
 import net.lingala.zip4j.ZipFile;
-import net.lingala.zip4j.progress.ProgressMonitor;
+import net.lingala.zip4j.model.FileHeader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.weasis.core.api.explorer.model.DataExplorerModel;
@@ -64,7 +65,6 @@ import org.weasis.dicom.explorer.LoadDicomDir;
 import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.Messages;
 import org.weasis.dicom.explorer.library.ArchiveGuard;
-import org.weasis.dicom.explorer.library.StudyLibrary;
 import org.weasis.dicom.explorer.wado.LoadSeries;
 import org.weasis.opencv.data.PlanarImage;
 
@@ -118,9 +118,6 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
           dicomModel,
           OpeningViewer.ALL_PATIENTS,
           GuiUtils.getUICore().getApplicationWindow());
-      StudyLibrary.getInstance()
-          .retainDropped(
-              List.of(zipFile), false, GuiUtils.getUICore().getApplicationWindow(), dicomModel);
       return true;
     }
     return false;
@@ -213,75 +210,93 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
 
   public static void loadDicomZip(
       File file, DicomModel dicomModel, OpeningViewer openingViewer, Component parent) {
-    loadDicomZip(file, dicomModel, openingViewer, parent, _ -> {});
+    loadDicomZip(file, dicomModel, openingViewer, parent, _ -> {}, () -> false);
   }
 
   /**
    * @param progress told the unzip percentage, 0 to 100, from the calling thread or a pool thread
+   * @param cancelled asked while unpacking; stopping is not a failure
+   * @return false when the archive could not be opened, or only part of it
    */
-  public static void loadDicomZip(
+  public static boolean loadDicomZip(
       File file,
       DicomModel dicomModel,
       OpeningViewer openingViewer,
       Component parent,
-      IntConsumer progress) {
-    if (file != null && file.canRead()) {
-      if (ArchiveGuard.isRefused(file)) {
-        // The library copy of the same source tells the user; nothing is unpacked here either.
-        LOGGER.warn("Refused to unpack an archive that looks unsafe");
-        return;
+      IntConsumer progress,
+      BooleanSupplier cancelled) {
+    if (file == null || !file.canRead()) {
+      return true;
+    }
+    if (ArchiveGuard.isRefused(file)) {
+      LOGGER.warn("Refused to unpack an archive that looks unsafe");
+      return false;
+    }
+    Path dir =
+        FileUtil.createTempDir(AppProperties.buildAccessibleTempDirectory("tmp", "zip")); // NON-NLS
+    boolean whole = true;
+    try (ZipFile zipFile = new ZipFile(file)) {
+      if (zipFile.isEncrypted()) {
+        askPassword(zipFile, parent);
       }
-      Path dir =
-          FileUtil.createTempDir(
-              AppProperties.buildAccessibleTempDirectory("tmp", "zip")); // NON-NLS
-      try (ZipFile zipFile = new ZipFile(file)) {
-        if (zipFile.isEncrypted()) {
-          JPanel panel = new JPanel();
-          JPasswordField pass = new JPasswordField(16);
-          panel.add(new JLabel(Messages.getString("enter.password")));
-          panel.add(pass);
-          ActionListener al = ae -> pass.requestFocusInWindow();
-          Timer timer = new Timer(250, al);
-          timer.setRepeats(false);
-          timer.start();
-          int response =
-              JOptionPane.showOptionDialog(
-                  parent,
-                  panel,
-                  Messages.getString("DicomZipImport.title"),
-                  JOptionPane.OK_CANCEL_OPTION,
-                  JOptionPane.PLAIN_MESSAGE,
-                  null,
-                  null,
-                  pass);
-          if (response == JOptionPane.OK_OPTION) {
-            zipFile.setPassword(pass.getPassword());
-          }
-        }
-        long start = System.nanoTime();
-        if (zipFile.isEncrypted() || !extractFast(file, dir, progress)) {
-          extractWithZip4j(zipFile, dir, progress);
-        }
-        LOGGER.info(
-            "Unzipped {} in {} ms", file.getName(), (System.nanoTime() - start) / 1_000_000);
-      } catch (IOException e) {
-        LOGGER.error("unzipping", e);
+      ArchiveGuard.Budget budget = ArchiveGuard.Budget.forFolder(dir, cancelled);
+      long start = System.nanoTime();
+      if (zipFile.isEncrypted() || !extractFast(file, dir, progress, budget)) {
+        extractWithZip4j(zipFile, dir, progress, budget);
       }
-      File dicomdir = new File(dir.toFile(), "DICOMDIR");
-      if (dicomdir.canRead()) {
-        DicomDirLoader dirImport = new DicomDirLoader(dicomdir, dicomModel, false);
-        List<LoadSeries> loadSeries = dirImport.readDicomDir();
-        if (loadSeries != null && !loadSeries.isEmpty()) {
-          DicomModel.LOADING_EXECUTOR.execute(
-              new LoadDicomDir(loadSeries, dicomModel, openingViewer));
-        } else {
-          LOGGER.error("Cannot import DICOM from {}", file);
-        }
+      LOGGER.info("Unzipped an archive in {} ms", (System.nanoTime() - start) / 1_000_000);
+    } catch (InterruptedIOException e) {
+      FileUtil.recursiveDelete(dir);
+      return true;
+    } catch (ArchiveGuard.UnsafeArchive e) {
+      LOGGER.warn("Stopped unpacking an archive that passed a limit");
+      FileUtil.recursiveDelete(dir);
+      return false;
+    } catch (IOException | RuntimeException e) {
+      // Damage in one entry should not lose the others, so what was unpacked is still opened.
+      LOGGER.error("Cannot unpack all of an archive: {}", e.getClass().getSimpleName());
+      whole = false;
+    }
+    File dicomdir = new File(dir.toFile(), "DICOMDIR");
+    if (dicomdir.canRead()) {
+      DicomDirLoader dirImport = new DicomDirLoader(dicomdir, dicomModel, false);
+      List<LoadSeries> loadSeries = dirImport.readDicomDir();
+      if (loadSeries != null && !loadSeries.isEmpty()) {
+        DicomModel.LOADING_EXECUTOR.execute(
+            new LoadDicomDir(loadSeries, dicomModel, openingViewer));
       } else {
-        LoadLocalDicom dicom =
-            new LoadLocalDicom(new File[] {dir.toFile()}, true, dicomModel, openingViewer);
-        DicomModel.LOADING_EXECUTOR.execute(dicom);
+        LOGGER.error("Cannot import the DICOM of an archive");
+        whole = false;
       }
+    } else {
+      LoadLocalDicom dicom =
+          new LoadLocalDicom(new File[] {dir.toFile()}, true, dicomModel, openingViewer);
+      DicomModel.LOADING_EXECUTOR.execute(dicom);
+    }
+    return whole;
+  }
+
+  private static void askPassword(ZipFile zipFile, Component parent) throws IOException {
+    JPanel panel = new JPanel();
+    JPasswordField pass = new JPasswordField(16);
+    panel.add(new JLabel(Messages.getString("enter.password")));
+    panel.add(pass);
+    ActionListener al = ae -> pass.requestFocusInWindow();
+    Timer timer = new Timer(250, al);
+    timer.setRepeats(false);
+    timer.start();
+    int response =
+        JOptionPane.showOptionDialog(
+            parent,
+            panel,
+            Messages.getString("DicomZipImport.title"),
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+            null,
+            null,
+            pass);
+    if (response == JOptionPane.OK_OPTION) {
+      zipFile.setPassword(pass.getPassword());
     }
   }
 
@@ -304,7 +319,15 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
    *
    * @return false when the archive could not be read this way, so the caller falls back to zip4j
    */
-  static boolean extractFast(File file, Path dir, IntConsumer progress) {
+  static boolean extractFast(File file, Path dir, IntConsumer progress) throws IOException {
+    return extractFast(file, dir, progress, ArchiveGuard.Budget.forFolder(dir, () -> false));
+  }
+
+  /**
+   * @throws ArchiveGuard.UnsafeArchive when a limit was passed: another reader must not be tried
+   */
+  static boolean extractFast(File file, Path dir, IntConsumer progress, ArchiveGuard.Budget budget)
+      throws IOException {
     Path root = dir.toAbsolutePath().normalize();
     try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(file)) {
       List<? extends ZipEntry> entries =
@@ -320,7 +343,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
         for (ZipEntry entry : entries) {
           Path target = root.resolve(entry.getName()).normalize();
           if (!target.startsWith(root) || target.equals(root)) {
-            LOGGER.warn("Skipping zip entry outside the target folder: {}", entry.getName());
+            LOGGER.warn("Skipping a zip entry outside the target folder");
             continue;
           }
           jobs.add(
@@ -328,7 +351,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
                   () -> {
                     Files.createDirectories(target.getParent());
                     try (InputStream in = zip.getInputStream(entry)) {
-                      Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+                      ArchiveGuard.copy(in, target, entry.getSize(), budget);
                     }
                     long before = done.getAndAdd(Math.max(entry.getSize(), 1));
                     long after = before + Math.max(entry.getSize(), 1);
@@ -343,7 +366,11 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
         }
         return true;
       } catch (ExecutionException e) {
-        LOGGER.info("Fast unzip failed, using zip4j: {}", e.getCause().getMessage());
+        if (e.getCause() instanceof ArchiveGuard.UnsafeArchive
+            || e.getCause() instanceof InterruptedIOException) {
+          throw (IOException) e.getCause();
+        }
+        LOGGER.info("Fast unzip failed, using zip4j: {}", e.getCause().getClass().getSimpleName());
         return false;
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
@@ -351,29 +378,37 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
       } finally {
         pool.shutdownNow();
       }
+    } catch (ArchiveGuard.UnsafeArchive | InterruptedIOException e) {
+      throw e;
     } catch (IOException | RuntimeException e) {
-      LOGGER.info("Fast unzip failed, using zip4j: {}", e.getMessage());
+      LOGGER.info("Fast unzip failed, using zip4j: {}", e.getClass().getSimpleName());
       return false;
     }
   }
 
   /** zip4j handles what the JDK reader cannot, such as password-protected zips. */
-  private static void extractWithZip4j(ZipFile zipFile, Path dir, IntConsumer progress)
+  private static void extractWithZip4j(
+      ZipFile zipFile, Path dir, IntConsumer progress, ArchiveGuard.Budget budget)
       throws IOException {
-    zipFile.setRunInThread(true);
-    zipFile.extractAll(dir.toString());
-    ProgressMonitor monitor = zipFile.getProgressMonitor();
-    try {
-      while (monitor.getState() == ProgressMonitor.State.BUSY) {
-        progress.accept(monitor.getPercentDone());
-        Thread.sleep(200);
+    Path root = dir.toAbsolutePath().normalize();
+    List<FileHeader> headers =
+        zipFile.getFileHeaders().stream()
+            .filter(h -> !h.isDirectory() && !isSkipped(h.getFileName()))
+            .toList();
+    progress.accept(0);
+    int done = 0;
+    for (FileHeader header : headers) {
+      Path target = root.resolve(header.getFileName()).normalize();
+      if (!target.startsWith(root) || target.equals(root)) {
+        LOGGER.warn("Skipping a zip entry outside the target folder");
+        continue;
       }
-    } catch (InterruptedException e) {
-      monitor.setCancelAllTasks(true);
-      Thread.currentThread().interrupt();
-    }
-    if (monitor.getException() != null) {
-      throw new IOException(monitor.getException());
+      Files.createDirectories(target.getParent());
+      try (InputStream in = zipFile.getInputStream(header)) {
+        ArchiveGuard.copy(in, target, header.getUncompressedSize(), budget);
+      }
+      done++;
+      progress.accept(done * 100 / headers.size());
     }
   }
 
@@ -394,7 +429,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
           FileUtil.writeStreamWithIOException(urlConnection.getInputStream(), zipFile.toPath());
         }
       } catch (Exception e) {
-        LOGGER.error("Loading DICOM Zip", e);
+        LOGGER.error("Cannot load a DICOM zip: {}", e.getClass().getSimpleName());
       }
       OpeningViewer openingViewer = OpeningViewer.ALL_PATIENTS;
       loadDicomZip(zipFile, dicomModel, openingViewer, GuiUtils.getUICore().getApplicationWindow());

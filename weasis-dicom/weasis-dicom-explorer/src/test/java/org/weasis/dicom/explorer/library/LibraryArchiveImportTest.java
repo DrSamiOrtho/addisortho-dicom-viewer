@@ -290,6 +290,54 @@ class LibraryArchiveImportTest {
   }
 
   @Test
+  void aDicomObjectNamedLikeAViewerFileIsStillKept() throws IOException {
+    Map<String, byte[]> entries = new LinkedHashMap<>();
+    entries.put("Viewer/image.ini", bytes(image(STUDY_A, "1.2.3.1", "001", (byte) 1)));
+    entries.put("__MACOSX/IM2", bytes(image(STUDY_A, "1.2.3.2", "001", (byte) 2)));
+    entries.put("Viewer/viewer.exe", "program".getBytes(StandardCharsets.UTF_8));
+
+    LibraryImport.Report report = importing(zip("named.zip", entries));
+
+    assertEquals(2, report.stored());
+    assertEquals(0, report.failed());
+  }
+
+  @Test
+  void aDataSetWithNoFileHeaderIsRecognisedByItsFirstGroup() {
+    assertTrue(LibraryImport.looksLikeDicom(new byte[] {8, 0, 5, 0}));
+    assertFalse(LibraryImport.looksLikeDicom("MZ program".getBytes(StandardCharsets.UTF_8)));
+    assertFalse(LibraryImport.looksLikeDicom(new byte[0]));
+  }
+
+  @Test
+  void twoObjectsWithTheSameEntryNameAreBothKept() throws IOException {
+    Map<String, byte[]> entries = new LinkedHashMap<>();
+    entries.put("AAAA", bytes(image(STUDY_A, "1.2.3.1", "001", (byte) 1)));
+    entries.put("BBBB", bytes(image(STUDY_A, "1.2.3.2", "001", (byte) 2)));
+    Path archive = zip("same.zip", entries);
+    byte[] raw = Files.readAllBytes(archive);
+    String renamed = new String(raw, StandardCharsets.ISO_8859_1).replace("BBBB", "AAAA");
+    Files.write(archive, renamed.getBytes(StandardCharsets.ISO_8859_1));
+
+    LibraryImport.Report report = importing(archive);
+
+    assertEquals(2, report.stored());
+    assertEquals(0, report.failed());
+    assertEquals(2, storedFiles().size());
+  }
+
+  @Test
+  void aDamagedArchiveInsideAFolderIsReported() throws IOException {
+    Path folder = Files.createDirectories(tmp.resolve("folder"));
+    Files.writeString(folder.resolve("damaged.zip"), "not really an archive");
+
+    LibraryImport.Report report = importing(folder);
+
+    assertEquals(1, report.archivesRefused());
+    assertTrue(report.firstProblem().contains("damaged.zip"));
+  }
+
+  @Test
   void aFileThatOnlyLooksLikeAnArchiveIsReported() throws IOException {
     Path fake = tmp.resolve("bad.zip");
     Files.write(fake, new byte[] {'P', 'K', 3, 4, 9, 9, 9, 9, 9, 9});

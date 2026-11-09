@@ -447,6 +447,18 @@ class LocalExportTest {
   }
 
   /** The export page without the viewer's preference store, which needs the running app. */
+  @org.junit.jupiter.api.Test
+  void leavingTheIdentityOutOfAnExportIsNotRemembered() {
+    java.util.Properties preferences = new java.util.Properties();
+    preferences.setProperty(LocalExport.PATIENT_FOLDER, "false");
+    preferences.setProperty(LocalExport.NAMED_FILES, "false");
+
+    LocalExport.forgetIdentityOptOut(preferences);
+
+    assertTrue(Boolean.parseBoolean(preferences.getProperty(LocalExport.PATIENT_FOLDER, "true")));
+    assertTrue(Boolean.parseBoolean(preferences.getProperty(LocalExport.NAMED_FILES, "true")));
+  }
+
   private static final class HeadlessExport extends LocalExport {
     HeadlessExport(DicomModel model, CheckTreeModel tree) {
       super(model, tree);

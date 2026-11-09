@@ -112,6 +112,17 @@ public final class PictureLibrary {
     static Result declined(int count) {
       return new Result(0, 0, 0, 0, count, null, false);
     }
+
+    Result plus(Result o) {
+      return new Result(
+          kept + o.kept,
+          alreadyHeld + o.alreadyHeld,
+          conflicts + o.conflicts,
+          failed + o.failed,
+          declined + o.declined,
+          firstProblem != null ? firstProblem : o.firstProblem,
+          outOfSpace || o.outOfSpace);
+    }
   }
 
   private final StudyStore store;
@@ -213,9 +224,13 @@ public final class PictureLibrary {
       Path target = folder.resolve(localId);
       if (Files.isDirectory(target)) {
         LocalPicture existing = read(target);
-        return existing != null && existing.identity().equals(identity)
-            ? Outcome.ALREADY_HELD
-            : Outcome.CONFLICT;
+        if (existing == null || !existing.identity().equals(identity)) {
+          return Outcome.CONFLICT;
+        }
+        if (!digest.equals(digestOf(existing.file()))) {
+          throw new IOException("The copy already kept is damaged and was left as it is");
+        }
+        return Outcome.ALREADY_HELD;
       }
       Files.createDirectories(staging);
       Path picture = staging.resolve(PICTURE + "." + format.extension);

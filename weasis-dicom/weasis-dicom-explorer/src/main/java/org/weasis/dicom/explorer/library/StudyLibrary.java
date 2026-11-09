@@ -20,7 +20,6 @@ import java.text.MessageFormat;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
@@ -245,15 +244,21 @@ public final class StudyLibrary {
       show(report, PictureLibrary.Result.NONE, target.root(), parent, notice);
       return;
     }
-    Optional<PictureIdentity> who = PictureConfirmDialog.ask(parent, found);
-    if (who.isEmpty()) {
+    boolean onlyOnePicture = found.size() == 1 && report.dicomObjects() == 0;
+    List<PictureConfirmDialog.Assignment> chosen =
+        PictureConfirmDialog.review(parent, found, onlyOnePicture);
+    if (chosen.isEmpty()) {
       show(report, PictureLibrary.Result.declined(found.size()), target.root(), parent, notice);
       return;
     }
     PictureLibrary held = pictureLibraryOf(target);
     worker.execute(
         () -> {
-          PictureLibrary.Result result = held.keepAll(found, who.get());
+          PictureLibrary.Result all = PictureLibrary.Result.NONE;
+          for (PictureConfirmDialog.Assignment one : chosen) {
+            all = all.plus(held.keepAll(one.pictures(), one.identity()));
+          }
+          PictureLibrary.Result result = all;
           fire();
           GuiExecutor.execute(() -> show(report, result, target.root(), parent, Notice.ALWAYS));
         });
