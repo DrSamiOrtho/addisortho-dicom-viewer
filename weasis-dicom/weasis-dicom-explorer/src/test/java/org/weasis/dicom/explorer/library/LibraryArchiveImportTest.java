@@ -338,6 +338,39 @@ class LibraryArchiveImportTest {
   }
 
   @Test
+  void aPasswordProtectedArchiveIsJudgedByTheSameLimits() throws IOException {
+    Path first = tmp.resolve("IM1");
+    Path second = tmp.resolve("IM2");
+    Files.write(first, new byte[] {1});
+    Files.write(second, new byte[] {2});
+    Path archive = tmp.resolve("locked-two.zip");
+    ZipParameters parameters = new ZipParameters();
+    parameters.setEncryptFiles(true);
+    parameters.setEncryptionMethod(EncryptionMethod.AES);
+    try (net.lingala.zip4j.ZipFile zip =
+        new net.lingala.zip4j.ZipFile(archive.toFile(), "secret".toCharArray())) {
+      zip.addFiles(List.of(first.toFile(), second.toFile()), parameters);
+    }
+    long max = Long.MAX_VALUE;
+
+    assertTrue(
+        ArchiveGuard.isRefused(archive.toFile(), new ArchiveGuard.Limits(1, max, max, max, 1)));
+    assertFalse(ArchiveGuard.isRefused(archive.toFile()));
+  }
+
+  @Test
+  void aDicomFileThatCannotBeReadIsReportedNotCountedAsOther() throws IOException {
+    byte[] broken = new byte[200];
+    System.arraycopy("DICM".getBytes(StandardCharsets.US_ASCII), 0, broken, 128, 4);
+    java.util.Arrays.fill(broken, 132, 200, (byte) 0xFF);
+
+    LibraryImport.Report report = importing(zip("broken.zip", Map.of("IM1", broken)));
+
+    assertEquals(1, report.failed());
+    assertEquals(0, report.notDicom());
+  }
+
+  @Test
   void aFileThatOnlyLooksLikeAnArchiveIsReported() throws IOException {
     Path fake = tmp.resolve("bad.zip");
     Files.write(fake, new byte[] {'P', 'K', 3, 4, 9, 9, 9, 9, 9, 9});

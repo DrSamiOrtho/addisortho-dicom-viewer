@@ -339,6 +339,14 @@ final class LibraryImport {
     }
   }
 
+  private static boolean hasDicomMark(Path file) throws IOException {
+    try (InputStream in = Files.newInputStream(file)) {
+      byte[] start = in.readNBytes(DICM_OFFSET + DICM.length);
+      return start.length == DICM_OFFSET + DICM.length
+          && Arrays.equals(Arrays.copyOfRange(start, DICM_OFFSET, DICM_OFFSET + DICM.length), DICM);
+    }
+  }
+
   /** The DICM mark of a DICOM file, or the first group of a data set that has no file header. */
   static boolean looksLikeDicom(byte[] start) {
     if (start.length >= DICM_OFFSET + DICM.length
@@ -365,6 +373,8 @@ final class LibraryImport {
       if (header == null) {
         if (isArchive(temp)) {
           nestedArchives++;
+        } else if (StudyStore.readHeader(temp) == null && hasDicomMark(temp)) {
+          throw new IOException("The image file cannot be read");
         } else {
           notDicom++;
         }

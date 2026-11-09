@@ -38,6 +38,7 @@ public class LoadLocalDicom extends LoadDicom {
   private int totalFiles;
   private int doneFiles;
   private boolean archiveFailuresShown = true;
+  private boolean readErrorsShown = true;
 
   public LoadLocalDicom(
       File[] files, boolean recursive, DataExplorerModel explorerModel, OpeningViewer openingMode) {
@@ -57,6 +58,12 @@ public class LoadLocalDicom extends LoadDicom {
   /** The library copy of the same source reports a bad archive, so only one message is shown. */
   public LoadLocalDicom withArchiveFailuresReportedByLibrary() {
     archiveFailuresShown = false;
+    return this;
+  }
+
+  /** For the unpacked copy of an archive whose damaged images the library copy reports. */
+  public LoadLocalDicom withReadErrorsReportedByLibrary() {
+    readErrorsShown = false;
     return this;
   }
 
@@ -163,7 +170,7 @@ public class LoadLocalDicom extends LoadDicom {
         if (graphicModel != null) {
           loader.setTag(TagW.PresentationModel, graphicModel);
         }
-      } else if (reading == Reading.ERROR) {
+      } else if (reading == Reading.ERROR && readErrorsShown) {
         errors.incrementAndGet();
       } else if (reading == Reading.UNSUPPORTED) {
         unsupported.incrementAndGet();
@@ -177,7 +184,8 @@ public class LoadLocalDicom extends LoadDicom {
               OpeningViewer.ALL_PATIENTS,
               GuiUtils.getUICore().getApplicationWindow(),
               percent -> showProgress(Messages.getString("DicomZipImport.unzipping"), percent),
-              this::isCancelled);
+              this::isCancelled,
+              !archiveFailuresShown);
       if (!opened && archiveFailuresShown) {
         errors.incrementAndGet();
       }

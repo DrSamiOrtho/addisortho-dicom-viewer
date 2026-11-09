@@ -102,7 +102,7 @@ public class DicomDirLoader {
         dcmPatient = findNextSiblingRecord(dcmPatient, reader);
       }
     } catch (IOException e) {
-      LOGGER.error("Cannot read DICOMDIR !", e);
+      LOGGER.error("Cannot read DICOMDIR ! {}", e.getClass().getSimpleName());
     }
 
     if (patient != null) {
@@ -145,7 +145,7 @@ public class DicomDirLoader {
       }
       parseStudy(patient, dcmPatient, reader);
     } catch (Exception e) {
-      LOGGER.error("Cannot read DICOMDIR !", e);
+      LOGGER.error("Cannot read DICOMDIR ! {}", e.getClass().getSimpleName());
     }
     return patient;
   }
@@ -226,7 +226,7 @@ public class DicomDirLoader {
                     iconInstance = instance.getNestedDataset(Tag.IconImageSequence);
                   }
                 } else {
-                  LOGGER.error("Missing DICOMDIR entry: {}", file.getPath());
+                  LOGGER.error("Missing a DICOMDIR entry");
                 }
               }
             }
@@ -329,7 +329,7 @@ public class DicomDirLoader {
           }
         }
       } catch (Exception e) {
-        LOGGER.error("Cannot read Icon in DICOMDIR!", e);
+        LOGGER.error("Cannot read Icon in DICOMDIR! {}", e.getClass().getSimpleName());
       } finally {
         reader.dispose();
       }
@@ -341,7 +341,7 @@ public class DicomDirLoader {
     try {
       return reader.findLowerDirectoryRecordInUse(dcmObject, true);
     } catch (IOException e) {
-      LOGGER.error("Cannot read first DICOMDIR entry!", e);
+      LOGGER.error("Cannot read first DICOMDIR entry! {}", e.getClass().getSimpleName());
     }
     return null;
   }
@@ -350,7 +350,7 @@ public class DicomDirLoader {
     try {
       return reader.findNextDirectoryRecordInUse(dcmObject, true);
     } catch (IOException e) {
-      LOGGER.error("Cannot read next DICOMDIR entry!", e);
+      LOGGER.error("Cannot read next DICOMDIR entry! {}", e.getClass().getSimpleName());
     }
     return null;
   }
@@ -359,7 +359,7 @@ public class DicomDirLoader {
     try {
       return reader.findFirstRootDirectoryRecordInUse(true);
     } catch (IOException e) {
-      LOGGER.error("Cannot find Patient in DICOMDIR !", e);
+      LOGGER.error("Cannot find Patient in DICOMDIR ! {}", e.getClass().getSimpleName());
     }
     return null;
   }

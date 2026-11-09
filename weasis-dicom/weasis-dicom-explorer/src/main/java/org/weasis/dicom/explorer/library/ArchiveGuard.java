@@ -17,11 +17,12 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Enumeration;
+import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
-import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import net.lingala.zip4j.model.FileHeader;
 
 /**
  * Decides from its directory alone whether an archive is safe to unpack: a few kilobytes can
@@ -106,20 +107,30 @@ public final class ArchiveGuard {
   }
 
   static Verdict inspect(ZipFile zip, long archiveBytes, Limits limits) {
-    if (zip.size() > limits.maxEntries()) {
+    return judge(
+        zip.size(),
+        zip.stream().map(e -> new long[] {e.getSize(), e.getCompressedSize()}).iterator(),
+        archiveBytes,
+        limits);
+  }
+
+  /**
+   * @param sizes the unpacked and the compressed size of each entry
+   */
+  private static Verdict judge(
+      int count, Iterator<long[]> sizes, long archiveBytes, Limits limits) {
+    if (count > limits.maxEntries()) {
       return Verdict.TOO_MANY_FILES;
     }
     long total = 0;
     long compressed = 0;
-    Enumeration<? extends ZipEntry> entries = zip.entries();
-    while (entries.hasMoreElements()) {
-      ZipEntry entry = entries.nextElement();
-      long size = entry.getSize();
-      if (size < 0 || size > limits.maxEntryBytes()) {
+    while (sizes.hasNext()) {
+      long[] entry = sizes.next();
+      if (entry[0] < 0 || entry[0] > limits.maxEntryBytes()) {
         return Verdict.FILE_TOO_LARGE;
       }
-      total = saturatingAdd(total, size);
-      compressed = saturatingAdd(compressed, Math.max(0, entry.getCompressedSize()));
+      total = saturatingAdd(total, entry[0]);
+      compressed = saturatingAdd(compressed, Math.max(0, entry[1]));
     }
     if (total > limits.maxTotalBytes()) {
       return Verdict.TOO_LARGE;
@@ -139,12 +150,30 @@ public final class ArchiveGuard {
   }
 
   /**
-   * Whether the archive must not be unpacked. One whose directory cannot be read is not refused
-   * here, because the unpacking is bounded by {@link #copy} whatever this says.
+   * Whether the archive must not be unpacked. The JDK cannot open a password-protected archive, so
+   * that one is judged from zip4j's reading of the same directory. One that neither can read is not
+   * refused here: unpacking it is bounded by {@link #copy} and reports the failure.
    */
   public static boolean isRefused(File archive) {
+    return isRefused(archive, DEFAULT);
+  }
+
+  static boolean isRefused(File archive, Limits limits) {
     try (ZipFile zip = new ZipFile(archive, ZipFile.OPEN_READ, StandardCharsets.ISO_8859_1)) {
-      return inspect(zip, archive.length(), DEFAULT) != Verdict.SAFE;
+      return inspect(zip, archive.length(), limits) != Verdict.SAFE;
+    } catch (IOException | RuntimeException e) {
+      return refusedByZip4j(archive, limits);
+    }
+  }
+
+  private static boolean refusedByZip4j(File archive, Limits limits) {
+    try (net.lingala.zip4j.ZipFile zip = new net.lingala.zip4j.ZipFile(archive)) {
+      List<FileHeader> headers = zip.getFileHeaders();
+      Iterator<long[]> sizes =
+          headers.stream()
+              .map(h -> new long[] {h.getUncompressedSize(), h.getCompressedSize()})
+              .iterator();
+      return judge(headers.size(), sizes, archive.length(), limits) != Verdict.SAFE;
     } catch (IOException | RuntimeException e) {
       return false;
     }

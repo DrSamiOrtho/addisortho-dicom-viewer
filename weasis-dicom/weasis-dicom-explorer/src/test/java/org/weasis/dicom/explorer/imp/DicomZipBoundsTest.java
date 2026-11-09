@@ -10,6 +10,7 @@
 package org.weasis.dicom.explorer.imp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -18,8 +19,11 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
@@ -94,6 +98,47 @@ class DicomZipBoundsTest {
         () ->
             DicomZipMediaIO.extractFast(
                 zip, out(), _ -> {}, new ArchiveGuard.Budget(1L << 30, () -> true)));
+  }
+
+  @Test
+  void twoEntriesWithTheSameNameGiveTwoFilesWithTheirOwnContent() throws IOException {
+    Path file = tmp.resolve("same.zip");
+    try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(file))) {
+      out.putNextEntry(new ZipEntry("AAAA"));
+      out.write("first".getBytes(StandardCharsets.UTF_8));
+      out.closeEntry();
+      out.putNextEntry(new ZipEntry("BBBB"));
+      out.write("second".getBytes(StandardCharsets.UTF_8));
+      out.closeEntry();
+    }
+    String renamed =
+        new String(Files.readAllBytes(file), StandardCharsets.ISO_8859_1).replace("BBBB", "AAAA");
+    Files.write(file, renamed.getBytes(StandardCharsets.ISO_8859_1));
+    Path out = out();
+
+    assertTrue(DicomZipMediaIO.extractFast(file.toFile(), out, _ -> {}, budget(1L << 20)));
+
+    assertEquals("first", Files.readString(out.resolve("AAAA")));
+    assertEquals("second", Files.readString(out.resolve("AAAA-2")));
+  }
+
+  @Test
+  void aBackslashSeparatesFoldersAndCannotEscape() {
+    Path root = tmp.toAbsolutePath().normalize();
+
+    assertEquals(
+        root.resolve("IMAGES/IM1"), DicomZipMediaIO.targetOf(root, "IMAGES\\IM1", new HashSet<>()));
+    assertNull(DicomZipMediaIO.targetOf(root, "..\\..\\escaped", new HashSet<>()));
+    assertNull(DicomZipMediaIO.targetOf(root, "../escaped", new HashSet<>()));
+  }
+
+  @Test
+  void namesThatDifferOnlyInCaseDoNotOverwriteEachOther() {
+    Path root = tmp.toAbsolutePath().normalize();
+    Set<String> used = new HashSet<>();
+
+    assertEquals(root.resolve("IM1"), DicomZipMediaIO.targetOf(root, "IM1", used));
+    assertEquals(root.resolve("im1-2"), DicomZipMediaIO.targetOf(root, "im1", used));
   }
 
   @Test
