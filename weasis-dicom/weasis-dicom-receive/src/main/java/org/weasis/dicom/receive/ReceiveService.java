@@ -50,7 +50,7 @@ import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.PluginOpeningStrategy;
-import org.weasis.dicom.explorer.index.FindPatientDialog;
+import org.weasis.dicom.explorer.index.StudiesHome;
 import org.weasis.dicom.explorer.library.StoreNaming;
 import org.weasis.dicom.explorer.library.StoredInstance;
 import org.weasis.dicom.explorer.library.StoredStudy;
@@ -102,7 +102,7 @@ public class ReceiveService implements ReceiveListener {
     batchTimer.scheduleWithFixedDelay(
         this::loadPending, BATCH_INTERVAL_MS, BATCH_INTERVAL_MS, TimeUnit.MILLISECONDS);
     instance = this;
-    FindPatientDialog.registerReceive(Messages.getString("receive.title"), this::statusLine);
+    StudiesHome.registerReceive(Messages.getString("receive.title"), this::statusLine);
     lifecycle.execute(this::restart);
   }
 
