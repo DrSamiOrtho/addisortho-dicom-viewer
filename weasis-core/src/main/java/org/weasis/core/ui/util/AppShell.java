@@ -57,6 +57,7 @@ public final class AppShell {
   private Component home;
   private Place current = Place.REVIEW;
   private boolean reviewAsked;
+  private Runnable returnToViewer = () -> {};
 
   AppShell() {
     rail.setLayout(new BoxLayout(rail, BoxLayout.Y_AXIS));
@@ -65,7 +66,11 @@ public final class AppShell {
     group.add(studies);
     group.add(review);
     studies.addActionListener(_ -> show(Place.STUDIES));
-    review.addActionListener(_ -> show(Place.REVIEW));
+    review.addActionListener(
+        _ -> {
+          show(Place.REVIEW);
+          returnToViewer.run();
+        });
     studies.setEnabled(false);
     rail.add(Box.createVerticalStrut(UIScale.scale(AoDesign.GAP_SMALL)));
     rail.add(studies);
@@ -98,6 +103,11 @@ public final class AppShell {
     if (!reviewAsked) {
       show(Place.STUDIES);
     }
+  }
+
+  /** What gives the keyboard back to the viewer when the user returns to it from the rail. */
+  public void onReturnToViewer(Runnable action) {
+    returnToViewer = action;
   }
 
   public Place current() {

@@ -446,6 +446,14 @@ public class WeasisWin {
     rootPaneContainer
         .getContentPane()
         .add(AppShell.getInstance().build(viewer), BorderLayout.CENTER);
+    AppShell.getInstance()
+        .onReturnToViewer(
+            () -> {
+              ViewerPlugin<?> selected = getSelectedPlugin();
+              if (selected != null) {
+                selected.setSelectedAndGetFocus();
+              }
+            });
     mainArea.getComponent().setTransferHandler(new SeriesHandler());
     mainArea.setLocation(CLocation.base().normalRectangle(0, 0, 1, 1));
     mainArea.setVisible(true);
@@ -496,12 +504,14 @@ public class WeasisWin {
     if (builder == null) {
       return;
     }
-    AppShell.getInstance().showViewer();
     SeriesViewerFactory factory = builder.getFactory();
     DataExplorerModel model = builder.getModel();
     List<MediaSeries<MediaElement>> seriesList = builder.getSeries();
     ViewerOpenOptions opts = builder.getViewerOpenOptions();
     ViewerPlacement placement = opts.placement();
+    if (!(placement instanceof ViewerPlacement.External)) {
+      AppShell.getInstance().showViewer(); // a viewer on another screen leaves this window alone
+    }
     TabFocusPolicy focusPolicy = opts.tabFocusPolicy();
 
     // -- ReuseViewer: try to reuse an existing viewer matching the same group --
