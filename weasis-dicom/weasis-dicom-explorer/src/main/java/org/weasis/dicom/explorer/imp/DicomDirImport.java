@@ -157,7 +157,7 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
             file = f;
           }
         } catch (Exception e) {
-          LOGGER.error("Cannot read {}", path);
+          LOGGER.error("Cannot read a DICOMDIR path");
         }
       }
     }
@@ -172,7 +172,7 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
         DicomModel.LOADING_EXECUTOR.execute(
             new LoadDicomDir(loadSeries, dicomModel, getOpeningViewer()));
       } else {
-        LOGGER.error("Cannot import DICOM from {}", file);
+        LOGGER.error("Cannot import the DICOM of a DICOMDIR");
 
         int response =
             JOptionPane.showConfirmDialog(

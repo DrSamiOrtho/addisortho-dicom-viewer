@@ -226,10 +226,14 @@ public class DicomDirLoader {
             Integer frame =
                 DicomUtils.getIntegerFromDicomElement(instance, Tag.InstanceNumber, null);
             SopInstance sop = seriesInstanceList.getSopInstance(sopInstanceUID, frame);
+            // Listed even when the series already has it: the disc may have come out during the
+            // first copy, and putting it back must be able to finish the job.
+            File file = toFileName(instance, reader);
+            if (file != null) {
+              referencedFiles.add(file);
+            }
             if (sop == null) {
-              File file = toFileName(instance, reader);
               if (file != null) {
-                referencedFiles.add(file);
                 if (file.exists()) {
                   sop = new SopInstance(sopInstanceUID, frame);
                   sop.setDirectDownloadFile(file.toURI().toString());
@@ -398,7 +402,7 @@ public class DicomDirLoader {
       sb.append(File.separatorChar).append(fileID[i]);
     }
     File file = new File(reader.getFile().getParent(), sb.toString());
-    if (!isInside(reader.getFile().getParentFile(), file)) {
+    if (!isInside(reader.getFile().getAbsoluteFile().getParentFile(), file)) {
       LOGGER.warn("Ignoring a DICOMDIR entry that points outside its folder");
       return null;
     }

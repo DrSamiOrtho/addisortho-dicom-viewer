@@ -68,6 +68,7 @@ class DicomDirRetentionTest {
     assertFalse(DicomDirLoader.isInside(disc, new File(disc, "../secret/IM1")));
     assertFalse(DicomDirLoader.isInside(disc, new File(disc, "DICOM/../../IM1")));
     assertFalse(DicomDirLoader.isInside(disc, new File("/elsewhere/IM1")));
+    assertTrue(DicomDirLoader.isInside(new File("").getAbsoluteFile(), new File("IM1")));
   }
 
   @Test
