@@ -292,7 +292,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
       LoadLocalDicom dicom =
           new LoadLocalDicom(new File[] {dir.toFile()}, true, dicomModel, openingViewer);
       DicomModel.LOADING_EXECUTOR.execute(
-          libraryReports ? dicom.withReadErrorsReportedByLibrary() : dicom);
+          libraryReports || !whole ? dicom.withReadErrorsReportedByLibrary() : dicom);
     }
     return whole;
   }
@@ -340,7 +340,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
       }
       Path target = first;
       for (int n = 2; !used.add(target.toString().toLowerCase(Locale.ROOT)); n++) {
-        target = Path.of(first + "-" + n);
+        target = numbered(first, n);
       }
       return target;
     } catch (InvalidPathException e) {
@@ -439,6 +439,14 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
     }
   }
 
+  /** The number goes before the extension, which is how a .dcm file is recognised. */
+  private static Path numbered(Path file, int n) {
+    String name = file.getFileName().toString();
+    int dot = name.lastIndexOf('.');
+    return file.resolveSibling(
+        dot > 0 ? name.substring(0, dot) + "-" + n + name.substring(dot) : name + "-" + n);
+  }
+
   /**
    * For an archive with repeated names. The reader finds an entry by its name unless it is the one
    * just listed, so these cannot be read from a finished list or by several threads.
@@ -469,7 +477,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
   }
 
   /** zip4j handles what the JDK reader cannot, such as password-protected zips. */
-  private static void extractWithZip4j(
+  static void extractWithZip4j(
       ZipFile zipFile, Path dir, IntConsumer progress, ArchiveGuard.Budget budget)
       throws IOException {
     Path root = dir.toAbsolutePath().normalize();
@@ -479,6 +487,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
             .toList();
     progress.accept(0);
     int done = 0;
+    int unreadable = 0;
     Set<String> used = new HashSet<>();
     for (FileHeader header : headers) {
       Path target = targetOf(root, header.getFileName(), used);
@@ -489,9 +498,19 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
       Files.createDirectories(target.getParent());
       try (InputStream in = zipFile.getInputStream(header)) {
         ArchiveGuard.copy(in, target, header.getUncompressedSize(), budget);
+      } catch (ArchiveGuard.UnsafeArchive | InterruptedIOException e) {
+        throw e;
+      } catch (IOException | RuntimeException e) {
+        // One damaged entry must not cost the images after it.
+        LOGGER.warn("Cannot unpack an archive entry: {}", e.getClass().getSimpleName());
+        Files.deleteIfExists(target);
+        unreadable++;
       }
       done++;
       progress.accept(done * 100 / headers.size());
+    }
+    if (unreadable > 0) {
+      throw new IOException("Entries could not be unpacked: " + unreadable);
     }
   }
 

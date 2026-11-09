@@ -10,6 +10,7 @@
 package org.weasis.dicom.explorer.imp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
@@ -120,6 +122,55 @@ class DicomZipBoundsTest {
 
     assertEquals("first", Files.readString(out.resolve("AAAA")));
     assertEquals("second", Files.readString(out.resolve("AAAA-2")));
+  }
+
+  @Test
+  void aSecondFileOfOneNameKeepsItsExtension() {
+    Path root = tmp.toAbsolutePath().normalize();
+    Set<String> used = new HashSet<>();
+
+    assertEquals(root.resolve("IM.dcm"), DicomZipMediaIO.targetOf(root, "IM.dcm", used));
+    assertEquals(root.resolve("IM-2.dcm"), DicomZipMediaIO.targetOf(root, "IM.dcm", used));
+    assertEquals(root.resolve("IM-3.dcm"), DicomZipMediaIO.targetOf(root, "IM.dcm", used));
+  }
+
+  @Test
+  void aDamagedEntryDoesNotCostTheImagesAfterIt() throws IOException {
+    Path file = tmp.resolve("stored.zip");
+    byte[][] contents = {
+      "first image".getBytes(StandardCharsets.UTF_8),
+      "DAMAGEDPAYLOAD".getBytes(StandardCharsets.UTF_8),
+      "third image".getBytes(StandardCharsets.UTF_8)
+    };
+    try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(file))) {
+      for (int i = 0; i < contents.length; i++) {
+        ZipEntry entry = new ZipEntry("IM" + i);
+        entry.setMethod(ZipEntry.STORED);
+        entry.setSize(contents[i].length);
+        entry.setCompressedSize(contents[i].length);
+        CRC32 crc = new CRC32();
+        crc.update(contents[i]);
+        entry.setCrc(crc.getValue());
+        out.putNextEntry(entry);
+        out.write(contents[i]);
+        out.closeEntry();
+      }
+    }
+    String damaged =
+        new String(Files.readAllBytes(file), StandardCharsets.ISO_8859_1)
+            .replace("DAMAGEDPAYLOAD", "XAMAGEDPAYLOAD");
+    Files.write(file, damaged.getBytes(StandardCharsets.ISO_8859_1));
+    Path out = out();
+
+    try (net.lingala.zip4j.ZipFile zip = new net.lingala.zip4j.ZipFile(file.toFile())) {
+      assertThrows(
+          IOException.class,
+          () -> DicomZipMediaIO.extractWithZip4j(zip, out, _ -> {}, budget(1L << 20)));
+    }
+
+    assertEquals("first image", Files.readString(out.resolve("IM0")));
+    assertFalse(Files.exists(out.resolve("IM1")));
+    assertEquals("third image", Files.readString(out.resolve("IM2")));
   }
 
   @Test

@@ -371,6 +371,38 @@ class LibraryArchiveImportTest {
   }
 
   @Test
+  void aDamagedDcmWithNoMarkIsReportedNotCountedAsOther() throws IOException {
+    LibraryImport.Report report =
+        importing(zip("cut.zip", Map.of("IM1.dcm", "cut off".getBytes(StandardCharsets.UTF_8))));
+
+    assertEquals(1, report.failed());
+    assertEquals(0, report.notDicom());
+  }
+
+  @Test
+  void aDicomdirInAnArchiveIsNotADamagedImage() throws IOException {
+    Attributes directory = new Attributes();
+    directory.setString(Tag.FileSetID, VR.CS, "DEMO");
+    directory.newSequence(Tag.DirectoryRecordSequence, 0);
+    Attributes meta =
+        Attributes.createFileMetaInformation(
+            "1.2.3.9", UID.MediaStorageDirectoryStorage, UID.ExplicitVRLittleEndian);
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    try (DicomOutputStream dicom = new DicomOutputStream(out, UID.ExplicitVRLittleEndian)) {
+      dicom.writeDataset(meta, directory);
+    }
+    Map<String, byte[]> entries = new LinkedHashMap<>();
+    entries.put("DICOMDIR", out.toByteArray());
+    entries.put("IM1", bytes(image(STUDY_A, "1.2.3.1", "001", (byte) 1)));
+
+    LibraryImport.Report report = importing(zip("cd.zip", entries));
+
+    assertEquals(0, report.failed());
+    assertEquals(1, report.stored());
+    assertEquals(1, report.notDicom());
+  }
+
+  @Test
   void aFileThatOnlyLooksLikeAnArchiveIsReported() throws IOException {
     Path fake = tmp.resolve("bad.zip");
     Files.write(fake, new byte[] {'P', 'K', 3, 4, 9, 9, 9, 9, 9, 9});

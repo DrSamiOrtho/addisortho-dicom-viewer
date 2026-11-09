@@ -32,6 +32,7 @@ import org.dcm4che3.data.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.weasis.core.ui.util.SavedFile;
+import org.weasis.dicom.codec.DicomCodec;
 import org.weasis.dicom.explorer.Messages;
 import org.weasis.dicom.explorer.imp.DicomZipMediaIO;
 
@@ -339,11 +340,22 @@ final class LibraryImport {
     }
   }
 
-  private static boolean hasDicomMark(Path file) throws IOException {
+  /**
+   * Whether a file with no usable identifiers is a damaged image rather than something else. Uses
+   * the same signs as the viewer's loader, whose read errors for an archive are left to this
+   * report. A DICOMDIR is valid DICOM with no image identifiers of its own.
+   */
+  private static boolean claimsToBeDicom(Path file, String entryName) throws IOException {
+    Attributes header = StudyStore.readHeader(file);
+    if (header != null && header.contains(Tag.DirectoryRecordSequence)) {
+      return false;
+    }
+    String name = entryName.toLowerCase(Locale.ROOT);
+    if (Arrays.stream(DicomCodec.FILE_EXTENSIONS).anyMatch(e -> name.endsWith("." + e))) {
+      return true;
+    }
     try (InputStream in = Files.newInputStream(file)) {
-      byte[] start = in.readNBytes(DICM_OFFSET + DICM.length);
-      return start.length == DICM_OFFSET + DICM.length
-          && Arrays.equals(Arrays.copyOfRange(start, DICM_OFFSET, DICM_OFFSET + DICM.length), DICM);
+      return looksLikeDicom(in.readNBytes(DICM_OFFSET + DICM.length));
     }
   }
 
@@ -373,7 +385,7 @@ final class LibraryImport {
       if (header == null) {
         if (isArchive(temp)) {
           nestedArchives++;
-        } else if (StudyStore.readHeader(temp) == null && hasDicomMark(temp)) {
+        } else if (claimsToBeDicom(temp, entry.getName())) {
           throw new IOException("The image file cannot be read");
         } else {
           notDicom++;
