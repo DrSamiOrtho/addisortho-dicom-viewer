@@ -58,29 +58,43 @@ public final class ArchiveGuard {
     }
   }
 
-  /** What one unpacking may still write. Shared by the threads of that unpacking. */
+  /**
+   * What one unpacking may still write. Shared by the threads of that unpacking. The disk allowance
+   * gets back what is deleted again; the archive allowance counts everything it ever expanded to.
+   */
   public static final class Budget {
-    private final AtomicLong left;
+    private final AtomicLong diskLeft;
+    private final AtomicLong archiveLeft;
     private final BooleanSupplier cancelled;
 
     public Budget(long bytes, BooleanSupplier cancelled) {
-      this.left = new AtomicLong(bytes);
+      this(bytes, bytes, cancelled);
+    }
+
+    public Budget(long diskBytes, long archiveBytes, BooleanSupplier cancelled) {
+      this.diskLeft = new AtomicLong(diskBytes);
+      this.archiveLeft = new AtomicLong(archiveBytes);
       this.cancelled = cancelled;
     }
 
     /** As much as the archive limit allows and the folder's disk can spare. */
     public static Budget forFolder(Path folder, BooleanSupplier cancelled) throws IOException {
       long spare = Files.getFileStore(folder).getUsableSpace() - StudyStore.MIN_FREE_BYTES;
-      return new Budget(Math.clamp(spare, 0, DEFAULT.maxTotalBytes()), cancelled);
+      return new Budget(Math.max(spare, 0), DEFAULT.maxTotalBytes(), cancelled);
     }
 
     void spend(int bytes) throws IOException {
       if (cancelled.getAsBoolean()) {
         throw new InterruptedIOException("Stopped");
       }
-      if (left.addAndGet(-bytes) < 0) {
+      if (archiveLeft.addAndGet(-bytes) < 0 || diskLeft.addAndGet(-bytes) < 0) {
         throw new UnsafeArchive("The archive unpacks to more than can safely be written");
       }
+    }
+
+    /** A partly written file was deleted, so its bytes are free on the disk again. */
+    public void released(long bytes) {
+      diskLeft.addAndGet(bytes);
     }
   }
 

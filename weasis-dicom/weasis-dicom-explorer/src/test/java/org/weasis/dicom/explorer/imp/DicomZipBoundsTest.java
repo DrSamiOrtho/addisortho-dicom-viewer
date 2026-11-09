@@ -25,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.stream.Stream;
 import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -129,13 +130,29 @@ class DicomZipBoundsTest {
     Path root = tmp.toAbsolutePath().normalize();
     Set<String> used = new HashSet<>();
 
-    assertEquals(root.resolve("IM.dcm"), DicomZipMediaIO.targetOf(root, "IM.dcm", used));
-    assertEquals(root.resolve("IM-2.dcm"), DicomZipMediaIO.targetOf(root, "IM.dcm", used));
-    assertEquals(root.resolve("IM-3.dcm"), DicomZipMediaIO.targetOf(root, "IM.dcm", used));
+    assertEquals(root.resolve("IM.dcm"), DicomZipMediaIO.targetOf(root, "IM.dcm", used, Set.of()));
+    assertEquals(
+        root.resolve("IM-2.dcm"), DicomZipMediaIO.targetOf(root, "IM.dcm", used, Set.of()));
+    assertEquals(
+        root.resolve("IM-3.dcm"), DicomZipMediaIO.targetOf(root, "IM.dcm", used, Set.of()));
   }
 
   @Test
-  void aDamagedEntryDoesNotCostTheImagesAfterIt() throws IOException {
+  void aRepeatedNameNeverTakesTheNameOfAnotherEntry() {
+    Path root = tmp.toAbsolutePath().normalize();
+    Set<String> used = new HashSet<>();
+    Set<String> reserved =
+        DicomZipMediaIO.reservedNames(root, Stream.of("IM.dcm", "IM.dcm", "IM-2.dcm"));
+
+    assertEquals(root.resolve("IM.dcm"), DicomZipMediaIO.targetOf(root, "IM.dcm", used, reserved));
+    assertEquals(
+        root.resolve("IM-3.dcm"), DicomZipMediaIO.targetOf(root, "IM.dcm", used, reserved));
+    assertEquals(
+        root.resolve("IM-2.dcm"), DicomZipMediaIO.targetOf(root, "IM-2.dcm", used, reserved));
+  }
+
+  /** IM0 and IM2 are good; IM1 fails its checksum. */
+  private File archiveWithDamagedMiddle() throws IOException {
     Path file = tmp.resolve("stored.zip");
     byte[][] contents = {
       "first image".getBytes(StandardCharsets.UTF_8),
@@ -160,9 +177,15 @@ class DicomZipBoundsTest {
         new String(Files.readAllBytes(file), StandardCharsets.ISO_8859_1)
             .replace("DAMAGEDPAYLOAD", "XAMAGEDPAYLOAD");
     Files.write(file, damaged.getBytes(StandardCharsets.ISO_8859_1));
+    return file.toFile();
+  }
+
+  @Test
+  void aDamagedEntryDoesNotCostTheImagesAfterIt() throws IOException {
+    File file = archiveWithDamagedMiddle();
     Path out = out();
 
-    try (net.lingala.zip4j.ZipFile zip = new net.lingala.zip4j.ZipFile(file.toFile())) {
+    try (net.lingala.zip4j.ZipFile zip = new net.lingala.zip4j.ZipFile(file)) {
       assertThrows(
           IOException.class,
           () -> DicomZipMediaIO.extractWithZip4j(zip, out, _ -> {}, budget(1L << 20)));
@@ -174,13 +197,44 @@ class DicomZipBoundsTest {
   }
 
   @Test
+  void whatADamagedEntryWroteIsGivenBackToTheDiskAllowance() throws IOException {
+    File file = archiveWithDamagedMiddle();
+    Path out = out();
+    // Enough for the first two entries at once, which is all that is ever on the disk.
+    ArchiveGuard.Budget tight = new ArchiveGuard.Budget(25, 1L << 20, () -> false);
+
+    try (net.lingala.zip4j.ZipFile zip = new net.lingala.zip4j.ZipFile(file)) {
+      IOException thrown =
+          assertThrows(
+              IOException.class, () -> DicomZipMediaIO.extractWithZip4j(zip, out, _ -> {}, tight));
+      assertFalse(thrown instanceof ArchiveGuard.UnsafeArchive);
+    }
+
+    assertEquals("third image", Files.readString(out.resolve("IM2")));
+  }
+
+  @Test
+  void theArchiveAllowanceStillCountsWhatWasDeleted() throws IOException {
+    File file = archiveWithDamagedMiddle();
+    Path out = out();
+    ArchiveGuard.Budget tight = new ArchiveGuard.Budget(1L << 20, 25, () -> false);
+
+    try (net.lingala.zip4j.ZipFile zip = new net.lingala.zip4j.ZipFile(file)) {
+      assertThrows(
+          ArchiveGuard.UnsafeArchive.class,
+          () -> DicomZipMediaIO.extractWithZip4j(zip, out, _ -> {}, tight));
+    }
+  }
+
+  @Test
   void aBackslashSeparatesFoldersAndCannotEscape() {
     Path root = tmp.toAbsolutePath().normalize();
 
     assertEquals(
-        root.resolve("IMAGES/IM1"), DicomZipMediaIO.targetOf(root, "IMAGES\\IM1", new HashSet<>()));
-    assertNull(DicomZipMediaIO.targetOf(root, "..\\..\\escaped", new HashSet<>()));
-    assertNull(DicomZipMediaIO.targetOf(root, "../escaped", new HashSet<>()));
+        root.resolve("IMAGES/IM1"),
+        DicomZipMediaIO.targetOf(root, "IMAGES\\IM1", new HashSet<>(), Set.of()));
+    assertNull(DicomZipMediaIO.targetOf(root, "..\\..\\escaped", new HashSet<>(), Set.of()));
+    assertNull(DicomZipMediaIO.targetOf(root, "../escaped", new HashSet<>(), Set.of()));
   }
 
   @Test
@@ -188,8 +242,8 @@ class DicomZipBoundsTest {
     Path root = tmp.toAbsolutePath().normalize();
     Set<String> used = new HashSet<>();
 
-    assertEquals(root.resolve("IM1"), DicomZipMediaIO.targetOf(root, "IM1", used));
-    assertEquals(root.resolve("im1-2"), DicomZipMediaIO.targetOf(root, "im1", used));
+    assertEquals(root.resolve("IM1"), DicomZipMediaIO.targetOf(root, "IM1", used, Set.of()));
+    assertEquals(root.resolve("im1-2"), DicomZipMediaIO.targetOf(root, "im1", used, Set.of()));
   }
 
   @Test

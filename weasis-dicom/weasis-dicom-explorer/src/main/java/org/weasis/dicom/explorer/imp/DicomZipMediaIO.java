@@ -37,6 +37,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntConsumer;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
@@ -330,22 +331,44 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
    * Where an entry is unpacked. Archives made on Windows may separate folders with a backslash, and
    * a DICOMDIR refers to them by the real folders. Two entries of one name get two files.
    *
+   * @param reserved the names of all the archive's entries, see {@link #reservedNames}
    * @return null when the entry would land outside the folder
    */
-  static Path targetOf(Path root, String entryName, Set<String> used) {
+  static Path targetOf(Path root, String entryName, Set<String> used, Set<String> reserved) {
     try {
       Path first = root.resolve(entryName.replace('\\', '/')).normalize();
       if (!first.startsWith(root) || first.equals(root)) {
         return null;
       }
-      Path target = first;
-      for (int n = 2; !used.add(target.toString().toLowerCase(Locale.ROOT)); n++) {
+      if (used.add(key(first))) {
+        return first;
+      }
+      Path target = numbered(first, 2);
+      for (int n = 3; reserved.contains(key(target)) || !used.add(key(target)); n++) {
         target = numbered(first, n);
       }
       return target;
     } catch (InvalidPathException e) {
       return null;
     }
+  }
+
+  /** Every entry's own name, so that a repeated one is never given a name another entry has. */
+  static Set<String> reservedNames(Path root, Stream<String> entryNames) {
+    Set<String> reserved = new HashSet<>();
+    entryNames.forEach(
+        name -> {
+          try {
+            reserved.add(key(root.resolve(name.replace('\\', '/')).normalize()));
+          } catch (InvalidPathException e) {
+            LOGGER.debug("An archive entry has an unusable name");
+          }
+        });
+    return reserved;
+  }
+
+  private static String key(Path path) {
+    return path.toString().toLowerCase(Locale.ROOT);
   }
 
   public static boolean isSkipped(String entryName) {
@@ -385,6 +408,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
         return true;
       }
       Set<String> used = new HashSet<>();
+      Set<String> reserved = reservedNames(root, entries.stream().map(ZipEntry::getName));
       // Progress by bytes written; an entry of unknown size counts as one byte.
       long total = entries.stream().mapToLong(e -> Math.max(e.getSize(), 1)).sum();
       AtomicLong done = new AtomicLong();
@@ -394,7 +418,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
       try {
         List<Future<?>> jobs = new ArrayList<>(entries.size());
         for (ZipEntry entry : entries) {
-          Path target = targetOf(root, entry.getName(), used);
+          Path target = targetOf(root, entry.getName(), used, reserved);
           if (target == null) {
             LOGGER.warn("Skipping a zip entry outside the target folder");
             continue;
@@ -455,6 +479,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
       java.util.zip.ZipFile zip, Path root, IntConsumer progress, ArchiveGuard.Budget budget)
       throws IOException {
     Set<String> used = new HashSet<>();
+    Set<String> reserved = reservedNames(root, zip.stream().map(ZipEntry::getName));
     int total = zip.size();
     int done = 0;
     progress.accept(0);
@@ -465,7 +490,7 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
       Path target =
           entry.isDirectory() || isSkipped(entry.getName())
               ? null
-              : targetOf(root, entry.getName(), used);
+              : targetOf(root, entry.getName(), used, reserved);
       if (target != null) {
         Files.createDirectories(target.getParent());
         try (InputStream in = zip.getInputStream(entry)) {
@@ -489,8 +514,9 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
     int done = 0;
     int unreadable = 0;
     Set<String> used = new HashSet<>();
+    Set<String> reserved = reservedNames(root, headers.stream().map(FileHeader::getFileName));
     for (FileHeader header : headers) {
-      Path target = targetOf(root, header.getFileName(), used);
+      Path target = targetOf(root, header.getFileName(), used, reserved);
       if (target == null) {
         LOGGER.warn("Skipping a zip entry outside the target folder");
         continue;
@@ -503,7 +529,9 @@ public class DicomZipMediaIO implements MediaReader<MediaElement> {
       } catch (IOException | RuntimeException e) {
         // One damaged entry must not cost the images after it.
         LOGGER.warn("Cannot unpack an archive entry: {}", e.getClass().getSimpleName());
+        long partial = Files.exists(target) ? Files.size(target) : 0;
         Files.deleteIfExists(target);
+        budget.released(partial);
         unreadable++;
       }
       done++;
