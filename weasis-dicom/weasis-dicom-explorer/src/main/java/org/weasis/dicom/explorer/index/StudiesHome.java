@@ -132,6 +132,7 @@ public final class StudiesHome extends JPanel {
   private final JMenuItem keepItem = new JMenuItem(Messages.getString("index.keep"));
   private final JMenuItem cancelScan = new JMenuItem(Messages.getString("index.cancelScan"));
   private final JLabel receiveStatus = new JLabel();
+  private final JButton receiveButton = new JButton(Messages.getString("index.receive"));
   private final CardLayout tableCards = new CardLayout();
   private final JPanel tableArea = new JPanel(tableCards);
   private final JLabel emptyTitle = new JLabel(" ", SwingConstants.CENTER);
@@ -146,6 +147,7 @@ public final class StudiesHome extends JPanel {
 
   private static volatile String receivePage;
   private static volatile Supplier<String> receiveState = () -> "";
+  private static volatile StudiesHome current;
 
   /**
    * Called by the receive module, which this one cannot see.
@@ -156,6 +158,10 @@ public final class StudiesHome extends JPanel {
   public static void registerReceive(String pageTitle, Supplier<String> state) {
     receivePage = pageTitle;
     receiveState = state;
+    StudiesHome home = current; // the receiver may start after this screen was built
+    if (home != null) {
+      GuiExecutor.execute(home::refresh);
+    }
   }
 
   public StudiesHome(DicomModel model) {
@@ -182,6 +188,7 @@ public final class StudiesHome extends JPanel {
         });
     service.addListener(this::refresh);
     CompletableFuture.runAsync(service::start).thenRun(() -> GuiExecutor.execute(this::refresh));
+    current = this;
     refresh();
   }
 
@@ -206,7 +213,6 @@ public final class StudiesHome extends JPanel {
     JButton importButton = new JButton(Messages.getString("index.import"));
     importButton.setMnemonic(KeyEvent.VK_I);
     importButton.addActionListener(_ -> ImportToolBar.showAction(this, model, null, false));
-    JButton receiveButton = new JButton(Messages.getString("index.receive"));
     receiveButton.setMnemonic(KeyEvent.VK_R);
     receiveButton.addActionListener(_ -> openReceive());
     receiveButton.setVisible(receivePage != null); // the Lite editions may not have the receiver
@@ -712,6 +718,7 @@ public final class StudiesHome extends JPanel {
     status.setText(text);
     status.setToolTipText(text);
     receiveStatus.setText(receiveState.get());
+    receiveButton.setVisible(receivePage != null);
     cancelScan.setEnabled(s.running());
     showRowsOrEmptyState(found.isEmpty(), s.running());
     updateSelection();
