@@ -36,10 +36,22 @@ public class LoadDisc extends LoadLocalDicom {
   private static final Logger LOGGER = LoggerFactory.getLogger(LoadDisc.class);
 
   private final Path disc;
+  private final int unavailable;
+  private final String firstUnavailable;
 
   public LoadDisc(Path disc, DicomModel dicomModel) {
+    this(disc, dicomModel, 0, null);
+  }
+
+  /**
+   * @param unavailable images the disc's DICOMDIR lists but that could not be found
+   * @param firstUnavailable its name, for the user only
+   */
+  public LoadDisc(Path disc, DicomModel dicomModel, int unavailable, String firstUnavailable) {
     super(new File[0], true, dicomModel, OpeningViewer.ALL_PATIENTS);
     this.disc = disc;
+    this.unavailable = unavailable;
+    this.firstUnavailable = firstUnavailable;
   }
 
   @Override
@@ -49,7 +61,7 @@ public class LoadDisc extends LoadLocalDicom {
             AppProperties.buildAccessibleTempDirectory("tmp", "disc")); // NON-NLS
     long start = System.nanoTime();
     Copied copied =
-        copy(
+        copyReportingFailure(
             disc,
             dir,
             percent -> showProgress(Messages.getString("LoadDisc.copying"), percent),
@@ -58,9 +70,24 @@ public class LoadDisc extends LoadLocalDicom {
     if (!isCancelled()) {
       // Kept in the library too, so the study outlasts this temporary copy and the disc.
       StudyLibrary.getInstance()
-          .retainDisc(dir.toFile(), dicomModel, copied.failed(), copied.firstFailed());
+          .retainDisc(
+              dir.toFile(),
+              dicomModel,
+              copied.failed() + unavailable,
+              copied.firstFailed() != null ? copied.firstFailed() : firstUnavailable);
     }
     return new File[] {dir.toFile()};
+  }
+
+  /** A disc that cannot even be listed, or is ejected meanwhile, is a result to report. */
+  static Copied copyReportingFailure(
+      Path disc, Path dir, IntConsumer progress, BooleanSupplier cancelled) {
+    try {
+      return copy(disc, dir, progress, cancelled);
+    } catch (IOException | RuntimeException e) {
+      LOGGER.warn("Cannot read the disc: {}", e.getClass().getSimpleName());
+      return new Copied(1, Messages.getString("LoadDisc.unreadable"));
+    }
   }
 
   /** Copies the files of {@code disc} that can be images into {@code dir}, in name order. */

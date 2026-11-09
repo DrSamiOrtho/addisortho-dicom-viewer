@@ -172,7 +172,7 @@ final class ManifestModelBuilder {
       }
 
       model.addHierarchyNode(MediaSeriesGroupNode.rootNode, patient);
-      LOGGER.info("Adding new patient: {}", patient);
+      LOGGER.info("Adding a new patient");
     }
     return patient;
   }
