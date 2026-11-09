@@ -415,6 +415,7 @@ public class DicomDirLoader {
     File found = locate(dcmObject, reader);
     if (found != null && !isInside(reader.getFile().getAbsoluteFile().getParentFile(), found)) {
       LOGGER.warn("Ignoring a DICOMDIR entry that points outside its folder");
+      incomplete = true; // an image it lists is left out, so the result must not read as complete
       return null;
     }
     return found;

@@ -54,6 +54,22 @@ class LoadDiscLostFilesTest {
   }
 
   @Test
+  void aLinkOnTheDiscIsReportedAndNotFollowed() throws IOException {
+    Path disc = Files.createDirectories(tmp.resolve("disc"));
+    Files.writeString(disc.resolve("IM1"), "one");
+    Path outside = Files.writeString(tmp.resolve("outside"), "secret");
+    Files.createSymbolicLink(disc.resolve("LINK"), outside);
+    Path out = Files.createDirectories(tmp.resolve("out"));
+
+    LoadDisc.Copied copied = LoadDisc.copy(disc, out, _ -> {}, () -> false);
+
+    assertEquals(1, copied.failed());
+    assertEquals("LINK", copied.firstFailed());
+    assertTrue(Files.exists(out.resolve("IM1")));
+    assertFalse(Files.exists(out.resolve("LINK")));
+  }
+
+  @Test
   void aCompleteCopyReportsNothingLost() throws IOException {
     Path disc = Files.createDirectories(tmp.resolve("disc"));
     Files.writeString(disc.resolve("IM1"), "one");

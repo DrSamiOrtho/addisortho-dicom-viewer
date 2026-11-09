@@ -12,6 +12,7 @@ package org.weasis.dicom.explorer.imp;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.BooleanSupplier;
@@ -97,8 +98,15 @@ public class LoadDisc extends LoadLocalDicom {
     String firstFailed = null;
     List<Path> files;
     try (Stream<Path> walk = Files.walk(disc)) {
+      List<Path> all = walk.toList();
+      // A link could lead off the disc, so it is reported and never followed.
+      for (Path link : all.stream().filter(Files::isSymbolicLink).toList()) {
+        failed++;
+        firstFailed = firstFailed == null ? link.getFileName().toString() : firstFailed;
+      }
       files =
-          walk.filter(Files::isRegularFile)
+          all.stream()
+              .filter(f -> Files.isRegularFile(f, LinkOption.NOFOLLOW_LINKS))
               .filter(f -> !isSkipped(disc.relativize(f).toString()))
               .sorted()
               .toList();
