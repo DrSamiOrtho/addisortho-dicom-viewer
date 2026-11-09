@@ -14,6 +14,7 @@ import com.formdev.flatlaf.util.SystemFileChooser;
 import java.awt.Dialog;
 import java.io.File;
 import java.net.URI;
+import java.text.MessageFormat;
 import java.util.Collections;
 import java.util.List;
 import javax.swing.JButton;
@@ -166,7 +167,8 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
       // Read straight off a CD/DVD, every image shown again goes back to the slow drive, and the
       // disc cannot come out: a disc is always copied into the viewer.
       boolean writeInCache = checkboxWriteInCache.isSelected() || DiscDrive.isOnDisc(file.toPath());
-      List<LoadSeries> loadSeries = loadDicomDir(file, dicomModel, writeInCache).series();
+      Opened opened = loadDicomDir(file, dicomModel, writeInCache);
+      List<LoadSeries> loadSeries = opened.series();
 
       if (loadSeries != null && !loadSeries.isEmpty()) {
         DicomModel.LOADING_EXECUTOR.execute(
@@ -177,7 +179,7 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
         int response =
             JOptionPane.showConfirmDialog(
                 WinUtil.getValidComponent(this),
-                Messages.getString("DicomExplorer.mes_import_manual"),
+                manualImportQuestion(opened),
                 this.getTitle(),
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.WARNING_MESSAGE);
@@ -195,6 +197,19 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
         }
       }
     }
+  }
+
+  /** Says first what is known to be missing, since the folder import cannot know of it. */
+  private static String manualImportQuestion(Opened opened) {
+    String question = Messages.getString("DicomExplorer.mes_import_manual");
+    return opened.unavailable() == 0
+        ? question
+        : MessageFormat.format(
+                Messages.getString("DicomDirImport.unavailable"),
+                opened.unavailable(),
+                opened.firstUnavailable())
+            + "\n\n"
+            + question;
   }
 
   /**
