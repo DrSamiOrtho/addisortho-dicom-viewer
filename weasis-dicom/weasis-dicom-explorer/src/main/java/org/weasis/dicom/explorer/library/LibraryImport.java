@@ -131,6 +131,19 @@ final class LibraryImport {
   }
 
   /**
+   * @param lost files that never reached this import, such as those a damaged or ejected disc did
+   *     not give up: counted as failures, so the result cannot read as complete
+   * @param firstLost its name, for the user only
+   */
+  LibraryImport withFilesLostBefore(int lost, String firstLost) {
+    failed += lost;
+    if (lost > 0) {
+      problem(firstLost + ": Could not be read from the disc");
+    }
+    return this;
+  }
+
+  /**
    * @param paths files and folders
    * @param recursive also the subfolders of a folder; its own files are always included
    */

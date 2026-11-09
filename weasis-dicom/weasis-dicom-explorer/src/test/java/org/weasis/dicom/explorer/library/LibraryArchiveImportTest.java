@@ -466,6 +466,20 @@ class LibraryArchiveImportTest {
   }
 
   @Test
+  void filesADiscDidNotGiveUpMakeTheResultIncomplete() throws IOException {
+    Path copied = file("copy/IM1", bytes(image(STUDY_A, "1.2.3.1", "001", (byte) 1)));
+
+    LibraryImport.Report report =
+        new LibraryImport(store, () -> false)
+            .withFilesLostBefore(2, "IM2")
+            .run(List.of(copied.getParent().toFile()), true);
+
+    assertEquals(1, report.stored());
+    assertEquals(2, report.failed());
+    assertTrue(report.firstProblem().contains("IM2"));
+  }
+
+  @Test
   void aFileThatOnlyLooksLikeAnArchiveIsReported() throws IOException {
     Path fake = tmp.resolve("bad.zip");
     Files.write(fake, new byte[] {'P', 'K', 3, 4, 9, 9, 9, 9, 9, 9});
