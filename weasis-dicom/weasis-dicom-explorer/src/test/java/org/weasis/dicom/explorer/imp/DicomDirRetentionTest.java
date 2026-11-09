@@ -10,6 +10,8 @@
 package org.weasis.dicom.explorer.imp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -56,6 +58,16 @@ class DicomDirRetentionTest {
     } finally {
       dicomdir.delete();
     }
+  }
+
+  @Test
+  void anEntryCannotClimbOutOfTheDicomdirFolder() {
+    File disc = new File("disc");
+
+    assertTrue(DicomDirLoader.isInside(disc, new File(disc, "DICOM/S1/IM1")));
+    assertFalse(DicomDirLoader.isInside(disc, new File(disc, "../secret/IM1")));
+    assertFalse(DicomDirLoader.isInside(disc, new File(disc, "DICOM/../../IM1")));
+    assertFalse(DicomDirLoader.isInside(disc, new File("/elsewhere/IM1")));
   }
 
   @Test

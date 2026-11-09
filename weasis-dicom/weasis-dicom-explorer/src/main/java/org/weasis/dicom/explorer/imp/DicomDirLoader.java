@@ -13,6 +13,8 @@ package org.weasis.dicom.explorer.imp;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -376,6 +378,16 @@ public class DicomDirLoader {
     return null;
   }
 
+  /** A DICOMDIR names files below its own folder only; a name made to climb out is refused. */
+  static boolean isInside(File folder, File file) {
+    try {
+      Path base = folder.toPath().toAbsolutePath().normalize();
+      return file.toPath().toAbsolutePath().normalize().startsWith(base);
+    } catch (InvalidPathException e) {
+      return false;
+    }
+  }
+
   private File toFileName(Attributes dcmObject, DicomDirReader reader) {
     String[] fileID = dcmObject.getStrings(Tag.ReferencedFileID);
     if (fileID == null || fileID.length == 0) {
@@ -386,6 +398,10 @@ public class DicomDirLoader {
       sb.append(File.separatorChar).append(fileID[i]);
     }
     File file = new File(reader.getFile().getParent(), sb.toString());
+    if (!isInside(reader.getFile().getParentFile(), file)) {
+      LOGGER.warn("Ignoring a DICOMDIR entry that points outside its folder");
+      return null;
+    }
     if (!file.exists()) {
       // Try to find lower case relative path, it happens sometimes when mounting cdrom on Linux
       File fileLowerCase = new File(reader.getFile().getParent(), sb.toString().toLowerCase());
