@@ -14,8 +14,10 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.BulkData;
 import org.dcm4che3.data.Fragments;
@@ -63,6 +65,7 @@ public class DicomDirLoader {
 
   private final DicomModel dicomModel;
   private final ArrayList<LoadSeries> seriesList;
+  private final Set<File> referencedFiles = new LinkedHashSet<>();
   private final WadoParameters wadoParameters;
   private final boolean writeInCache;
   private final File dcmDirFile;
@@ -86,6 +89,14 @@ public class DicomDirLoader {
                 .getIntProperty(LoadSeries.CONCURRENT_DOWNLOADS_IN_SERIES, 4)
             : 1;
     seriesList = new ArrayList<>();
+  }
+
+  /**
+   * Every file the DICOMDIR read so far refers to, including one that is missing: the library copy
+   * reports that one instead of passing over it.
+   */
+  public List<File> referencedFiles() {
+    return List.copyOf(referencedFiles);
   }
 
   public List<LoadSeries> readDicomDir() {
@@ -216,6 +227,7 @@ public class DicomDirLoader {
             if (sop == null) {
               File file = toFileName(instance, reader);
               if (file != null) {
+                referencedFiles.add(file);
                 if (file.exists()) {
                   sop = new SopInstance(sopInstanceUID, frame);
                   sop.setDirectDownloadFile(file.toURI().toString());

@@ -100,6 +100,7 @@ final class LibraryImport {
   private int archivesRefused;
   private int nestedArchives;
   private boolean wasCancelled;
+  private boolean onlyDicom;
   private final List<Path> pictures = new ArrayList<>();
 
   LibraryImport(StudyStore store, BooleanSupplier cancelled) {
@@ -118,6 +119,15 @@ final class LibraryImport {
     this.cancelled = cancelled;
     this.limits = limits;
     this.progress = progress;
+  }
+
+  /**
+   * @param expected every path was named as an image, so one that cannot be read is a failure to
+   *     report and not merely some other kind of file
+   */
+  LibraryImport expectingOnlyDicom(boolean expected) {
+    onlyDicom = expected;
+    return this;
   }
 
   /**
@@ -175,6 +185,11 @@ final class LibraryImport {
    */
   private void importFile(Path file, boolean chosen) {
     Attributes source = usableHeader(file);
+    if (source == null && onlyDicom) {
+      failed++;
+      problem(file.getFileName() + ": The image file cannot be read");
+      return;
+    }
     if (source == null) {
       if (isArchive(file) || hasZipName(file)) {
         importArchive(file, chosen);
