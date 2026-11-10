@@ -24,6 +24,7 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeAll;
@@ -113,6 +114,26 @@ class StitchProjectsTest {
     for (StitchProjects.Listed l : listed) {
       assertEquals(first.sources(), l.project().sources());
     }
+  }
+
+  @Test
+  void aVersionIsNeverListedBeforeTheOneItWasEditedFrom() throws IOException {
+    StitchProjects projects = new StitchProjects(store());
+    // a chain saved within one instant, and its last link dated before all the others
+    List<String> chain = new ArrayList<>();
+    String projectId = null;
+    String parent = null;
+    for (int i = 0; i < 6; i++) {
+      StitchProject v = version(projectId, parent, i == 5 ? 0 : 7);
+      projects.save(v);
+      chain.add(v.versionId());
+      projectId = v.projectId();
+      parent = v.versionId();
+    }
+
+    assertEquals(
+        chain,
+        projects.list(StitchFixture.STUDY).stream().map(StitchProjects.Listed::versionId).toList());
   }
 
   @Test

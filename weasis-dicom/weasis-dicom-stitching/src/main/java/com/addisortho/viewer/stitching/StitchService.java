@@ -14,7 +14,6 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -177,9 +176,18 @@ final class StitchService {
     }
   }
 
-  /** Saves the stitch for good in the study library of this computer. */
-  static StudyStore.SavedDerived save(Stitch s, Compositor.Progress progress) throws IOException {
-    return save(StudyLibrary.getInstance().store(), s, progress);
+  /**
+   * Saves the stitch for good in the study library of this computer and, where {@code projects} are
+   * kept, as an editable version.
+   */
+  static Saved save(
+      StitchProjects projects,
+      Stitch s,
+      List<SeamRecipe> recipes,
+      StitchResume.Lineage lineage,
+      Compositor.Progress progress)
+      throws IOException {
+    return save(StudyLibrary.getInstance().store(), projects, s, recipes, lineage, progress);
   }
 
   /**
@@ -235,7 +243,7 @@ final class StitchService {
               s,
               recipes,
               lineage,
-              Instant.now().truncatedTo(ChronoUnit.SECONDS),
+              Instant.now(),
               picture.instance().sopUid(),
               picture.instance().seriesUid());
       projects.save(version);

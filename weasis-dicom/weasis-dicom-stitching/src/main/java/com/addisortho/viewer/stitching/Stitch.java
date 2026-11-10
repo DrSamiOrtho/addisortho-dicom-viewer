@@ -118,6 +118,10 @@ final class Stitch {
 
   /** Automatic when every seam is, manual when every seam is, otherwise semi-automatic. */
   Seam.Method method() {
+    return method(seams);
+  }
+
+  static Seam.Method method(List<Seam> seams) {
     if (seams.stream().allMatch(s -> s.method() == Seam.Method.AUTOMATIC)) {
       return Seam.Method.AUTOMATIC;
     }

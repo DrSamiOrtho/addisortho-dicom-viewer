@@ -15,7 +15,9 @@ import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * The versions of stitch projects in a {@link ProjectStore}: saving a new version under its parent,
@@ -98,22 +100,51 @@ final class StitchProjects {
     return p;
   }
 
-  /** Every version kept for the study, oldest first, those that cannot be read last. */
+  /**
+   * Every version kept for the study, oldest first and never before the version it was edited from
+   * (two saved in the same instant, or a clock set back, cannot put a child first); those that
+   * cannot be read come last.
+   */
   List<Listed> list(String studyInstanceUid) throws IOException {
-    List<Listed> out = new ArrayList<>();
+    List<Listed> readable = new ArrayList<>();
+    List<Listed> unreadable = new ArrayList<>();
     for (String id : store.list(studyInstanceUid)) {
       try {
-        out.add(new Listed(id, load(studyInstanceUid, id), null));
+        readable.add(new Listed(id, load(studyInstanceUid, id), null));
       } catch (StitchProjectException e) {
-        out.add(new Listed(id, null, e.getMessage()));
+        unreadable.add(new Listed(id, null, e.getMessage()));
       }
     }
-    out.sort(
-        Comparator.comparing((Listed l) -> l.project() == null)
-            .thenComparing(
-                l -> l.project() == null ? null : l.project().savedAt(),
-                Comparator.nullsLast(Comparator.naturalOrder()))
-            .thenComparing(Listed::versionId));
+    readable.sort(
+        Comparator.comparing((Listed l) -> l.project().savedAt()).thenComparing(Listed::versionId));
+    unreadable.sort(Comparator.comparing(Listed::versionId));
+    List<Listed> out = parentsFirst(readable);
+    out.addAll(unreadable);
+    return out;
+  }
+
+  private static List<Listed> parentsFirst(List<Listed> byTime) {
+    Set<String> all = new HashSet<>();
+    byTime.forEach(l -> all.add(l.versionId()));
+    List<Listed> out = new ArrayList<>();
+    Set<String> placed = new HashSet<>();
+    List<Listed> waiting = new ArrayList<>(byTime);
+    while (!waiting.isEmpty()) {
+      int before = waiting.size();
+      for (var it = waiting.iterator(); it.hasNext(); ) {
+        Listed l = it.next();
+        String parent = l.project().parentVersionId();
+        if (parent == null || placed.contains(parent) || !all.contains(parent)) {
+          out.add(l);
+          placed.add(l.versionId());
+          it.remove();
+        }
+      }
+      if (waiting.size() == before) {
+        out.addAll(waiting); // parents that name each other: listed all the same
+        break;
+      }
+    }
     return out;
   }
 }

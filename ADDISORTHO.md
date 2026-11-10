@@ -432,6 +432,22 @@ automatic, semi-automatic or manual, and not reviewed.
   stays only in the seam editor's difference view. The header gains Manufacturer and LossyImageCompression, and a
   calibration description that fits in 64 characters. Hovering a seam's notes shows every reason. Not yet tested on
   the real study or in the running viewer; the templating page still does not read the seam data.
+- 10 Nov 2026, editable stitch projects (branch `addisortho/stitch-edit-fable-52`; built and tested with synthetic
+  pieces only, not run in the installed viewer). A saved stitch can be kept as a project and reopened: `StitchProject`
+  is one version (schema 1, JSON written by `StitchProjectIO` in a fixed order with a checksum; the class comment gives
+  the coordinates and says which fields are source facts, decisions and results). Sources are named by SOP Instance UID
+  and proved by a SHA-256 of the pixels the stitch uses (`Piece.pixelHash`); there is no patient name, file name or
+  path in it. `SeamRecipe` is how a seam was set (automatic match on a band, both legs, refine from a hand position,
+  picked points, then a hand move) and makes the seam again through the same `SeamMatcher` calls, so reopening
+  (`StitchResume`) checks every seam afresh: a seam that does not come out as saved is held as failed where it was
+  saved, never passed. Reopening is refused unless every piece is open, once, unchanged; nothing is put in a missing
+  piece's place. An edit is a new version naming its parent (`StitchProjects`); no version and no saved picture is
+  written over. The flattened Secondary Capture and its private seam data are never read as editing state.
+  Storage is the `ProjectStore` interface (write-once documents by study and version id; its comment states what an
+  implementation must guarantee). **No implementation ships yet**: `StitchService.projectStore()` is empty, so the
+  window saves the picture only and shows no **Edit stitch...** button. Once the study library supplies a store there,
+  Save also keeps a version and Edit stitch lists the study's versions. `StitchDialogEditTest` drives the real window
+  against a store in a temporary folder (`FolderProjectStore`, test code only); it is skipped where there is no display.
 
 ## Shortcuts (6 Nov 2026)
 
