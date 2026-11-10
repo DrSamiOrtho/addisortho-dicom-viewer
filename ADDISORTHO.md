@@ -475,8 +475,10 @@ automatic, semi-automatic or manual, and not reviewed.
   hidden temporary file forced to the disk, then gets its name by a hard link (refused by the file system if the name
   exists, also from another process), under a process lock and a file lock in the study folder; without hard links a
   plain move under the same locks. The folder is flushed and the bytes read back before put returns; leftovers of a
-  stopped write are never listed and the next write removes them. Deleting a study leaves its projects in place, and
-  projects do not travel in exports: both await Sami's decision. Tested on synthetic data in unit tests, including
+  stopped write are never listed and the next write removes them. Deleting a study from the library deletes its projects
+  with it (Sami, 10 Nov 2026; `StudyStore.deleteStudy` reads the study's UID from its images, deletes the folder, then
+  every project of that study under the write locks); other studies' projects are untouched. Projects do not travel
+  in exports, pending Sami's word. Tested on synthetic data in unit tests, including
   two threads and two processes. Installed-app round trip, 10 Nov 2026, on the Latest Full build (ec3a72bf8) with
   only the explorer and stitching bundles swapped, three synthetic CR pieces: the bundle resolves with its Jackson
   imports; Line up and Save keep version 1; after a quit and restart Edit stitch lists and reopens it with pieces,

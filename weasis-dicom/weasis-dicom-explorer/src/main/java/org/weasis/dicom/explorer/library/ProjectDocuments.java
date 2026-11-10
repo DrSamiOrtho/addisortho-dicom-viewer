@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemException;
@@ -51,8 +52,9 @@ import java.util.regex.Pattern;
  *       library. The check and the link are also made under a lock held by this process and by a
  *       file lock in the study's folder, which other processes of this viewer respect. Where the
  *       file system has no hard links the name is given by a move made under the same two locks,
- *       which holds against every caller that uses this class. Nothing here deletes or rewrites a
- *       document.
+ *       which holds against every caller that uses this class. Nothing rewrites a document, and
+ *       nothing deletes one except the deletion of its whole study from the library ({@link
+ *       #deleteStudy}, Sami's decision of 10 Nov 2026).
  *   <li><b>Durable on return.</b> The file and then its folder are forced to the disk before {@link
  *       #put} returns (Windows journals the name itself), and the document is read back and
  *       compared.
@@ -223,6 +225,64 @@ public final class ProjectDocuments {
       throw new IOException("The kept documents of this study could not be listed.", e);
     }
     return ids;
+  }
+
+  /**
+   * Deletes every document of every kind kept for the study, with their folders. Only for when the
+   * study itself is deleted from the library: its projects go with it (Sami, 10 Nov 2026). Each
+   * study's documents are deleted under the same two locks a write takes, so no write is cut in
+   * half; a write that comes after finds its study gone and fails.
+   *
+   * @throws IOException when a document could not be deleted; those not yet reached are kept
+   */
+  static void deleteStudy(Path storeRoot, String studyUid) throws IOException {
+    Path all = storeRoot.toAbsolutePath().normalize().resolve(FOLDER);
+    if (studyUid == null
+        || !STUDY_UID.matcher(studyUid).matches()
+        || studyUid.contains("..")
+        || !Files.isDirectory(all, LinkOption.NOFOLLOW_LINKS)) {
+      return;
+    }
+    List<String> kinds = new ArrayList<>();
+    try (DirectoryStream<Path> entries = Files.newDirectoryStream(all)) {
+      for (Path entry : entries) {
+        String name = entry.getFileName().toString();
+        if (KIND.matcher(name).matches() && Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
+          kinds.add(name);
+        }
+      }
+    }
+    for (String kind : kinds) {
+      new ProjectDocuments(storeRoot, kind).deleteAll(studyUid);
+    }
+  }
+
+  private void deleteAll(String studyUid) throws IOException {
+    Path study = studyFolder(studyUid);
+    if (!Files.isDirectory(study, LinkOption.NOFOLLOW_LINKS)) {
+      return;
+    }
+    ReentrantLock inProcess = LOCKS.computeIfAbsent(study.toRealPath(), _ -> new ReentrantLock());
+    inProcess.lock();
+    try (FileChannel lockFile =
+            FileChannel.open(
+                study.resolve(LOCK), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+        FileLock _ = lockFile.lock();
+        DirectoryStream<Path> files = Files.newDirectoryStream(study)) {
+      for (Path f : files) {
+        if (!f.getFileName().toString().equals(LOCK)) {
+          Files.deleteIfExists(f);
+        }
+      }
+    } finally {
+      inProcess.unlock();
+    }
+    Files.deleteIfExists(study.resolve(LOCK));
+    try {
+      Files.deleteIfExists(study);
+    } catch (DirectoryNotEmptyException e) {
+      // a write made after the deletion: left for the user, never deleted unseen
+    }
   }
 
   private Path studyFolder(String studyUid) throws IOException {

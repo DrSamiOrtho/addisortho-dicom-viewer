@@ -365,19 +365,49 @@ class ProjectDocumentsTest {
   }
 
   @Test
-  void deletingTheStudyLeavesItsDocumentsUntilSamiDecides() throws IOException {
+  void deletingAStudyDeletesItsDocumentsAndNoOtherStudys() throws IOException {
     StudyStore store = new StudyStore(root, true);
     store.prepare();
     store(store, "1.2.826.0.1.3680043.8.498.20");
-    String id = id();
-    store.projects("stitch").put(STUDY, id, doc("kept"));
+    String other = "1.2.826.0.1.3680043.8.498.99";
+    String kept = id();
+    store.projects("stitch").put(other, kept, doc("another study"));
+    for (int i = 0; i < 3; i++) {
+      store.projects("stitch").put(STUDY, id(), doc("v" + i));
+    }
+    Files.write(studyFolder().resolve("." + id() + "-x.part"), new byte[] {1, 2});
 
     store.deleteStudy(store.listStudies().getFirst().folder());
 
     assertEquals(List.of(), store.listStudies());
-    // what becomes of a deleted study's projects is the owner's decision; until then nothing
-    // deletes a version
-    assertArrayEquals(doc("kept"), store.projects("stitch").get(STUDY, id));
+    assertEquals(List.of(), store.projects("stitch").list(STUDY));
+    assertFalse(Files.exists(studyFolder()), "the study's projects folder is gone");
+    assertArrayEquals(doc("another study"), store.projects("stitch").get(other, kept));
     assertThrows(IOException.class, () -> store.deleteStudy(root.resolve(".projects")));
+  }
+
+  @Test
+  void deletingAStudyWithNoProjectsStillWorks() throws IOException {
+    StudyStore store = new StudyStore(root, true);
+    store.prepare();
+    store(store, "1.2.826.0.1.3680043.8.498.20");
+
+    store.deleteStudy(store.listStudies().getFirst().folder());
+
+    assertEquals(List.of(), store.listStudies());
+  }
+
+  @Test
+  void aNewVersionCanBeSavedForTheStudyAfterItsProjectsWereDeleted() throws IOException {
+    StudyStore store = new StudyStore(root, true);
+    store.prepare();
+    store(store, "1.2.826.0.1.3680043.8.498.20");
+    store.projects("stitch").put(STUDY, id(), doc("old"));
+    store.deleteStudy(store.listStudies().getFirst().folder());
+
+    String id = id();
+    store.projects("stitch").put(STUDY, id, doc("new"));
+
+    assertEquals(List.of(id), store.projects("stitch").list(STUDY));
   }
 }
