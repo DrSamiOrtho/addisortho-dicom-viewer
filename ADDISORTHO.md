@@ -455,8 +455,13 @@ automatic, semi-automatic or manual, and not reviewed.
   once the chosen version has been checked, so a refused or cancelled reopen leaves it as it was; and the save checks
   the version and its parent before the picture is written, and refuses an ordinary save of a failed seam, so a refused
   stitch leaves no picture. A project-store failure after the picture is written still leaves the picture alone, and
-  the user is told. Still open: **Refine automatically from here** and **Fit to the points** apply no leg-by-leg check
-  when the target leg is Both (`SeamMatcher` has none for them).
+  the user is told. Then, at Sami's word the same day, target leg Both is held on the hand paths too:
+  **Refine automatically from here** refines the whole width and each half from the hand-set position and is judged
+  as Line up's Both match is (`SeamMatcher.refineBothLegs`; a refused seam stays where the user put it), and **Fit to
+  the points** needs a point pair on each leg, so the left-out check holds one leg's points against the other's
+  (`manualBothLegs`). Both only add refusals: on a synthetic film whose legs sit 3 mm apart, the plain whole-width
+  refine gave "check" and the leg-by-leg one fails. The limits are Line up's (1.5 mm, 0.3 deg) and are not validated
+  on real films.
 
 ## Shortcuts (6 Nov 2026)
 

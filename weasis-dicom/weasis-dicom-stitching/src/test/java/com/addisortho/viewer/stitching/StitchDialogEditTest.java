@@ -636,6 +636,40 @@ class StitchDialogEditTest {
     assertEquals(start, again, "the hand move is gone with the new match");
   }
 
+  /**
+   * Picks matching points in the seam window as a user does: Pick matching points, then for each
+   * point of the lower piece a click on where the seam {@code t} puts it in the upper view and a
+   * click on it in the lower view, to the nearest millimetre.
+   */
+  private static void pick(SeamEditor editor, List<Piece> pieces, Rigid t, double[][] lowerPoints)
+      throws Exception {
+    List<ImagePanel> views = new ArrayList<>();
+    Window.collect(editor.getContentPane(), ImagePanel.class, views);
+    ImagePanel upperView = views.get(1);
+    ImagePanel lowerView = views.get(2);
+    // the upper view begins 20 mm above the overlap
+    double top =
+        Math.max(
+            0,
+            SeamMatcher.overlap(
+                    pieces.get(0).widthMm(), pieces.get(0).heightMm(), t, pieces.get(1).match())[1]
+                - 20);
+    onEdt(
+        () -> {
+          editorButton(editor, "SeamEditor.pick").doClick(0);
+          return null;
+        });
+    for (double[] q : lowerPoints) {
+      double[] to = t.apply(q[0], q[1]);
+      mouse(
+          upperView,
+          MouseEvent.MOUSE_PRESSED,
+          (int) Math.round(to[0]),
+          (int) Math.round(to[1] - top));
+      mouse(lowerView, MouseEvent.MOUSE_PRESSED, (int) q[0], (int) q[1]);
+    }
+  }
+
   /** Presses a button of the seam window that works in the background, and waits for it. */
   private static void pressAndWait(SeamEditor editor, String key) throws Exception {
     AbstractButton button = editorButton(editor, key);
@@ -743,7 +777,8 @@ class StitchDialogEditTest {
 
     // reopened, it is checked leg by leg again, and a rematch there is still leg by leg
     TestHost later = new TestHost(true);
-    Window second = new Window(later, fixture.pieces());
+    List<Piece> secondPieces = fixture.pieces();
+    Window second = new Window(later, secondPieces);
     await("the list of versions", () -> second.enabled("StitchDialog.edit"));
     second.click("StitchDialog.edit");
     await("the saved stitch to open", () -> second.enabled("StitchDialog.save"));
@@ -751,6 +786,63 @@ class StitchDialogEditTest {
     SeamEditor reopened = onEdt(() -> second.dialog.seamWindow(0));
     pressAndWait(reopened, "SeamEditor.auto");
     assertEquals(SeamRecipe.matchBothLegs(), use(reopened).recipe());
+
+    // nudged and refined from there, it is refined leg by leg as well
+    List<Piece> open = secondPieces;
+    SeamEditor refining = onEdt(() -> second.dialog.seamWindow(0));
+    onEdt(
+        () -> {
+          JComponent root = (JComponent) refining.getContentPane();
+          for (int i = 0; i < 6; i++) {
+            root.getActionMap().get("right").actionPerformed(null);
+          }
+          return null;
+        });
+    pressAndWait(refining, "SeamEditor.refine");
+    SeamRecipe.Made refined = use(refining);
+    assertEquals(SeamRecipe.Kind.REFINE_BOTH_LEGS, refined.recipe().kind());
+    assertEquals(
+        Seam.Status.CHECK, refined.seam().status(), () -> refined.seam().reasons().toString());
+    assertTrue(
+        refined.seam().reasons().get(0).contains("left and right legs, matched one at a time"),
+        refined.seam().reasons().toString());
+    assertEquals(
+        refined.seam(),
+        refined.recipe().compute(open.get(0).match(), open.get(1).match()),
+        "and it can be made again");
+
+    // matching points picked on one leg only cannot confirm a seam for both
+    Rigid t = saved.seams().get(0).result().transform();
+    SeamEditor picking = onEdt(() -> second.dialog.seamWindow(0));
+    pick(picking, open, t, new double[][] {{95, 20}, {120, 45}, {105, 70}});
+    onEdt(
+        () -> {
+          editorButton(picking, "SeamEditor.fit").doClick(0);
+          return null;
+        });
+    SeamRecipe.Made oneLegOnly = use(picking);
+    assertEquals(SeamRecipe.Kind.POINTS_BOTH_LEGS, oneLegOnly.recipe().kind());
+    assertEquals(Seam.Status.FAILED, oneLegOnly.seam().status());
+    assertTrue(
+        oneLegOnly.seam().reasons().get(0).contains("every point pair is on the left half"),
+        oneLegOnly.seam().reasons().toString());
+    // with a pair on the other leg the rule is met, and the left-out check decides as before
+    SeamEditor pickingBoth = onEdt(() -> second.dialog.seamWindow(0));
+    pick(pickingBoth, open, t, new double[][] {{95, 20}, {120, 70}, {310, 25}, {330, 60}});
+    onEdt(
+        () -> {
+          editorButton(pickingBoth, "SeamEditor.fit").doClick(0);
+          return null;
+        });
+    SeamRecipe.Made bothLegsPicked = use(pickingBoth);
+    assertEquals(SeamRecipe.Kind.POINTS_BOTH_LEGS, bothLegsPicked.recipe().kind());
+    assertEquals(4, bothLegsPicked.recipe().points().size());
+    assertFalse(
+        String.join(" ", bothLegsPicked.seam().reasons()).contains("half of the image"),
+        bothLegsPicked.seam().reasons().toString());
+    assertEquals(
+        bothLegsPicked.seam(),
+        bothLegsPicked.recipe().compute(open.get(0).match(), open.get(1).match()));
 
     // one target leg on its half of the film is the ordinary match on that half
     onEdt(

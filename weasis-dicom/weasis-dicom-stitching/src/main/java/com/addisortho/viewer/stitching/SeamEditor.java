@@ -100,7 +100,8 @@ final class SeamEditor extends JDialog {
   /**
    * @param made the seam as it stands, with how it was set
    * @param automatic how Automatic match again matches: exactly as Line up does for the leg and
-   *     band confirmed, so a film of both legs is still matched leg by leg
+   *     band confirmed. When that is leg by leg (target leg Both), Refine automatically from here
+   *     and Fit to the points are checked leg by leg too
    * @param whole the whole stitch with seam {@code index} replaced by the seam given, drawn beside
    *     the overlap and redrawn after each move; null to show the overlap only
    */
@@ -150,7 +151,7 @@ final class SeamEditor extends JDialog {
     fit.addActionListener(
         e -> {
           if (!pairs.isEmpty()) {
-            SeamRecipe fitted = SeamRecipe.points(pairs);
+            SeamRecipe fitted = automatic.fitTo(pairs);
             setSeam(fitted, fitted.compute(upper.match(), lower.match()));
           }
         });
@@ -181,7 +182,7 @@ final class SeamEditor extends JDialog {
     refine.addActionListener(
         e -> {
           refine.setEnabled(false);
-          SeamRecipe refined = SeamRecipe.refine(band, this.seam.transform());
+          SeamRecipe refined = automatic.refineFrom(band, this.seam.transform());
           new SwingWorker<Seam, Void>() {
             @Override
             protected Seam doInBackground() {

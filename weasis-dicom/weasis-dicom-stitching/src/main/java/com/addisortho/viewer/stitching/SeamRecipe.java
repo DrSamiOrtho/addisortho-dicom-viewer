@@ -16,9 +16,9 @@ import java.util.List;
  * so a reopened seam is measured afresh instead of being believed (see {@link StitchProject}).
  *
  * @param kind which match made the seam
- * @param band the columns matched on; null for {@link Kind#MATCH_BOTH_LEGS} and {@link Kind#POINTS}
- * @param start the position set by hand that {@link Kind#REFINE} started from, else null
- * @param points the pairs the user picked for {@link Kind#POINTS}, else empty
+ * @param band the columns matched on, for {@link Kind#MATCH} and {@link Kind#REFINE}; else null
+ * @param start the position set by hand that a refine started from, else null
+ * @param points the pairs the user picked, for the two kinds of points; else empty
  * @param movedTo where the user then put the lower piece by hand (drag, nudge, turn), or null: the
  *     seam is the match's seam {@linkplain Seam#adjusted adjusted} to this, so it stays where the
  *     user put it and a failed seam stays failed
@@ -35,7 +35,15 @@ record SeamRecipe(
     /** {@link SeamMatcher#refine} from a position set by hand. */
     REFINE,
     /** {@link SeamMatcher#manual} on picked point pairs. */
-    POINTS
+    POINTS,
+    /** {@link SeamMatcher#refineBothLegs}: target leg Both, from a position set by hand. */
+    REFINE_BOTH_LEGS,
+    /** {@link SeamMatcher#manualBothLegs}: target leg Both, on picked point pairs. */
+    POINTS_BOTH_LEGS;
+
+    boolean bothLegs() {
+      return this == MATCH_BOTH_LEGS || this == REFINE_BOTH_LEGS || this == POINTS_BOTH_LEGS;
+    }
   }
 
   /** A seam together with the decision that made it. */
@@ -44,9 +52,11 @@ record SeamRecipe(
   SeamRecipe {
     points = List.copyOf(points);
     boolean wantsBand = kind == Kind.MATCH || kind == Kind.REFINE;
+    boolean wantsStart = kind == Kind.REFINE || kind == Kind.REFINE_BOTH_LEGS;
+    boolean wantsPoints = kind == Kind.POINTS || kind == Kind.POINTS_BOTH_LEGS;
     if (wantsBand != (band != null)
-        || (kind == Kind.REFINE) != (start != null)
-        || (kind == Kind.POINTS) == points.isEmpty()) {
+        || wantsStart != (start != null)
+        || wantsPoints == points.isEmpty()) {
       throw new IllegalArgumentException("a " + kind + " seam decision with the wrong parts");
     }
   }
@@ -67,6 +77,27 @@ record SeamRecipe(
     return new SeamRecipe(Kind.POINTS, null, null, pairs, null);
   }
 
+  static SeamRecipe refineBothLegs(Rigid start) {
+    return new SeamRecipe(Kind.REFINE_BOTH_LEGS, null, start, List.of(), null);
+  }
+
+  static SeamRecipe pointsBothLegs(List<Rigid.Pair> pairs) {
+    return new SeamRecipe(Kind.POINTS_BOTH_LEGS, null, null, pairs, null);
+  }
+
+  /**
+   * How Refine automatically from here is done after this kind of match: leg by leg when the seams
+   * are matched for both legs, else on {@code band}.
+   */
+  SeamRecipe refineFrom(SeamMatcher.Band band, Rigid start) {
+    return kind.bothLegs() ? refineBothLegs(start) : refine(band, start);
+  }
+
+  /** How Fit to the points is done after this kind of match. */
+  SeamRecipe fitTo(List<Rigid.Pair> pairs) {
+    return kind.bothLegs() ? pointsBothLegs(pairs) : points(pairs);
+  }
+
   /** The same match, with the lower piece then put at {@code to} by hand. */
   SeamRecipe moved(Rigid to) {
     return new SeamRecipe(kind, band, start, points, to);
@@ -80,6 +111,8 @@ record SeamRecipe(
           case MATCH_BOTH_LEGS -> SeamMatcher.matchBothLegs(upper, lower);
           case REFINE -> SeamMatcher.refine(upper, lower, band, start);
           case POINTS -> SeamMatcher.manual(points);
+          case REFINE_BOTH_LEGS -> SeamMatcher.refineBothLegs(upper, lower, start);
+          case POINTS_BOTH_LEGS -> SeamMatcher.manualBothLegs(points, upper.widthMm());
         };
     return movedTo == null ? matched : matched.adjusted(movedTo);
   }

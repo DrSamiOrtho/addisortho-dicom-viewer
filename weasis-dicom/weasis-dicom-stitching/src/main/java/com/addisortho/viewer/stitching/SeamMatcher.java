@@ -468,9 +468,53 @@ final class SeamMatcher {
    * smaller uncertainty is used and the other half's agreement is stated.
    */
   static Seam matchBothLegs(MatchImage upper, MatchImage lower) {
-    Seam whole = match(upper, lower, Band.WHOLE);
-    Seam left = match(upper, lower, Band.LEFT_HALF);
-    Seam right = match(upper, lower, Band.RIGHT_HALF);
+    return bothLegs(
+        upper,
+        lower,
+        match(upper, lower, Band.WHOLE),
+        match(upper, lower, Band.LEFT_HALF),
+        match(upper, lower, Band.RIGHT_HALF),
+        ", or line the seam up by hand");
+  }
+
+  /**
+   * Target leg "Both", refined from a position set by hand (Sami, 10 Nov 2026): {@link #refine} on
+   * the whole width and on each half from that position, judged exactly as {@link #matchBothLegs}
+   * judges, so a hand-set seam on a film of both legs cannot become "check" on one leg's evidence.
+   * A seam this refuses stays where the user put it, without the refused fit.
+   */
+  static Seam refineBothLegs(MatchImage upper, MatchImage lower, Rigid start) {
+    Seam judged =
+        bothLegs(
+            upper,
+            lower,
+            refine(upper, lower, Band.WHOLE, start),
+            refine(upper, lower, Band.LEFT_HALF, start),
+            refine(upper, lower, Band.RIGHT_HALF, start),
+            ", or fit matching points picked on both legs");
+    if (judged.status() == Seam.Status.FAILED && !judged.transform().equals(start)) {
+      return new Seam(
+          start,
+          judged.method(),
+          Seam.Status.FAILED,
+          Double.NaN,
+          Double.NaN,
+          Double.NaN,
+          Double.NaN,
+          judged.uniqueness(),
+          Double.NaN,
+          List.of(),
+          judged.reasons());
+    }
+    return judged;
+  }
+
+  /**
+   * @param otherwise what else the user can do when the legs cannot be confirmed, after "choose one
+   *     target leg and match on its half of the image"
+   */
+  private static Seam bothLegs(
+      MatchImage upper, MatchImage lower, Seam whole, Seam left, Seam right, String otherwise) {
     // Both needs both legs matched on their own, agreeing, and the whole-width match passing;
     // a failure of any of these fails the seam (Kimi, second review: a passing whole-width seam
     // must not stand in for a leg that failed, and two halves must not erase a whole-width failure)
@@ -480,8 +524,8 @@ final class SeamMatcher {
           Seam.Status.FAILED,
           "the legs could not be matched one at a time to check that they agree: %s leg failed;"
                   .formatted(left.status() == Seam.Status.FAILED ? "the left" : "the right")
-              + " choose one target leg and match on its half of the image, or line the seam up"
-              + " by hand");
+              + " choose one target leg and match on its half of the image"
+              + otherwise);
     }
     Rigid base = whole.status() == Seam.Status.CHECK ? whole.transform() : left.transform();
     double[] box = overlap(upper.widthMm(), upper.heightMm(), base, lower);
@@ -512,7 +556,34 @@ final class SeamMatcher {
         Seam.Status.FAILED,
         words
             + ", within the limits, but the match on the whole width failed; choose one target"
-            + " leg and match on its half of the image, or line the seam up by hand");
+            + " leg and match on its half of the image"
+            + otherwise);
+  }
+
+  /**
+   * Target leg "Both", from the user's point pairs (Sami, 10 Nov 2026): {@link #manual}, and the
+   * pairs must lie on both legs, at least one in each half of the upper piece as shown. The
+   * left-out check then holds each leg's points against the fit of the others, so pairs picked on
+   * one leg alone cannot confirm a seam for both.
+   */
+  static Seam manualBothLegs(List<Rigid.Pair> pairs, double upperWidthMm) {
+    Seam seam = manual(pairs);
+    long onLeft = pairs.stream().filter(p -> p.tx() < upperWidthMm / 2).count();
+    if (pairs.isEmpty()) {
+      return seam;
+    }
+    if (onLeft == 0 || onLeft == pairs.size()) {
+      return withReason(
+          seam,
+          Seam.Status.FAILED,
+          "target leg Both, but every point pair is on the %s half of the image: pick at least"
+                  .formatted(onLeft == 0 ? "right" : "left")
+              + " one pair on the other leg too, so that both legs are held to one seam; or"
+              + " choose one target leg");
+    }
+    return seam.status() == Seam.Status.CHECK
+        ? withReason(seam, Seam.Status.CHECK, "the point pairs lie on both legs")
+        : seam;
   }
 
   private static Seam withReason(Seam s, Seam.Status status, String reason) {

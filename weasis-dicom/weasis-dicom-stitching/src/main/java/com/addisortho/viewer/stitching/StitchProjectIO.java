@@ -41,7 +41,8 @@ import java.util.Set;
  *  "choices":{"oneAcquisition":true,"projection":text,"position":text,
  *    "leg":RIGHT|LEFT|BOTH,"band":WHOLE|LEFT_HALF|RIGHT_HALF},
  *  "seams":[{
- *    "decision":{"kind":MATCH|MATCH_BOTH_LEGS|REFINE|POINTS,"band":band|null,
+ *    "decision":{"kind":MATCH|MATCH_BOTH_LEGS|REFINE|POINTS|REFINE_BOTH_LEGS|POINTS_BOTH_LEGS,
+ *      "band":band|null,
  *      "start":rigid|null,"points":[[fromX,fromY,toX,toY]],"movedTo":rigid|null},
  *    "cut":{"placedBy":AUTOMATIC|HAND,"requestedUpperMm":n|null},
  *    "result":{"transform":rigid,"method":automatic|semi-automatic|manual,"status":check|failed,
