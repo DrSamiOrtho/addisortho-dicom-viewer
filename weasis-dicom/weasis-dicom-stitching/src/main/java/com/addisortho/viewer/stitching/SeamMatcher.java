@@ -418,6 +418,13 @@ final class SeamMatcher {
     check.add("ruler and skin are not yet excluded from the match automatically");
     boolean failed = !fail.isEmpty();
     if (failed) {
+      // An automatic seam with enough agreeing points is left where those points agree, by shift
+      // alone: the rough position's shift-only search over a long overlap trades a small turn of
+      // the leg for a vertical error along a slanted shaft (real case, 10 Nov 2026: the knee-to-
+      // ankle seam left 7 mm above where the matched points, every band of the overlap and the
+      // machine's own stitch put it). Still no rotation, and still failed.
+      boolean onPoints = method == Seam.Method.AUTOMATIC && inliers.size() >= MIN_INLIERS;
+      Rigid placed = onPoints ? meanShift(inliers) : rough;
       check.add(
           0,
           String.format(
@@ -425,16 +432,18 @@ final class SeamMatcher {
               "placed at the %s (shift %.1f, %.1f mm, rotation %.2f deg) without the failed fit"
                   + " (%d points, rotation %.2f deg, residual %.2f mm): a match the gates refuse"
                   + " keeps no fitted rotation",
-              method == Seam.Method.AUTOMATIC
-                  ? "rough position refined by shift only"
-                  : "position set by hand",
-              rough.tx(),
-              rough.ty(),
-              rough.degrees(),
+              onPoints
+                  ? "average shift of the matched points"
+                  : method == Seam.Method.AUTOMATIC
+                      ? "rough position refined by shift only"
+                      : "position set by hand",
+              placed.tx(),
+              placed.ty(),
+              placed.degrees(),
               inliers.size(),
               fit.degrees(),
               rms));
-      fit = rough;
+      fit = placed;
       rms = Double.NaN;
       sigma = new double[] {Double.NaN, Double.NaN};
       scale = Double.NaN;
@@ -453,6 +462,20 @@ final class SeamMatcher {
         holdout,
         inliers,
         reasons);
+  }
+
+  /**
+   * The shift alone that best carries the matched points of the lower piece onto the upper one:
+   * their average displacement, which is right at their centre whatever small turn the fit found.
+   */
+  static Rigid meanShift(List<Rigid.Pair> pairs) {
+    double dx = 0;
+    double dy = 0;
+    for (Rigid.Pair q : pairs) {
+      dx += q.tx() - q.fx();
+      dy += q.ty() - q.fy();
+    }
+    return Rigid.shift(dx / pairs.size(), dy / pairs.size());
   }
 
   /** Two legs' seams may differ by this much at the overlap's centre and still be one seam. */

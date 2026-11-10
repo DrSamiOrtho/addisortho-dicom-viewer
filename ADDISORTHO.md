@@ -491,6 +491,15 @@ automatic, semi-automatic or manual, and not reviewed.
   told), and a reopen cancelled part way; after a hard kill a half-written leftover is not listed and the next save
   removes it. The study folder and catalog hold only the images, and the export dialog lists only images.
   Synthetic films only; not tested on Windows.
+- 10 Nov 2026, stitch 0.6 (at Sami's word, same branch). A refused automatic seam with at least 6 matched points is
+  now left at the matched points' average shift (no rotation, still failed), not at the rough 2 mm peak refined by
+  shift within 2 mm. On the real four-piece film matched on the left leg's half, the knee-to-ankle seam had been left
+  at 78.0 mm while that leg's matched points, every quarter of the overlap correlated on its own and the machine's
+  stitch put it at 84 to 85 mm (the leg turned about 0.6 deg between exposures; a shift-only search over a slanted
+  shaft turned that into a vertical error); it now lands at 83.7. The femur-to-knee seam on the same half moved from
+  305.8 to 303.9 mm, where that leg's own structure agrees (303 to 304); the machine's 306.9 is a compromise between
+  the two legs, which differ by about 4 mm there. Gates and thresholds unchanged. Reopened versions saved by 0.5 say
+  they were checked by a newer matcher, and a failed seam that now computes elsewhere is held where it was saved.
 
 ## Shortcuts (6 Nov 2026)
 
