@@ -49,11 +49,13 @@ import org.weasis.dicom.explorer.library.StudyStore;
  * message the window would show goes to the test instead. Skipped where there is no display, and
  * with {@code -Dstitch.window.tests=false}.
  *
- * <p>That switch is there because of two runs on macOS with JDK 27 (10 Nov 2026) in which the test
- * JVM itself died in a native display thread (CVDisplayLink). Both were runs against a build broken
- * on purpose, in which a failing test left its window undisposed; no run in which every window was
- * disposed has died. Every window is therefore disposed after each test, pass or fail. The crash
- * could not be reproduced outside these tests, so that is a strong lead, not a proven cause.
+ * <p>That switch is there because the test JVM itself has died three times on macOS with JDK 27 (10
+ * Nov 2026), in a native display thread (CVDisplayLink, objc_msgSend). All three were runs against
+ * a build broken on purpose, in which one of these tests failed: 3 of about 24 such runs, and none
+ * of about 50 runs in which every test passed. The cause is not known. It is not a window left
+ * undisposed by the failing test: the windows are disposed after each test now, and the third time
+ * came after that. It could not be reproduced outside these tests. So a red run may now and then
+ * show a dead JVM instead of the failing test's name; running it again shows the failure.
  */
 class StitchDialogEditTest {
 
@@ -226,10 +228,7 @@ class StitchDialogEditTest {
     return w;
   }
 
-  /**
-   * Disposes the test's windows and the seam windows they own. A window left behind by a failing
-   * test is the one thing the two runs that lost the JVM had in common (see the class comment).
-   */
+  /** Disposes the test's windows and the seam windows they own, whether it passed or failed. */
   @AfterEach
   void disposeWindows() throws Exception {
     onEdt(
