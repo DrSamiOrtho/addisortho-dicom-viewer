@@ -347,6 +347,11 @@ class BoneIsolationTest {
       return this;
     }
 
+    Scene shape(Shape shape, float hu) {
+      parts.add(new Part(shape, hu));
+      return this;
+    }
+
     /** A cylinder along z; {@code rx} and {@code ry} are its radii in voxels. */
     Scene cylinder(int cx, int cy, double rx, double ry, int z0, int z1, float hu) {
       parts.add(
@@ -640,6 +645,210 @@ class BoneIsolationTest {
         () -> assertEquals(2, r.bonePieces()),
         () -> assertFalse(r.region().get(21, 21, 9), "the middle of the square"),
         () -> assertTrue(r.region().get(11, 20, 9), "a bone"));
+  }
+
+  // ---- Bone under the threshold: thin cortex of an osteopenic bone on a standard kernel ----
+
+  /**
+   * A bone of radius 10 mm with a 2 mm cortex of 900 HU around spongy bone of 100 HU; on one side
+   * the cortex reads {@code weakHu} over a patch {@code patch} mm wide and high around slice 16.
+   */
+  private static Scene osteopenic(float weakHu, int patch) {
+    int half = patch / 2;
+    return new Scene(W, H, D, MM1)
+        .cylinder(CX, CY, 8, 8, 4, 35, 100)
+        .shape(
+            (x, y, z) ->
+                x >= CX + 6 && Math.abs(y - CY) <= half && Math.abs(z - 16) <= half && inBone(x, y),
+            weakHu)
+        .cylinder(CX, CY, 10, 10, 4, 35, 900)
+        .cylinder(CX, CY, 18, 18, 0, D - 1, 40);
+  }
+
+  private static boolean inBone(int x, int y) {
+    return (x - CX) * (x - CX) + (y - CY) * (y - CY) <= 100;
+  }
+
+  @Test
+  void aThinCortexUnderTheThresholdKeepsTheBoneWhole() {
+    // 250 HU over 9 by 9 mm of the cortex: the shell is open in nine slices, and without the growth
+    // their spongy inside is cut away, a crater at the radial head or a condyle.
+    Result r = osteopenic(250, 9).isolate();
+    VoxelBits kept = r.region();
+    assertAll(
+        () -> assertEquals(1, r.bonePieces()),
+        () -> assertTrue(kept.get(CX + 9, CY, 16), "the weak cortex"),
+        () -> assertTrue(kept.get(CX, CY, 16), "the spongy bone behind it"),
+        () -> assertTrue(kept.get(CX - 5, CY + 3, 14), "and beside it"),
+        () -> assertTrue(kept.get(CX + 12, CY, 16), "two voxels of margin"),
+        () -> assertFalse(kept.get(CX + 13, CY, 16), "not three: no soft tissue is taken"));
+    // Exactly the bone a threshold-clean scan would give: the whole cylinder and its margin.
+    Result sound = osteopenic(900, 9).isolate();
+    assertEquals(sound.voxels(), r.voxels());
+  }
+
+  @Test
+  void aCortexUnderTheLowerValueIsNotBone() {
+    // 120 HU is spongy bone or noise, not cortex: the growth leaves it, and the patch stays open.
+    Result r = osteopenic(120, 9).isolate();
+    assertAll(
+        () -> assertEquals(1, r.bonePieces()),
+        () -> assertFalse(r.region().get(CX, CY, 16), "the inside behind the open patch"),
+        () -> assertTrue(r.region().get(CX, CY, 30), "the inside where the shell is closed"));
+  }
+
+  @Test
+  void aLessDenseStrandOnTheBoneIsFollowedForFiveMillimetresOnly() {
+    // A strand of 250 HU from the cortex (x 46) out through the soft tissue to x 60: a vessel on
+    // the bone, or the blurred edge of a cast. It is followed for GROW_MM, plus the margin.
+    Result r =
+        new Scene(W, H, D, MM1)
+            .box(47, 60, CY, CY, 20, 20, 250)
+            .cylinder(CX, CY, 6, 6, 4, 35, 900)
+            .cylinder(CX, CY, 18, 18, 0, D - 1, 40)
+            .isolate();
+    VoxelBits kept = r.region();
+    int reach = 46 + (int) BoneIsolation.GROW_MM;
+    assertAll(
+        () -> assertTrue(kept.get(reach, CY, 20), "the strand within reach"),
+        () -> assertTrue(kept.get(reach + BoneIsolation.MARGIN_VOXELS, CY, 20), "its margin"),
+        () -> assertFalse(kept.get(reach + BoneIsolation.MARGIN_VOXELS + 1, CY, 20), "no further"),
+        () -> assertFalse(kept.get(60, CY, 20), "the strand's far end"));
+  }
+
+  @Test
+  void aNonSquareGridDoesNotGrowFurtherOnTheCoarserAxis() {
+    // Voxels of 0.5 by 2 mm. The y axis may take two steps (4 mm), not ten (20 mm) merely because
+    // the x axis needs ten steps to reach 5 mm. The usual two-voxel margin follows the growth.
+    Result r =
+        new Scene(W, H, D, new Vector3d(0.5, 2, 1))
+            .box(CX, CX, CY + 7, CY + 20, 20, 20, 250)
+            .cylinder(CX, CY, 6, 6, 4, 35, 900)
+            .cylinder(CX, CY, 18, 18, 0, D - 1, 40)
+            .isolate();
+    VoxelBits kept = r.region();
+    assertAll(
+        () -> assertTrue(kept.get(CX, CY + 8, 20), "two growth steps"),
+        () -> assertTrue(kept.get(CX, CY + 10, 20), "two more voxels of margin"),
+        () -> assertFalse(kept.get(CX, CY + 11, 20), "no third growth step or further margin"),
+        () -> assertFalse(kept.get(CX, CY + 15, 20), "the old unbounded reach is gone"));
+  }
+
+  @Test
+  void aSpeckNearlyAsDenseAsBoneButNotTouchingItGoes() {
+    // Noise of 250 HU four voxels from the cortex: nothing joins it to the bone.
+    Result r =
+        new Scene(W, H, D, MM1)
+            .box(50, 51, CY, CY + 1, 20, 21, 250)
+            .cylinder(CX, CY, 6, 6, 4, 35, 900)
+            .cylinder(CX, CY, 18, 18, 0, D - 1, 40)
+            .isolate();
+    assertAll(
+        () -> assertFalse(r.region().get(51, CY, 20), "the speck"),
+        () -> assertEquals(bare().isolate().voxels(), r.voxels(), "as without the speck"));
+  }
+
+  @Test
+  void aCastPressedOnTheBoneStillGoesButForAPatchAtTheContact() {
+    // The bone lies under thin skin: one voxel of 250 HU joins its cortex (x 56) to the blurred
+    // inner edge of the plaster, a layer of 250 HU all around. The plaster still touches the air
+    // and goes; of its inner edge only what lies within GROW_MM of the contact is taken.
+    Result r =
+        new Scene(W, H, D, MM1)
+            .cylinder(CX + 10, CY, 6, 6, 4, 35, 900)
+            .box(CX + 17, CX + 17, CY - 1, CY + 1, 10, 30, 250)
+            .cylinder(CX, CY, 17, 17, 0, D - 1, 40)
+            .cylinder(CX, CY, 18, 18, 0, D - 1, 250)
+            .cylinder(CX, CY, 23, 23, 0, D - 1, 1200)
+            .isolate();
+    VoxelBits kept = r.region();
+    assertAll(
+        () -> assertEquals(1, r.bonePieces()),
+        () -> assertEquals(1, r.externalPieces(), "the cast"),
+        () -> assertTrue(kept.get(CX + 10, CY, 20), "the bone"),
+        () -> assertFalse(kept.get(CX - 18, CY, 20), "the plaster's inner edge, far side"),
+        () -> assertFalse(kept.get(CX, CY + 18, 20), "the inner edge a quarter turn away"),
+        () -> assertFalse(kept.get(CX + 15, CY + 10, 20), "and 10 mm along it"),
+        () -> assertFalse(kept.get(CX + 22, CY, 20), "the plaster beyond the margin"),
+        () -> assertFalse(kept.get(CX + 18, CY, 2), "the inner edge beyond the bone's ends"));
+  }
+
+  @Test
+  void twoBonesJoinedByLessDenseBridgesDoNotFillThePadBetweenThem() {
+    // Two L-shaped bones a voxel apart at both ends, the gaps reading 250 HU as a narrow joint
+    // space does: together with the bridges they close a square in every slice. Each bone is grown
+    // and filled alone, so the square between them stays out.
+    Result r =
+        new Scene(64, 64, 20, MM1)
+            .box(10, 30, 10, 12, 4, 14, 900)
+            .box(10, 12, 13, 29, 4, 14, 900)
+            .box(10, 12, 30, 30, 4, 14, 250)
+            .box(10, 33, 31, 33, 4, 14, 900)
+            .box(31, 33, 14, 30, 4, 14, 900)
+            .box(31, 33, 13, 13, 4, 14, 250)
+            .box(0, 63, 0, 63, 0, 19, 40)
+            .isolate();
+    assertAll(
+        () -> assertEquals(2, r.bonePieces()),
+        () -> assertTrue(r.region().get(11, 30, 9), "a bridge"),
+        () -> assertFalse(r.region().get(21, 21, 9), "the middle of the square"),
+        () -> assertTrue(r.region().get(11, 20, 9), "a bone"));
+  }
+
+  @Test
+  void growthIsPhysicallyBoundedOnEveryAxis() {
+    BoneIsolation.GrowthSchedule isotropic = BoneIsolation.growSchedule(new Vector3d(1, 1, 1));
+    BoneIsolation.GrowthSchedule thin = BoneIsolation.growSchedule(new Vector3d(0.3, 0.3, 0.625));
+    BoneIsolation.GrowthSchedule thick = BoneIsolation.growSchedule(new Vector3d(0.5, 0.5, 3));
+    BoneIsolation.GrowthSchedule nonSquare = BoneIsolation.growSchedule(new Vector3d(0.5, 2, 3));
+    BoneIsolation.GrowthSchedule coarse = BoneIsolation.growSchedule(new Vector3d(8, 8, 8));
+    BoneIsolation.GrowthSchedule coarseInPlane = BoneIsolation.growSchedule(new Vector3d(8, 8, 1));
+    assertAll(
+        () -> assertEquals(5, count(isotropic.x())),
+        () -> assertEquals(5, count(isotropic.y())),
+        () -> assertEquals(5, count(isotropic.z()), "a slice a round"),
+        () -> assertEquals(16, count(thin.x()), "4.8 mm: 17 steps would exceed 5 mm"),
+        () -> assertEquals(16, count(thin.y())),
+        () -> assertEquals(8, count(thin.z()), "5 mm of 0.625 mm slices"),
+        () -> assertEquals(10, count(thick.x())),
+        () -> assertEquals(10, count(thick.y())),
+        () -> assertEquals(1, count(thick.z()), "one 3 mm slice within 5 mm"),
+        () -> assertEquals(10, count(nonSquare.x()), "5 mm on the finer axis"),
+        () -> assertEquals(2, count(nonSquare.y()), "4 mm: three steps would be 6 mm"),
+        () -> assertEquals(1, count(nonSquare.z())),
+        () -> assertEquals(0, count(coarse.x()), "one 8 mm step is already beyond the limit"),
+        () -> assertEquals(0, count(coarse.y())),
+        () -> assertEquals(0, count(coarse.z())),
+        () -> assertEquals(0, count(coarseInPlane.x())),
+        () -> assertEquals(0, count(coarseInPlane.y())),
+        () -> assertEquals(1, count(coarseInPlane.z()), "a 1 mm slice step is still allowed"));
+  }
+
+  @Test
+  void aPartialVolumeSliceUnderTheThresholdStaysWithItsBone() {
+    // Voxels of 0.5 by 0.5 by 3 mm. The bone ends inside slice 12, which reads 250 HU: half bone,
+    // half soft tissue. That slice belongs to the bone; the soft tissue a slice further does not.
+    Vector3d mm = new Vector3d(0.5, 0.5, 3);
+    Result r =
+        new Scene(W, H, 24, mm)
+            .cylinder(CX, CY, 12, 12, 12, 12, 250)
+            .cylinder(CX, CY, 12, 12, 4, 11, 900)
+            .cylinder(CX, CY, 36, 36, 0, 23, 40)
+            .isolate();
+    assertAll(
+        () -> assertTrue(r.region().get(CX, CY, 12), "the partial-volume slice"),
+        () -> assertTrue(r.region().get(CX, CY, 14), "two slices of margin"),
+        () -> assertFalse(r.region().get(CX, CY, 15), "not three"));
+  }
+
+  private static int count(boolean[] flags) {
+    int n = 0;
+    for (boolean f : flags) {
+      if (f) {
+        n++;
+      }
+    }
+    return n;
   }
 
   /**
