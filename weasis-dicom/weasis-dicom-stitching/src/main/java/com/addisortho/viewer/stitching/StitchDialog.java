@@ -17,7 +17,6 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Window;
-import java.awt.event.ItemEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Line2D;
@@ -31,6 +30,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.swing.BorderFactory;
@@ -172,6 +172,11 @@ final class StitchDialog extends JDialog {
   private List<SeamRecipe> recipes = List.of();
   // the seams or cuts in the window are not saved anywhere: asked about before they are replaced
   private boolean unsaved;
+  // the leg and band the seams in the window were made for; a change of either discards them
+  private Object legNow = CHOOSE;
+  private Object bandNow = CHOOSE;
+  // while a saved version takes the window over: the user has already been asked
+  private boolean replacing;
   // the project and version the next save continues: the one reopened, then each one saved here
   private StitchResume.Lineage lineage = StitchResume.Lineage.NEW;
   // the versions saved for this study, oldest first; filled in the background
@@ -287,7 +292,7 @@ final class StitchDialog extends JDialog {
       return JOptionPane.showOptionDialog(
           StitchDialog.this,
           question,
-          Messages.getString("StitchDialog.edit"),
+          Messages.getString("StitchDialog.title"),
           JOptionPane.DEFAULT_OPTION,
           JOptionPane.WARNING_MESSAGE,
           null,
@@ -523,16 +528,10 @@ final class StitchDialog extends JDialog {
     oneAcquisition.addActionListener(e -> refresh());
     projection.addActionListener(e -> refresh());
     position.addActionListener(e -> refresh());
-    leg.addActionListener(e -> refresh());
-    // the leg decides how the seams are matched (Both: each leg on its own as well), so seams
-    // made for one target leg are never kept, or saved, under another
-    leg.addItemListener(
-        e -> {
-          if (e.getStateChange() == ItemEvent.SELECTED) {
-            discardSeams();
-          }
-        });
-    band.addActionListener(e -> discardSeams());
+    // the leg decides how the seams are matched (Both: each leg on its own as well) and the band
+    // where, so seams made for one are never kept, or saved, under another
+    leg.addActionListener(e -> matchingChoiceChanged(leg, true));
+    band.addActionListener(e -> matchingChoiceChanged(band, false));
     lineUp.addActionListener(e -> lineUp());
     inspect.addActionListener(e -> inspectSelected());
     save.addActionListener(e -> save(stitch(), null));
@@ -590,6 +589,43 @@ final class StitchDialog extends JDialog {
         (SeamMatcher.Band) band.getSelectedItem());
   }
 
+  // a change of target leg or band: the seams go, unless the user keeps hand work and the old
+  // choice with it
+  private void matchingChoiceChanged(JComboBox<Object> box, boolean isLeg) {
+    Object was = isLeg ? legNow : bandNow;
+    Object now = box.getSelectedItem();
+    if (Objects.equals(was, now)) {
+      refresh();
+    } else if (mayDiscardSeams()) {
+      if (isLeg) {
+        legNow = now;
+      } else {
+        bandNow = now;
+      }
+      discardSeams();
+    } else {
+      box.setSelectedItem(was); // comes back here as "no change"
+    }
+  }
+
+  /**
+   * True when the seams in the window may go. Seams and cuts set by hand that are saved nowhere are
+   * minutes of work a stray click would lose, so the user is asked first (Sami, 10 Nov 2026); a
+   * plain Line up result is made again with one press and goes without a word, as before.
+   */
+  private boolean mayDiscardSeams() {
+    boolean byHand =
+        seams.stream().anyMatch(s -> s.method() != Seam.Method.AUTOMATIC)
+            || Arrays.stream(cuts).anyMatch(c -> !Double.isNaN(c));
+    if (replacing || !unsaved || !byHand) {
+      return true;
+    }
+    String[] buttons = {
+      Messages.getString("StitchDialog.discardHand"), Messages.getString("StitchDialog.keepHand")
+    };
+    return host.ask(Messages.getString("StitchDialog.discardHandQuestion"), buttons) == 0;
+  }
+
   // the seams belong to one set of pieces in one order: any change there discards them
   private void discardSeams() {
     generation++;
@@ -629,7 +665,7 @@ final class StitchDialog extends JDialog {
   private void moveSelected(int delta) {
     int i = pieceTable.getSelectedRow();
     int j = i + delta;
-    if (busy() || i < 0 || j < 0 || j >= rows.size()) {
+    if (busy() || i < 0 || j < 0 || j >= rows.size() || !mayDiscardSeams()) {
       return;
     }
     rows.add(j, rows.remove(i));
@@ -1087,6 +1123,29 @@ final class StitchDialog extends JDialog {
   // confirmed for it when it was made, its seams as they came out again
   private void reopened(StitchProject p, StitchResume.Resumed r) {
     List<Piece> found = r.pieces();
+    replacing = true;
+    try {
+      takeOver(p, found);
+    } finally {
+      replacing = false;
+    }
+    chosen = found;
+    seams = new ArrayList<>(r.seams());
+    recipes = new ArrayList<>(r.recipes());
+    cuts = r.cuts().clone();
+    continueFrom(p);
+    seamModel.fireTableDataChanged();
+    seamTable.setRowSelectionInterval(0, 0);
+    state.setText(Messages.getString("StitchDialog.editOpened"));
+    showPreview();
+    if (!r.notes().isEmpty()) {
+      host.tell(
+          Messages.getString("StitchDialog.editNotes").formatted(bullets(r.notes())),
+          JOptionPane.WARNING_MESSAGE);
+    }
+  }
+
+  private void takeOver(StitchProject p, List<Piece> found) {
     rows.sort(
         Comparator.comparingInt(
             row -> {
@@ -1105,20 +1164,6 @@ final class StitchDialog extends JDialog {
     leg.setSelectedItem(p.choices().leg());
     band.setSelectedItem(p.choices().band());
     discardSeams();
-    chosen = found;
-    seams = new ArrayList<>(r.seams());
-    recipes = new ArrayList<>(r.recipes());
-    cuts = r.cuts().clone();
-    continueFrom(p);
-    seamModel.fireTableDataChanged();
-    seamTable.setRowSelectionInterval(0, 0);
-    state.setText(Messages.getString("StitchDialog.editOpened"));
-    showPreview();
-    if (!r.notes().isEmpty()) {
-      host.tell(
-          Messages.getString("StitchDialog.editNotes").formatted(bullets(r.notes())),
-          JOptionPane.WARNING_MESSAGE);
-    }
   }
 
   // why a saved stitch was not reopened; for a source problem, each piece and what to do
@@ -1223,8 +1268,10 @@ final class StitchDialog extends JDialog {
 
     @Override
     public void setValueAt(Object v, int r, int c) {
-      rows.get(r).use = Boolean.TRUE.equals(v);
-      discardSeams();
+      if (mayDiscardSeams()) {
+        rows.get(r).use = Boolean.TRUE.equals(v);
+        discardSeams();
+      }
     }
   }
 

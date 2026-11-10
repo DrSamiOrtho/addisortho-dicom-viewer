@@ -462,6 +462,10 @@ automatic, semi-automatic or manual, and not reviewed.
   (`manualBothLegs`). Both only add refusals: on a synthetic film whose legs sit 3 mm apart, the plain whole-width
   refine gave "check" and the leg-by-leg one fails. The limits are Line up's (1.5 mm, 0.3 deg) and are not validated
   on real films.
+  Changing the target leg, the band, a tick or the order still discards the seams, but when they hold hand work that
+  is not saved (a seam moved, refined or fitted, or a cut dragged) the window asks first; Keep them also puts the
+  choice back. A plain Line up result still goes without a question. Pressing **Line up** again over hand work is not
+  asked about.
 
 ## Shortcuts (6 Nov 2026)
 

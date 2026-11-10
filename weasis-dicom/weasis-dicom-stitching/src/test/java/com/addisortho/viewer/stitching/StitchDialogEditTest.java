@@ -1028,6 +1028,130 @@ class StitchDialogEditTest {
     w.close();
   }
 
+  /** The seam of the window's pieces moved by hand, as the seam window would hand it back. */
+  private static SeamRecipe.Made nudged(List<Piece> pieces, int i) {
+    SeamRecipe matched = SeamRecipe.match(SeamMatcher.Band.WHOLE);
+    Seam seam = matched.compute(pieces.get(i).match(), pieces.get(i + 1).match());
+    SeamRecipe moved = matched.moved(Rigid.shift(0.6, 0).after(seam.transform()));
+    return new SeamRecipe.Made(
+        moved, moved.compute(pieces.get(i).match(), pieces.get(i + 1).match()));
+  }
+
+  @Test
+  void handWorkIsAskedAboutBeforeALegBandOrPieceChangeDiscardsIt() throws Exception {
+    TestHost host = new TestHost(true);
+    List<Piece> open = new StitchFixture().pieces();
+    Window w = new Window(host, open);
+    w.tickAndConfirm(3);
+    w.click("StitchDialog.lineUp");
+    await("Line up", () -> w.enabled("StitchDialog.save"));
+
+    // a plain Line up result goes without a question, as before
+    onEdt(
+        () -> {
+          w.combos().get(3).setSelectedItem(SeamMatcher.Band.LEFT_HALF);
+          assertEquals(0, w.seams().getRowCount());
+          w.combos().get(3).setSelectedItem(SeamMatcher.Band.WHOLE);
+          return null;
+        });
+    assertEquals(List.of(), host.questions);
+    w.click("StitchDialog.lineUp");
+    await("Line up again", () -> w.enabled("StitchDialog.save"));
+
+    // a seam moved by hand, saved nowhere: every way of discarding it asks, and Keep keeps
+    // both the seams and the choice as it was
+    host.answer = "StitchDialog.keepHand";
+    onEdt(
+        () -> {
+          w.dialog.useSeam(0, nudged(open, 0));
+          String firstRow = String.valueOf(w.pieces().getValueAt(0, 2));
+
+          w.combos().get(2).setSelectedItem(Stitch.Leg.BOTH);
+          assertEquals(1, host.questions.size(), "the target leg");
+          assertEquals(Stitch.Leg.RIGHT, w.combos().get(2).getSelectedItem());
+
+          w.combos().get(3).setSelectedItem(SeamMatcher.Band.RIGHT_HALF);
+          assertEquals(2, host.questions.size(), "the band");
+          assertEquals(SeamMatcher.Band.WHOLE, w.combos().get(3).getSelectedItem());
+
+          w.pieces().getModel().setValueAt(false, 1, 0);
+          assertEquals(3, host.questions.size(), "a tick");
+          assertEquals(true, w.pieces().getValueAt(1, 0));
+
+          w.pieces().setRowSelectionInterval(0, 0);
+          w.button("StitchDialog.down").doClick(0);
+          assertEquals(4, host.questions.size(), "the order");
+          assertEquals(firstRow, String.valueOf(w.pieces().getValueAt(0, 2)));
+
+          assertEquals(2, w.seams().getRowCount());
+          assertEquals("semi-automatic", w.seams().getValueAt(0, 1));
+          return null;
+        });
+    assertEquals(
+        List.of(
+            Messages.getString("StitchDialog.discardHand"),
+            Messages.getString("StitchDialog.keepHand")),
+        List.of(host.buttons.get(0)));
+    assertTrue(w.enabled("StitchDialog.save"), "the stitch is still there to save");
+
+    // choosing again what is already chosen, or another projection, asks nothing
+    onEdt(
+        () -> {
+          w.combos().get(2).setSelectedItem(Stitch.Leg.RIGHT);
+          w.combos().get(0).setSelectedIndex(2);
+          return null;
+        });
+    assertEquals(4, host.questions.size());
+
+    // Discard lets the change through
+    host.answer = "StitchDialog.discardHand";
+    onEdt(
+        () -> {
+          w.combos().get(2).setSelectedItem(Stitch.Leg.LEFT);
+          assertEquals(5, host.questions.size());
+          assertEquals(Stitch.Leg.LEFT, w.combos().get(2).getSelectedItem());
+          assertEquals(0, w.seams().getRowCount());
+          return null;
+        });
+    assertFalse(w.enabled("StitchDialog.save"));
+
+    // a cut dragged by hand is hand work too
+    host.answer = "StitchDialog.keepHand";
+    w.click("StitchDialog.lineUp");
+    await("Line up for the left leg", () -> w.enabled("StitchDialog.save"));
+    Stitch asLinedUp =
+        new Stitch(open, StitchFixture.seams(open, StitchFixture.lineUp(2)), StitchFixture.CHOICES);
+    int seamPx =
+        (int) Math.round((asLinedUp.seamY(1) - asLinedUp.bounds()[1]) / MatchImage.COARSE_MM);
+    ImagePanel preview = w.all(ImagePanel.class).get(0);
+    mouse(preview, MouseEvent.MOUSE_PRESSED, 20, seamPx);
+    mouse(preview, MouseEvent.MOUSE_DRAGGED, 20, seamPx - 4);
+    onEdt(
+        () -> {
+          w.combos().get(3).setSelectedItem(SeamMatcher.Band.LEFT_HALF);
+          assertEquals(6, host.questions.size(), "the dragged cut");
+          assertEquals(2, w.seams().getRowCount());
+          return null;
+        });
+
+    // once the stitch is saved there is nothing to lose, and nothing is asked
+    w.click("StitchDialog.save");
+    await("the save", () -> host.opened.size() == 1);
+    await("the version", () -> w.enabled("StitchDialog.edit"));
+    onEdt(
+        () -> {
+          w.combos().get(3).setSelectedItem(SeamMatcher.Band.LEFT_HALF);
+          assertEquals(0, w.seams().getRowCount());
+          return null;
+        });
+    assertEquals(6, host.questions.size());
+    assertEquals(
+        "cut placed by hand",
+        host.projects.list(StitchFixture.STUDY).get(0).project().seams().get(1).cut().note(),
+        "what was saved has the dragged cut");
+    w.close();
+  }
+
   @Test
   void withoutAProjectStoreThereIsNoEditStitchAndSaveIsAsBefore() throws Exception {
     TestHost host = new TestHost(false);
