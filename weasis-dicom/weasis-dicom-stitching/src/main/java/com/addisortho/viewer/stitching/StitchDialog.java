@@ -184,6 +184,10 @@ final class StitchDialog extends JDialog {
   private SwingWorker<?, ?> running;
   // background work still executing (a cancelled worker is "done" before its loop has stopped)
   private final AtomicInteger active = new AtomicInteger();
+  // jobs started whose result has not been taken into the window yet. A worker is "done" a moment
+  // before its done() runs here (Swing delivers it up to a thirtieth of a second later); without
+  // this the window was not busy in that gap and Save was offered on the seams about to be replaced
+  private int unfinished;
   // bumped whenever pieces, order or band change: a job's results from an older generation are
   // dropped
   private int generation;
@@ -578,7 +582,7 @@ final class StitchDialog extends JDialog {
   }
 
   private boolean busy() {
-    return active.get() > 0 || (running != null && !running.isDone());
+    return active.get() > 0 || unfinished > 0;
   }
 
   private Stitch.Choices choices() {
@@ -675,6 +679,11 @@ final class StitchDialog extends JDialog {
   }
 
   private void lineUp() {
+    // Line up again replaces the seams, or leaves none if it is cancelled: hand work is asked
+    // about first, before anything is started
+    if (!mayDiscardSeams()) {
+      return;
+    }
     List<Piece> pieces = ticked();
     SeamRecipe how = automatic();
     int job = generation;
@@ -714,6 +723,7 @@ final class StitchDialog extends JDialog {
 
           @Override
           protected void done() {
+            unfinished--;
             progress.setValue(0);
             if (job != generation) {
               refresh(); // the pieces, their order or the band changed meanwhile
@@ -746,6 +756,7 @@ final class StitchDialog extends JDialog {
             progress.setValue((Integer) e.getNewValue());
           }
         });
+    unfinished++;
     running.execute();
     refresh();
   }
@@ -892,6 +903,7 @@ final class StitchDialog extends JDialog {
 
           @Override
           protected void done() {
+            unfinished--;
             progress.setValue(0);
             try {
               StitchService.Saved result = get();
@@ -941,6 +953,7 @@ final class StitchDialog extends JDialog {
           }
         });
     state.setText(Messages.getString("StitchDialog.saving"));
+    unfinished++;
     running.execute();
     refresh();
   }
@@ -1093,6 +1106,7 @@ final class StitchDialog extends JDialog {
 
           @Override
           protected void done() {
+            unfinished--;
             progress.setValue(0);
             try {
               reopened(p, get());
@@ -1115,6 +1129,7 @@ final class StitchDialog extends JDialog {
           }
         });
     state.setText(Messages.getString("StitchDialog.editChecking"));
+    unfinished++;
     running.execute();
     refresh();
   }

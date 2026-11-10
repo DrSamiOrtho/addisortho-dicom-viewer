@@ -464,8 +464,8 @@ automatic, semi-automatic or manual, and not reviewed.
   on real films.
   Changing the target leg, the band, a tick or the order still discards the seams, but when they hold hand work that
   is not saved (a seam moved, refined or fitted, or a cut dragged) the window asks first; Keep them also puts the
-  choice back. A plain Line up result still goes without a question. Pressing **Line up** again over hand work is not
-  asked about.
+  choice back. A plain Line up result still goes without a question. Pressing **Line up** again over such hand work
+  asks the same question before any matching starts.
 
 ## Shortcuts (6 Nov 2026)
 

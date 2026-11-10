@@ -1183,6 +1183,85 @@ class StitchDialogEditTest {
   }
 
   @Test
+  void pressingLineUpAgainOverHandWorkAsksBeforeAnythingStarts() throws Exception {
+    TestHost host = new TestHost(true);
+    List<Piece> open = new StitchFixture().pieces();
+    Window w = window(host, open);
+    w.tickAndConfirm(3);
+    w.click("StitchDialog.lineUp");
+    await("Line up", () -> w.enabled("StitchDialog.save"));
+
+    // over a plain Line up result it simply matches again
+    w.click("StitchDialog.lineUp");
+    await("Line up again", () -> w.enabled("StitchDialog.save"));
+    assertEquals(List.of(), host.questions);
+
+    // Keep them: nothing starts, and the seams, the cut and the choices are as they were
+    SeamRecipe.Made byHand = nudged(open, 0);
+    host.answer = "StitchDialog.keepHand";
+    onEdt(
+        () -> {
+          w.dialog.useSeam(0, byHand);
+          w.button("StitchDialog.lineUp").doClick(0);
+          assertEquals(1, host.questions.size());
+          assertFalse(w.button("StitchDialog.cancel").isEnabled(), "no work was started");
+          assertTrue(w.button("StitchDialog.save").isEnabled());
+          assertEquals(2, w.seams().getRowCount());
+          assertEquals("semi-automatic", w.seams().getValueAt(0, 1));
+          assertEquals(Stitch.Leg.RIGHT, w.combos().get(2).getSelectedItem());
+          return null;
+        });
+    w.click("StitchDialog.save");
+    await("the save", () -> host.opened.size() == 1);
+    await("the version", () -> host.projects.list(StitchFixture.STUDY).size() == 1);
+    StitchProject kept = host.projects.list(StitchFixture.STUDY).get(0).project();
+    assertEquals(byHand.recipe(), kept.seams().get(0).decision(), "the hand-set seam was kept");
+    assertEquals(byHand.seam(), kept.seams().get(0).result());
+
+    // saved, there is nothing to lose: Line up asks nothing
+    w.click("StitchDialog.lineUp");
+    await("Line up over a saved stitch", () -> w.enabled("StitchDialog.save"));
+    assertEquals(1, host.questions.size());
+
+    // Discard them: Line up goes ahead and the seams are the automatic ones again
+    host.answer = "StitchDialog.discardHand";
+    onEdt(
+        () -> {
+          w.dialog.useSeam(0, byHand);
+          return null;
+        });
+    w.click("StitchDialog.lineUp");
+    await("Line up after Discard", () -> w.enabled("StitchDialog.save"));
+    assertEquals(2, host.questions.size());
+    onEdt(
+        () -> {
+          assertEquals("automatic", w.seams().getValueAt(0, 1));
+          return null;
+        });
+
+    // Discard them, then Cancel while it matches: the seams are gone, as was chosen
+    onEdt(
+        () -> {
+          w.dialog.useSeam(0, byHand);
+          w.button("StitchDialog.lineUp").doClick(0);
+          assertEquals(3, host.questions.size());
+          assertTrue(w.button("StitchDialog.cancel").isEnabled(), "the matching was started");
+          w.button("StitchDialog.cancel").doClick(0);
+          return null;
+        });
+    await("the cancelled Line up to stop", () -> w.enabled("StitchDialog.lineUp"));
+    onEdt(
+        () -> {
+          assertEquals(0, w.seams().getRowCount());
+          return null;
+        });
+    assertFalse(w.enabled("StitchDialog.save"));
+    assertFalse(w.enabled("StitchDialog.saveUnverified"));
+    assertEquals(1, host.projects.list(StitchFixture.STUDY).size(), "what was saved stays");
+    w.close();
+  }
+
+  @Test
   void withoutAProjectStoreThereIsNoEditStitchAndSaveIsAsBefore() throws Exception {
     TestHost host = new TestHost(false);
     Window w = window(host, new StitchFixture().pieces());
