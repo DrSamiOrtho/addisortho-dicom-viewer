@@ -17,8 +17,8 @@ import org.weasis.dicom.explorer.library.StudyStore;
 /**
  * Stitch projects kept by the study library of this computer, beside the studies and apart from
  * their images ({@link ProjectDocuments} says where and what it guarantees). The store is asked for
- * on every call, so a library moved to another folder takes its projects with it as it takes its
- * studies.
+ * on every call, so after the library is pointed at another folder the projects are those of that
+ * folder; nothing is moved, as the studies are not moved either.
  */
 final class LibraryProjectStore implements ProjectStore {
 

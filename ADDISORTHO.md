@@ -469,15 +469,18 @@ automatic, semi-automatic or manual, and not reviewed.
 - 10 Nov 2026, the project store (branch `addisortho/stitch-store-opus`, on `addisortho/stitch-edit-fable-52`).
   `StitchService.projectStore()` now returns `LibraryProjectStore`, so Save keeps a version and **Edit stitch...**
   appears. Versions live in the study library at `<root>/.projects/stitch/<Study Instance UID>/<version>.json`
-  (`ProjectDocuments`, explorer): named by UIDs only, never by the patient. Every walk of the library already passes
-  over hidden folders (studies list and counts, catalog reconcile, patient index, import, deletion), and exports and
-  send work from loaded images, so a project is never counted, listed, opened, exported or sent. A write goes to a
-  hidden temporary file forced to the disk, then gets its name by a hard link (refused by the file system if the name
-  exists, also from another process), under a process lock and a file lock in the study folder; without hard links a
-  plain move under the same locks. The folder is flushed and the bytes read back before put returns; leftovers of a
-  stopped write are never listed and the next write removes them. Deleting a study from the library deletes its projects
-  with it (Sami, 10 Nov 2026; `StudyStore.deleteStudy` reads the study's UID from its images, deletes the folder, then
-  every project of that study under the write locks); other studies' projects are untouched. Projects never leave the
+  (`ProjectDocuments`, explorer): named by UIDs only, never by the patient. The walks of the library over its studies
+  (study list and counts, catalog reconcile, patient index, deletion) pass over hidden folders, and export and send take
+  only the chosen images, so a project is never counted, listed, exported or sent. A write goes to a hidden temporary
+  file, forced and read back before it is named, then gets its name by a hard link (refused by the file system if the
+  name exists), under a process lock and a file lock on `.projects/<kind>/.lock`, which is never deleted; only a file
+  system without hard links falls back to a move under the same locks. Every folder up to the library root is flushed on
+  every write. Guarantee on macOS/Linux local disks; on Windows only the file is forced and NTFS's journal relied on
+  (untested with a power cut); network and synced folders give none. After Codex's review (10 Nov 2026) each of its six
+  findings has a test that fails on the earlier code. Deleting a study from the library deletes its projects
+  with it (Sami, 10 Nov 2026): `StudyStore.deleteStudy` finds them by the folder's study key, deletes them first under
+  the write locks, and leaves the study whole and listed if that fails; other studies' projects are untouched. No
+  screen offers study deletion at this commit (`ReceiveService.deleteStudies` has no caller). Projects never leave the
   computer: ZIP, disc and DICOM send carry the stitched pictures only (Sami, 10 Nov 2026). Tested on synthetic data in unit tests, including
   two threads and two processes. Installed-app round trip, 10 Nov 2026, on the Latest Full build (ec3a72bf8) with
   only the explorer and stitching bundles swapped, three synthetic CR pieces: the bundle resolves with its Jackson

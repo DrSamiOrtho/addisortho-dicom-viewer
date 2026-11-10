@@ -737,7 +737,9 @@ public class StudyStore {
 
   /**
    * Deletes a study folder, and the projects kept for that study beside it, such as editable
-   * stitches (Sami, 10 Nov 2026). Only a folder directly in the storage folder and made here.
+   * stitches (Sami, 10 Nov 2026), found by the folder's study key. The projects go first: if they
+   * cannot be deleted the study is left whole. Only a folder directly in the storage folder and
+   * made here.
    */
   public synchronized void deleteStudy(Path folder) throws IOException {
     Path normal = folder.toAbsolutePath().normalize();
@@ -748,7 +750,13 @@ public class StudyStore {
     if (!root.equals(normal.getParent()) || key.isEmpty() || Files.isSymbolicLink(normal)) {
       throw new IOException("Not a study folder of the storage folder");
     }
-    String studyUid = studyUidOf(normal, key.get());
+    try {
+      // first, so that a failure leaves the study whole and listed, to be deleted again
+      ProjectDocuments.deleteStudy(root, key.get());
+    } catch (IOException e) {
+      throw new IOException(
+          "The study was not deleted: its saved stitch projects could not be deleted", e);
+    }
     folders.remove(key.get());
     imagesOfFolder.remove(normal);
     identityOfFolder.remove(normal);
@@ -775,29 +783,6 @@ public class StudyStore {
             return FileVisitResult.CONTINUE;
           }
         });
-    if (studyUid != null) {
-      try {
-        ProjectDocuments.deleteStudy(root, studyUid);
-      } catch (IOException e) {
-        throw new IOException(
-            "The study was deleted, but its saved stitch projects could not all be deleted", e);
-      }
-    }
-  }
-
-  /** The Study Instance UID the folder's images hold, or null when none can be read. */
-  private static String studyUidOf(Path folder, String studyKey) throws IOException {
-    try (DirectoryStream<Path> files =
-        Files.newDirectoryStream(folder, "*" + StoreNaming.FILE_EXTENSION)) {
-      for (Path file : files) {
-        Attributes header = readHeader(file);
-        String uid = header == null ? null : header.getString(Tag.StudyInstanceUID);
-        if (uid != null && studyKey.equals(StoreNaming.studyKey(uid))) {
-          return uid;
-        }
-      }
-    }
-    return null;
   }
 
   private List<Path> studyFolders() throws IOException {

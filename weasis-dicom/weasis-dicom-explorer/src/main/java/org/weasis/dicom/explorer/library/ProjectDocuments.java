@@ -13,7 +13,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
-import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemException;
@@ -35,29 +34,32 @@ import java.util.regex.Pattern;
 /**
  * Documents this viewer keeps beside a study that are not images, such as the editable versions of
  * a stitch: kept in the store's hidden {@code .projects} folder, one folder per kind and per study,
- * named by the Study Instance UID and never by the patient. Every walk of the store over studies,
- * the catalog, import, the patient index and deletion, passes over hidden folders, so these files
- * are never counted, listed, opened, exported or sent as images. This class does not read the
- * documents; it only keeps them.
+ * named by the Study Instance UID and never by the patient. The walks of the store over its studies
+ * (study list and counts, catalog, patient index, deletion) pass over hidden folders, and export
+ * and send take only the images chosen, so these files are not counted, listed, exported or sent as
+ * images. An import of a folder that holds another library's {@code .projects} would read them and
+ * reject them as not DICOM. This class does not read the documents; it only keeps them.
  *
  * <p>What it guarantees, for each document:
  *
  * <ul>
- *   <li><b>All or nothing.</b> A document is written under a hidden temporary name and forced to
- *       the disk, and only then given its name. A stop at any point, clean or not, leaves it either
- *       absent or whole; temporary files are never listed, and the next write to the study removes
- *       those left behind.
+ *   <li><b>All or nothing.</b> A document is written under a hidden temporary name, forced to the
+ *       disk and read back, and only then given its name, so a document that did not read back is
+ *       never kept. A stop at any point, clean or not, leaves it absent or whole; temporary files
+ *       are never listed, and the next write of the kind removes those left behind.
  *   <li><b>Written once.</b> The name is given by a hard link, which the file system refuses when
- *       the name exists, so a document is never replaced, by this or another process on the same
- *       library. The check and the link are also made under a lock held by this process and by a
- *       file lock in the study's folder, which other processes of this viewer respect. Where the
- *       file system has no hard links the name is given by a move made under the same two locks,
- *       which holds against every caller that uses this class. Nothing rewrites a document, and
- *       nothing deletes one except the deletion of its whole study from the library ({@link
- *       #deleteStudy}, Sami's decision of 10 Nov 2026).
- *   <li><b>Durable on return.</b> The file and then its folder are forced to the disk before {@link
- *       #put} returns (Windows journals the name itself), and the document is read back and
- *       compared.
+ *       the name exists. Every write and deletion of a kind also holds the kind's two locks: this
+ *       process's, and a file lock on the kind's {@code .lock}, which is never deleted, so all
+ *       processes of this viewer on the library lock the same file. Where the file system has no
+ *       hard links, the name is given by a move that only those locks serialize. Nothing rewrites a
+ *       document, and nothing deletes one except the deletion of its whole study from the library
+ *       ({@link #deleteStudy}, Sami's decision of 10 Nov 2026).
+ *   <li><b>Durable on return, where the system allows.</b> The file is forced before and after it
+ *       is named, and every folder from the study's to the store root is flushed on every write. On
+ *       macOS and Linux that makes the name durable on a local disk. Windows offers no folder flush
+ *       to Java: there the named file is forced and NTFS's journal is relied on, which has not been
+ *       tested with a power cut. Network and synced folders, and file systems that refuse a folder
+ *       flush, give no durability guarantee (the same as for the library's images).
  * </ul>
  *
  * Messages of its exceptions are meant for the user and hold no path; their causes may, and must
@@ -76,7 +78,8 @@ public final class ProjectDocuments {
   static final int MAX_BYTES = 16 * 1024 * 1024;
 
   private static final Pattern KIND = Pattern.compile("[a-z]{1,32}");
-  private static final Pattern STUDY_UID = Pattern.compile("[0-9][0-9.]{0,63}");
+  // Digits in dot-separated parts, as DICOM UIDs are: no empty part, no trailing dot.
+  private static final Pattern STUDY_UID = Pattern.compile("[0-9]+(\\.[0-9]+)*");
   // Lower case only: on a file system that ignores case two spellings would be one file.
   private static final Pattern DOCUMENT_ID =
       Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
@@ -127,22 +130,8 @@ public final class ProjectDocuments {
       throw new IOException("The document is empty or too large to keep.");
     }
     Path target = study.resolve(id + SUFFIX);
-    Path real;
-    try {
-      if (!Files.isDirectory(study)) {
-        Files.createDirectories(study);
-        folderFlush.flush(study.getParent()); // the study's folder survives a power cut too
-      }
-      real = study.toRealPath(); // one lock however the library's path was spelled
-    } catch (IOException e) {
-      throw unwritable(e);
-    }
-    ReentrantLock inProcess = LOCKS.computeIfAbsent(real, _ -> new ReentrantLock());
-    inProcess.lock();
-    try (FileChannel lockFile =
-            FileChannel.open(
-                study.resolve(LOCK), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-        FileLock _ = lockFile.lock()) {
+    try (KindLock _ = lockKind()) {
+      Files.createDirectories(study);
       removeLeftovers(study);
       if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
         throw new FileAlreadyExistsException(id);
@@ -150,29 +139,79 @@ public final class ProjectDocuments {
       Path temp = study.resolve("." + id + "-" + UUID.randomUUID() + PART);
       try {
         write(temp, document);
+        step.reached("forced");
+        // checked before it has its name: a document that does not read back is never kept
+        if (!Arrays.equals(Files.readAllBytes(temp), document)) {
+          throw new IOException("the document did not read back as it was written");
+        }
         step.reached("written");
         namer.name(target, temp);
         step.reached("named");
       } finally {
         Files.deleteIfExists(temp);
       }
-      folderFlush.flush(study);
+      forceFile(target);
+      persistPath(study);
     } catch (FileAlreadyExistsException e) {
       throw new FileAlreadyExistsException(id); // without the path
     } catch (IOException e) {
       throw unwritable(e);
-    } finally {
-      inProcess.unlock();
     }
-    byte[] back;
+  }
+
+  /** Both locks of this kind: the process's, and a file lock other viewer processes respect. */
+  private record KindLock(ReentrantLock inProcess, FileChannel channel, FileLock lock)
+      implements AutoCloseable {
+    @Override
+    public void close() throws IOException {
+      try (FileChannel _ = channel) {
+        lock.release();
+      } finally {
+        inProcess.unlock();
+      }
+    }
+  }
+
+  /**
+   * Takes the kind's locks. They live on {@code .lock} in the kind's folder, which is never
+   * deleted, so every writer and deleter of every process locks the same file (Codex review, 10 Nov
+   * 2026: a lock file deleted while another process held or awaited it split the exclusion in two).
+   */
+  private KindLock lockKind() throws IOException {
+    Files.createDirectories(folder);
+    ReentrantLock inProcess = LOCKS.computeIfAbsent(folder.toRealPath(), _ -> new ReentrantLock());
+    inProcess.lock();
+    FileChannel channel = null;
     try {
-      back = Files.readAllBytes(target);
-    } catch (IOException e) {
-      throw new IOException("The document was kept but could not be read back.", e);
+      channel =
+          FileChannel.open(
+              folder.resolve(LOCK), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+      return new KindLock(inProcess, channel, channel.lock());
+    } catch (IOException | RuntimeException e) {
+      if (channel != null) {
+        channel.close();
+      }
+      inProcess.unlock();
+      throw e;
     }
-    if (!Arrays.equals(back, document)) {
-      throw new IOException("The document kept does not read back as it was written.");
+  }
+
+  /** Forces the named file and its metadata, which on Windows is the one flush offered. */
+  private static void forceFile(Path file) throws IOException {
+    try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE)) {
+      channel.force(true);
     }
+  }
+
+  /**
+   * Flushes every folder from the study's up to the store root, on every write, so a folder made by
+   * an earlier write whose flush failed is flushed now (Codex review, 10 Nov 2026).
+   */
+  private void persistPath(Path study) throws IOException {
+    folderFlush.flush(study);
+    folderFlush.flush(folder);
+    folderFlush.flush(folder.getParent());
+    folderFlush.flush(folder.getParent().getParent());
   }
 
   /**
@@ -228,19 +267,18 @@ public final class ProjectDocuments {
   }
 
   /**
-   * Deletes every document of every kind kept for the study, with their folders. Only for when the
-   * study itself is deleted from the library: its projects go with it (Sami, 10 Nov 2026). Each
-   * study's documents are deleted under the same two locks a write takes, so no write is cut in
-   * half; a write that comes after finds its study gone and fails.
+   * Deletes every document of every kind kept for the study whose folder key ({@link
+   * StoreNaming#studyKey}) is {@code studyKey}, with their folders. Only for when the study itself
+   * is deleted from the library: its projects go with it (Sami, 10 Nov 2026). Projects are found by
+   * the key of the study's folder, so no image needs to be readable to find them. Each kind's are
+   * deleted under the kind's locks, so no write is cut in half.
    *
-   * @throws IOException when a document could not be deleted; those not yet reached are kept
+   * @throws IOException when a document could not be deleted; nothing of the study's images has
+   *     been touched then, so the deletion can be tried again
    */
-  static void deleteStudy(Path storeRoot, String studyUid) throws IOException {
+  static void deleteStudy(Path storeRoot, String studyKey) throws IOException {
     Path all = storeRoot.toAbsolutePath().normalize().resolve(FOLDER);
-    if (studyUid == null
-        || !STUDY_UID.matcher(studyUid).matches()
-        || studyUid.contains("..")
-        || !Files.isDirectory(all, LinkOption.NOFOLLOW_LINKS)) {
+    if (!Files.isDirectory(all, LinkOption.NOFOLLOW_LINKS)) {
       return;
     }
     List<String> kinds = new ArrayList<>();
@@ -253,40 +291,43 @@ public final class ProjectDocuments {
       }
     }
     for (String kind : kinds) {
-      new ProjectDocuments(storeRoot, kind).deleteAll(studyUid);
+      new ProjectDocuments(storeRoot, kind).deleteAll(studyKey);
     }
   }
 
-  private void deleteAll(String studyUid) throws IOException {
-    Path study = studyFolder(studyUid);
-    if (!Files.isDirectory(study, LinkOption.NOFOLLOW_LINKS)) {
-      return;
-    }
-    ReentrantLock inProcess = LOCKS.computeIfAbsent(study.toRealPath(), _ -> new ReentrantLock());
-    inProcess.lock();
-    try (FileChannel lockFile =
-            FileChannel.open(
-                study.resolve(LOCK), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-        FileLock _ = lockFile.lock();
-        DirectoryStream<Path> files = Files.newDirectoryStream(study)) {
-      for (Path f : files) {
-        if (!f.getFileName().toString().equals(LOCK)) {
-          Files.deleteIfExists(f);
+  private void deleteAll(String studyKey) throws IOException {
+    try (KindLock _ = lockKind()) {
+      List<Path> studies = new ArrayList<>();
+      try (DirectoryStream<Path> entries = Files.newDirectoryStream(folder)) {
+        for (Path entry : entries) {
+          String name = entry.getFileName().toString();
+          if (usableStudyUid(name)
+              && Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)
+              && StoreNaming.studyKey(name).equals(studyKey)) {
+            studies.add(entry);
+          }
         }
       }
-    } finally {
-      inProcess.unlock();
+      for (Path study : studies) {
+        try (DirectoryStream<Path> files = Files.newDirectoryStream(study)) {
+          for (Path f : files) {
+            Files.delete(f);
+          }
+        }
+        Files.delete(study);
+      }
+      if (!studies.isEmpty()) {
+        folderFlush.flush(folder);
+      }
     }
-    Files.deleteIfExists(study.resolve(LOCK));
-    try {
-      Files.deleteIfExists(study);
-    } catch (DirectoryNotEmptyException e) {
-      // a write made after the deletion: left for the user, never deleted unseen
-    }
+  }
+
+  private static boolean usableStudyUid(String uid) {
+    return uid != null && uid.length() <= 64 && STUDY_UID.matcher(uid).matches();
   }
 
   private Path studyFolder(String studyUid) throws IOException {
-    if (studyUid == null || !STUDY_UID.matcher(studyUid).matches() || studyUid.contains("..")) {
+    if (!usableStudyUid(studyUid)) {
       throw new IOException("The study has no usable Study Instance UID.");
     }
     return folder.resolve(studyUid);
@@ -311,23 +352,44 @@ public final class ProjectDocuments {
   }
 
   /**
-   * A hard link, which fails when the name exists; a move under the locks where the file system has
-   * none (some USB and network drives).
+   * A hard link, which fails when the name exists. Only where the file system has no hard links
+   * (some USB and network drives) is the name given by a move, which is serialized by the kind's
+   * locks between viewer processes but is not by itself a refusal to replace; any other failure of
+   * the link is a failure of the write.
    */
   private static void link(Path target, Path temp) throws IOException {
     try {
       Files.createLink(target, temp);
     } catch (FileAlreadyExistsException e) {
       throw e;
-    } catch (UnsupportedOperationException | FileSystemException e) {
-      if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-        throw new FileAlreadyExistsException(target.getFileName().toString());
+    } catch (UnsupportedOperationException e) {
+      move(target, temp);
+    } catch (FileSystemException e) {
+      if (!linksUnsupported(e)) {
+        throw e;
       }
-      Files.move(temp, target); // no REPLACE_EXISTING: refused if the name has appeared
+      move(target, temp);
     }
   }
 
-  /** Temporary files of writes that stopped; under the locks, no write of ours is under way. */
+  private static void move(Path target, Path temp) throws IOException {
+    if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+      throw new FileAlreadyExistsException(target.getFileName().toString());
+    }
+    Files.move(temp, target);
+  }
+
+  /** The system's answers when a file system has no hard links (macOS, Linux, Windows). */
+  static boolean linksUnsupported(FileSystemException e) {
+    String reason = String.valueOf(e.getReason()) + " " + e.getMessage();
+    return reason.contains("not supported")
+        || reason.contains("Operation not permitted")
+        || reason.contains("Function not implemented")
+        || reason.contains("Incorrect function")
+        || reason.contains("Invalid function");
+  }
+
+  /** Temporary files of writes that stopped; under the kind's locks no write is under way. */
   private static void removeLeftovers(Path study) throws IOException {
     try (DirectoryStream<Path> parts = Files.newDirectoryStream(study, ".*" + PART)) {
       for (Path part : parts) {

@@ -205,7 +205,7 @@ class ProjectDocumentsTest {
     }
     try (Stream<Path> left = Files.list(studyFolder())) {
       assertEquals(
-          Set.of(".lock"),
+          Set.of(),
           Set.copyOf(
               left.map(p -> p.getFileName().toString()).filter(n -> !n.endsWith(".json")).toList()),
           "no temporary file is left");
@@ -276,7 +276,7 @@ class ProjectDocumentsTest {
 
   @Test
   void identifiersThatCouldLeaveTheFolderAreRefused() {
-    for (String study : new String[] {"..", "1/../2", "a.b", "", "1..2", null}) {
+    for (String study : new String[] {"..", "1/../2", "a.b", "", "1..2", "1.2.", ".1", null}) {
       assertThrows(IOException.class, () -> docs().put(study, id(), doc("a")), study);
       assertThrows(IOException.class, () -> docs().list(study), study);
     }
@@ -409,5 +409,157 @@ class ProjectDocumentsTest {
     store.projects("stitch").put(STUDY, id, doc("new"));
 
     assertEquals(List.of(id), store.projects("stitch").list(STUDY));
+  }
+
+  // ---- Codex review of 10 Nov 2026: each finding, reproduced ----
+
+  @Test
+  void everyWriteFlushesEveryFolderUpToTheRootAlsoAfterAFailedFlush() throws IOException {
+    Path rootReal = root.toAbsolutePath().normalize();
+    Path kind = rootReal.resolve(ProjectDocuments.FOLDER).resolve("stitch");
+    List<Path> chain =
+        List.of(kind.resolve(STUDY), kind, rootReal.resolve(ProjectDocuments.FOLDER), rootReal);
+
+    ProjectDocuments failing = docs();
+    failing.folderFlush =
+        f -> {
+          throw new IOException("flush failed");
+        };
+    assertThrows(IOException.class, () -> failing.put(STUDY, id(), doc("a")));
+
+    List<Path> flushed = new ArrayList<>();
+    ProjectDocuments retry = docs();
+    retry.folderFlush = flushed::add;
+    retry.put(STUDY, id(), doc("b"));
+    assertEquals(chain, flushed, "the retry flushes the whole path, not only the study's folder");
+  }
+
+  @Test
+  void aDocumentThatDoesNotReadBackIsNeverKept() throws IOException {
+    ProjectDocuments corrupting = docs();
+    corrupting.step =
+        step -> {
+          if (step.equals("forced")) {
+            try (Stream<Path> parts = Files.list(studyFolder())) {
+              for (Path p : parts.filter(f -> f.toString().endsWith(".part")).toList()) {
+                Files.write(p, new byte[] {1});
+              }
+            }
+          }
+        };
+    String id = id();
+
+    assertThrows(IOException.class, () -> corrupting.put(STUDY, id, doc("whole")));
+
+    assertEquals(List.of(), docs().list(STUDY));
+    assertThrows(NoSuchFileException.class, () -> docs().get(STUDY, id));
+  }
+
+  @Test
+  void aDeletionWaitsForAWriteUnderWayAndKeepsTheLockFile() throws Exception {
+    StudyStore store = new StudyStore(root, true);
+    store.prepare();
+    store(store, "1.2.826.0.1.3680043.8.498.20");
+    store.projects("stitch").put(STUDY, id(), doc("first"));
+    CountDownLatch writing = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    ProjectDocuments slow = store.projects("stitch");
+    slow.step =
+        step -> {
+          if (step.equals("written")) {
+            writing.countDown();
+            try {
+              release.await();
+            } catch (InterruptedException e) {
+              throw new IOException(e);
+            }
+          }
+        };
+    ExecutorService pool = Executors.newFixedThreadPool(2);
+    String late = id();
+    Future<?> write =
+        pool.submit(
+            () -> {
+              slow.put(STUDY, late, doc("late"));
+              return null;
+            });
+    assertTrue(writing.await(10, TimeUnit.SECONDS));
+    Path folder = store.listStudies().getFirst().folder();
+    Future<?> deletion =
+        pool.submit(
+            () -> {
+              store.deleteStudy(folder);
+              return null;
+            });
+    Thread.sleep(300);
+    assertFalse(deletion.isDone(), "the deletion waits for the write under way");
+    release.countDown();
+    write.get(10, TimeUnit.SECONDS);
+    deletion.get(10, TimeUnit.SECONDS);
+    pool.shutdown();
+
+    assertEquals(List.of(), store.projects("stitch").list(STUDY), "the late write went too");
+    assertTrue(
+        Files.exists(root.resolve(".projects/stitch/.lock")), "the lock file is never deleted");
+  }
+
+  @Test
+  void aStudyWhoseImagesCannotBeReadStillTakesItsProjects() throws IOException {
+    StudyStore store = new StudyStore(root, true);
+    store.prepare();
+    store(store, "1.2.826.0.1.3680043.8.498.20");
+    store.projects("stitch").put(STUDY, id(), doc("v"));
+    Path folder = store.listStudies().getFirst().folder();
+    try (Stream<Path> images = Files.list(folder)) {
+      for (Path image : images.toList()) {
+        Files.write(image, new byte[] {0, 1, 2}); // no readable header left
+      }
+    }
+
+    store.deleteStudy(folder);
+
+    assertEquals(List.of(), store.projects("stitch").list(STUDY));
+    assertFalse(Files.exists(studyFolder()));
+  }
+
+  @Test
+  void whenTheProjectsCannotBeDeletedTheStudyStaysAndCanBeDeletedAgain() throws IOException {
+    StudyStore store = new StudyStore(root, true);
+    store.prepare();
+    store(store, "1.2.826.0.1.3680043.8.498.20");
+    store.projects("stitch").put(STUDY, id(), doc("v"));
+    Path blocker = studyFolder().resolve("not-empty");
+    Files.createDirectories(blocker);
+    Files.writeString(blocker.resolve("x"), "x");
+    Path folder = store.listStudies().getFirst().folder();
+
+    IOException e = assertThrows(IOException.class, () -> store.deleteStudy(folder));
+
+    assertTrue(e.getMessage().startsWith("The study was not deleted"), e.getMessage());
+    assertFalse(e.getMessage().contains(tmp.toString()), "no path in the message");
+    assertEquals(1, store.listStudies().size(), "the study is whole and still listed");
+    assertEquals(1, store.listStudies().getFirst().images());
+
+    Files.delete(blocker.resolve("x"));
+    Files.delete(blocker);
+    store.deleteStudy(folder);
+    assertEquals(List.of(), store.listStudies());
+    assertEquals(List.of(), store.projects("stitch").list(STUDY));
+  }
+
+  @Test
+  void onlyAFileSystemWithoutHardLinksFallsBackToAMove() {
+    assertTrue(
+        ProjectDocuments.linksUnsupported(
+            new java.nio.file.FileSystemException("a", null, "Operation not supported")));
+    assertTrue(
+        ProjectDocuments.linksUnsupported(
+            new java.nio.file.FileSystemException("a", null, "Operation not permitted")));
+    assertFalse(
+        ProjectDocuments.linksUnsupported(
+            new java.nio.file.AccessDeniedException("a", null, "Permission denied")));
+    assertFalse(
+        ProjectDocuments.linksUnsupported(
+            new java.nio.file.FileSystemException("a", null, "No space left on device")));
   }
 }
