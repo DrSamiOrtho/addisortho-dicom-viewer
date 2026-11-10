@@ -466,6 +466,19 @@ automatic, semi-automatic or manual, and not reviewed.
   is not saved (a seam moved, refined or fitted, or a cut dragged) the window asks first; Keep them also puts the
   choice back. A plain Line up result still goes without a question. Pressing **Line up** again over such hand work
   asks the same question before any matching starts.
+- 10 Nov 2026, the project store (branch `addisortho/stitch-store-opus`, on `addisortho/stitch-edit-fable-52`).
+  `StitchService.projectStore()` now returns `LibraryProjectStore`, so Save keeps a version and **Edit stitch...**
+  appears. Versions live in the study library at `<root>/.projects/stitch/<Study Instance UID>/<version>.json`
+  (`ProjectDocuments`, explorer): named by UIDs only, never by the patient. Every walk of the library already passes
+  over hidden folders (studies list and counts, catalog reconcile, patient index, import, deletion), and exports and
+  send work from loaded images, so a project is never counted, listed, opened, exported or sent. A write goes to a
+  hidden temporary file forced to the disk, then gets its name by a hard link (refused by the file system if the name
+  exists, also from another process), under a process lock and a file lock in the study folder; without hard links a
+  plain move under the same locks. The folder is flushed and the bytes read back before put returns; leftovers of a
+  stopped write are never listed and the next write removes them. Deleting a study leaves its projects in place, and
+  projects do not travel in exports: both await Sami's decision. Tested on synthetic data in unit tests, including
+  two threads and two processes; the installed-app round trip is **not done yet**, so do not ship an installer from
+  this branch until it is.
 
 ## Shortcuts (6 Nov 2026)
 

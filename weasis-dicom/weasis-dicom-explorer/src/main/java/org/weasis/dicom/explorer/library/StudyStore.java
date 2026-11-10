@@ -149,6 +149,14 @@ public class StudyStore {
     return root;
   }
 
+  /**
+   * The documents of one kind this store keeps beside its studies, such as editable stitches. They
+   * are not images and live in a hidden folder that no walk over studies enters.
+   */
+  public ProjectDocuments projects(String kind) {
+    return new ProjectDocuments(root, kind);
+  }
+
   void setIncludeName(boolean includeName) {
     this.includeName = includeName;
   }

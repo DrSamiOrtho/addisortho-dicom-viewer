@@ -200,13 +200,12 @@ final class StitchService {
   }
 
   /**
-   * Where editable stitch projects are kept, when this viewer keeps them. None yet: the study
-   * library's own {@link ProjectStore} is to be supplied here, and until it is the window saves the
-   * picture only and offers no Edit stitch, since a version kept nowhere durable could not be
-   * reopened after a restart.
+   * Where editable stitch projects are kept: the study library of this computer, beside the
+   * pictures ({@link LibraryProjectStore}). Empty would switch editing off: the window then saves
+   * the picture only and offers no Edit stitch.
    */
   static Optional<ProjectStore> projectStore() {
-    return Optional.empty();
+    return Optional.of(new LibraryProjectStore(() -> StudyLibrary.getInstance().store()));
   }
 
   /**

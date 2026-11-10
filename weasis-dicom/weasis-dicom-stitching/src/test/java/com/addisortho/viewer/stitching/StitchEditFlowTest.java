@@ -40,6 +40,20 @@ class StitchEditFlowTest {
 
   @TempDir Path dir;
 
+  /**
+   * A project store over this test's folder; each call is a new object, as after a restart. {@link
+   * LibraryStitchEditFlowTest} runs every test here against the study library's own store.
+   */
+  ProjectStore openStore() {
+    return new FolderProjectStore(dir.resolve("projects"));
+  }
+
+  /** The bytes kept on the disk for a version, read past the store. */
+  byte[] keptBytes(String study, String versionId) throws IOException {
+    return Files.readAllBytes(
+        new FolderProjectStore(dir.resolve("projects")).file(study, versionId));
+  }
+
   private static Attributes read(Path file) throws IOException {
     try (DicomInputStream in = new DicomInputStream(file.toFile())) {
       return in.readDataset();
@@ -68,8 +82,7 @@ class StitchEditFlowTest {
   @Test
   void saveReopenEditAndSaveAgainKeepsBothVersions() throws IOException {
     StudyStore library = new StudyStore(dir.resolve("library"), true);
-    FolderProjectStore folder = new FolderProjectStore(dir.resolve("projects"));
-    StitchProjects projects = new StitchProjects(folder);
+    StitchProjects projects = new StitchProjects(openStore());
     StitchFixture fixture = new StitchFixture();
 
     // a new stitch, lined up and saved
@@ -84,12 +97,11 @@ class StitchEditFlowTest {
     Attributes firstPicture = read(one.picture().instance().file());
     assertDraftSecondaryCapture(firstPicture);
     assertEquals(0.3, firstPicture.getDouble(Tag.PixelSpacing, 0), 1e-9);
-    byte[] firstVersion =
-        Files.readAllBytes(folder.file(StitchFixture.STUDY, one.version().versionId()));
+    byte[] firstVersion = keptBytes(StitchFixture.STUDY, one.version().versionId());
     byte[] firstPixels = Files.readAllBytes(one.picture().instance().file());
 
     // the viewer is closed and started again: only the stores remain
-    StitchProjects later = new StitchProjects(new FolderProjectStore(dir.resolve("projects")));
+    StitchProjects later = new StitchProjects(openStore());
     List<StitchProjects.Listed> listed = later.list(StitchFixture.STUDY);
     assertEquals(1, listed.size());
     StitchProject reopened = listed.get(0).project();
@@ -127,9 +139,7 @@ class StitchEditFlowTest {
         firstPicture.getString(Tag.SOPInstanceUID), secondPicture.getString(Tag.SOPInstanceUID));
 
     // the first version and its picture are exactly as they were, and both versions reopen
-    assertArrayEquals(
-        firstVersion,
-        Files.readAllBytes(folder.file(StitchFixture.STUDY, one.version().versionId())));
+    assertArrayEquals(firstVersion, keptBytes(StitchFixture.STUDY, one.version().versionId()));
     assertArrayEquals(firstPixels, Files.readAllBytes(one.picture().instance().file()));
     assertEquals(2, later.list(StitchFixture.STUDY).size());
     for (StitchProjects.Listed l : later.list(StitchFixture.STUDY)) {
@@ -144,7 +154,7 @@ class StitchEditFlowTest {
   @Test
   void aReopenedSeamThatFailsCanOnlyBeSavedUnverifiedAndWithoutScale() throws IOException {
     StudyStore library = new StudyStore(dir.resolve("library"), true);
-    StitchProjects projects = new StitchProjects(new FolderProjectStore(dir.resolve("projects")));
+    StitchProjects projects = new StitchProjects(openStore());
     StitchFixture fixture = new StitchFixture();
     List<Piece> pieces = fixture.pieces();
     List<SeamRecipe> recipes = StitchFixture.lineUp(2);
@@ -215,7 +225,7 @@ class StitchEditFlowTest {
   @Test
   void aVersionThatCouldNotBeKeptIsRefusedBeforeThePictureIsWritten() throws IOException {
     StudyStore library = new StudyStore(dir.resolve("library"), true);
-    StitchProjects projects = new StitchProjects(new FolderProjectStore(dir.resolve("projects")));
+    StitchProjects projects = new StitchProjects(openStore());
     List<Piece> pieces = new StitchFixture().pieces();
     List<SeamRecipe> recipes = StitchFixture.lineUp(2);
     Stitch s = new Stitch(pieces, StitchFixture.seams(pieces, recipes), StitchFixture.CHOICES);
@@ -292,6 +302,8 @@ class StitchEditFlowTest {
     assertNull(saved.version());
     assertNull(saved.versionProblem());
     assertTrue(Files.isRegularFile(saved.picture().instance().file()));
-    assertTrue(StitchService.projectStore().isEmpty(), "this viewer keeps no projects yet");
+    assertTrue(
+        StitchService.projectStore().orElseThrow() instanceof LibraryProjectStore,
+        "the viewer keeps its projects in the study library");
   }
 }
