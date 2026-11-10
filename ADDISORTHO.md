@@ -477,8 +477,15 @@ automatic, semi-automatic or manual, and not reviewed.
   plain move under the same locks. The folder is flushed and the bytes read back before put returns; leftovers of a
   stopped write are never listed and the next write removes them. Deleting a study leaves its projects in place, and
   projects do not travel in exports: both await Sami's decision. Tested on synthetic data in unit tests, including
-  two threads and two processes; the installed-app round trip is **not done yet**, so do not ship an installer from
-  this branch until it is.
+  two threads and two processes. Installed-app round trip, 10 Nov 2026, on the Latest Full build (ec3a72bf8) with
+  only the explorer and stitching bundles swapped, three synthetic CR pieces: the bundle resolves with its Jackson
+  imports; Line up and Save keep version 1; after a quit and restart Edit stitch lists and reopens it with pieces,
+  confirmations and seams; a seam moved by hand and refined saves version 2 under it; both reopen; version 1 and its
+  picture stay byte for byte; refused with a message and nothing substituted: a missing piece, a piece whose pixels
+  changed, a truncated project, a schema 99 project, a store failing during Save (the picture stands and the user is
+  told), and a reopen cancelled part way; after a hard kill a half-written leftover is not listed and the next save
+  removes it. The study folder and catalog hold only the images, and the export dialog lists only images.
+  Synthetic films only; not tested on Windows.
 
 ## Shortcuts (6 Nov 2026)
 
