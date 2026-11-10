@@ -12,14 +12,16 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.UUID;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
@@ -160,15 +162,20 @@ class StitchEditFlowTest {
     List<SeamRecipe> edited = List.of(onePair, r.recipes().get(1));
     StitchResume.Lineage child = new StitchResume.Lineage(parent.projectId(), parent.versionId());
 
-    // the ordinary save of a failed seam leaves a picture only if the window allowed it, which it
-    // does not; the record itself refuses to call it an ordinary draft
+    // an ordinary save of a failed seam is refused before anything is written, whether or not
+    // versions are kept: no picture, no version
     Stitch ordinary = new Stitch(r.pieces(), seams, r.choices(), r.cuts());
     assertTrue(ordinary.anyFailed());
-    StitchService.Saved refused =
-        StitchService.save(library, projects, ordinary, edited, child, GO);
-    assertNull(refused.version());
-    assertNotNull(refused.versionProblem());
-    assertTrue(refused.versionProblem().contains("a seam failed"), refused.versionProblem());
+    long before = pictures();
+    for (StitchProjects kept : new StitchProjects[] {projects, null}) {
+      IOException refused =
+          assertThrows(
+              IOException.class,
+              () -> StitchService.save(library, kept, ordinary, edited, child, GO));
+      assertTrue(refused.getMessage().contains("seam 1 failed"), refused.getMessage());
+    }
+    assertEquals(before, pictures(), "no picture was written");
+    assertEquals(1, projects.list(StitchFixture.STUDY).size(), "and no version");
 
     Stitch unverified = new Stitch(r.pieces(), seams, r.choices(), r.cuts(), true);
     StitchService.Saved saved =
@@ -189,6 +196,87 @@ class StitchEditFlowTest {
     assertEquals(Seam.Status.FAILED, again.seams().get(0).status());
     assertEquals(seams, again.seams());
     assertFalse(Double.isNaN(parent.output().mmPerPixel()));
+  }
+
+  /** The files in the study library, its own hidden folders aside. */
+  private long pictures() throws IOException {
+    Path library = dir.resolve("library");
+    if (!Files.isDirectory(library)) {
+      return 0;
+    }
+    try (var files = Files.walk(library)) {
+      return files
+          .filter(Files::isRegularFile)
+          .filter(f -> !library.relativize(f).toString().startsWith("."))
+          .count();
+    }
+  }
+
+  @Test
+  void aVersionThatCouldNotBeKeptIsRefusedBeforeThePictureIsWritten() throws IOException {
+    StudyStore library = new StudyStore(dir.resolve("library"), true);
+    StitchProjects projects = new StitchProjects(new FolderProjectStore(dir.resolve("projects")));
+    List<Piece> pieces = new StitchFixture().pieces();
+    List<SeamRecipe> recipes = StitchFixture.lineUp(2);
+    Stitch s = new Stitch(pieces, StitchFixture.seams(pieces, recipes), StitchFixture.CHOICES);
+
+    // an edit of a version that is not saved
+    StitchResume.Lineage orphan =
+        new StitchResume.Lineage(UUID.randomUUID().toString(), UUID.randomUUID().toString());
+    StitchProjectException lineage =
+        assertThrows(
+            StitchProjectException.class,
+            () -> StitchService.save(library, projects, s, recipes, orphan, GO));
+    assertEquals(StitchProjectException.Kind.LINEAGE, lineage.kind());
+
+    // a stitch the project format cannot hold: the same image twice
+    List<Piece> twice = List.of(pieces.get(0), pieces.get(1), pieces.get(0));
+    Stitch impossible = new Stitch(twice, s.seams, StitchFixture.CHOICES);
+    StitchProjectException format =
+        assertThrows(
+            StitchProjectException.class,
+            () ->
+                StitchService.save(
+                    library, projects, impossible, recipes, StitchResume.Lineage.NEW, GO));
+    assertEquals(StitchProjectException.Kind.MALFORMED, format.kind());
+
+    assertEquals(0, pictures(), "neither left a picture");
+    assertEquals(List.of(), projects.list(StitchFixture.STUDY));
+  }
+
+  @Test
+  void whenTheProjectStoreFailsAfterThePictureThePictureStandsAndTheReasonIsGiven()
+      throws IOException {
+    StudyStore library = new StudyStore(dir.resolve("library"), true);
+    ProjectStore full =
+        new ProjectStore() {
+          @Override
+          public void put(String study, String version, byte[] document) throws IOException {
+            throw new IOException("the disk is full");
+          }
+
+          @Override
+          public byte[] get(String study, String version) throws IOException {
+            throw new NoSuchFileException(version);
+          }
+
+          @Override
+          public List<String> list(String study) {
+            return List.of();
+          }
+        };
+    List<Piece> pieces = new StitchFixture().pieces();
+    List<SeamRecipe> recipes = StitchFixture.lineUp(2);
+    Stitch s = new Stitch(pieces, StitchFixture.seams(pieces, recipes), StitchFixture.CHOICES);
+
+    StitchService.Saved saved =
+        StitchService.save(
+            library, new StitchProjects(full), s, recipes, StitchResume.Lineage.NEW, GO);
+
+    assertNull(saved.version());
+    assertEquals("the disk is full", saved.versionProblem());
+    assertTrue(Files.isRegularFile(saved.picture().instance().file()));
+    assertEquals(1, pictures());
   }
 
   @Test

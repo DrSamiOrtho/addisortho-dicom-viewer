@@ -45,21 +45,8 @@ final class StitchProjects {
    */
   void save(StitchProject version) throws IOException {
     byte[] document = StitchProjectIO.write(version);
+    checkLineage(version);
     String study = version.studyInstanceUid();
-    if (version.parentVersionId() == null) {
-      for (Listed other : list(study)) {
-        if (other.project() != null && other.project().projectId().equals(version.projectId())) {
-          throw new StitchProjectException(
-              Kind.LINEAGE, "A first version cannot be added to a project that already has one.");
-        }
-      }
-    } else {
-      StitchProject parent = parent(version);
-      if (!parent.projectId().equals(version.projectId())) {
-        throw new StitchProjectException(
-            Kind.LINEAGE, "The version this was edited from belongs to another stitch project.");
-      }
-    }
     try {
       store.put(study, version.versionId(), document);
     } catch (FileAlreadyExistsException e) {
@@ -68,6 +55,21 @@ final class StitchProjects {
     }
     if (!Arrays.equals(document, store.get(study, version.versionId()))) {
       throw new IOException("the stitch project did not read back as it was written");
+    }
+  }
+
+  /** Refuses a version that could not be saved where it says it belongs; writes nothing. */
+  void checkLineage(StitchProject version) throws IOException {
+    if (version.parentVersionId() == null) {
+      for (Listed other : list(version.studyInstanceUid())) {
+        if (other.project() != null && other.project().projectId().equals(version.projectId())) {
+          throw new StitchProjectException(
+              Kind.LINEAGE, "A first version cannot be added to a project that already has one.");
+        }
+      }
+    } else if (!parent(version).projectId().equals(version.projectId())) {
+      throw new StitchProjectException(
+          Kind.LINEAGE, "The version this was edited from belongs to another stitch project.");
     }
   }
 

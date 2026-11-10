@@ -99,6 +99,8 @@ final class SeamEditor extends JDialog {
 
   /**
    * @param made the seam as it stands, with how it was set
+   * @param automatic how Automatic match again matches: exactly as Line up does for the leg and
+   *     band confirmed, so a film of both legs is still matched leg by leg
    * @param whole the whole stitch with seam {@code index} replaced by the seam given, drawn beside
    *     the overlap and redrawn after each move; null to show the overlap only
    */
@@ -109,6 +111,7 @@ final class SeamEditor extends JDialog {
       Piece lower,
       SeamRecipe.Made made,
       SeamMatcher.Band band,
+      SeamRecipe automatic,
       Function<Seam, Stitch> whole) {
     super(
         owner,
@@ -155,7 +158,7 @@ final class SeamEditor extends JDialog {
     auto.addActionListener(
         e -> {
           auto.setEnabled(false);
-          SeamRecipe matched = SeamRecipe.match(band);
+          SeamRecipe matched = automatic;
           new SwingWorker<Seam, Void>() {
             @Override
             protected Seam doInBackground() {

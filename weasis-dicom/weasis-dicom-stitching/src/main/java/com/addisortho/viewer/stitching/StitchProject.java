@@ -163,11 +163,37 @@ record StitchProject(
       boolean unverified,
       double mmPerPixel,
       int columns,
-      int rows) {}
+      int rows) {
+
+    /** Stands for the picture's identifiers while a version is checked before it is written. */
+    static final String PENDING = "0";
+  }
 
   StitchProject {
     sources = List.copyOf(sources);
     seams = List.copyOf(seams);
+  }
+
+  /** This version, naming the picture that was saved with it. */
+  StitchProject withOutput(String sopInstanceUid, String seriesInstanceUid) {
+    return new StitchProject(
+        projectId,
+        versionId,
+        parentVersionId,
+        savedAt,
+        algorithm,
+        studyInstanceUid,
+        sources,
+        choices,
+        seams,
+        blending,
+        new Output(
+            sopInstanceUid,
+            seriesInstanceUid,
+            output.unverified(),
+            output.mmPerPixel(),
+            output.columns(),
+            output.rows()));
   }
 
   boolean anyFailed() {

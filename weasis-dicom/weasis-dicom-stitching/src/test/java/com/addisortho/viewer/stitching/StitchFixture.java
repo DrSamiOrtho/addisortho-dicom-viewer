@@ -39,21 +39,39 @@ final class StitchFixture {
   private final List<int[]> sizes = new ArrayList<>();
 
   StitchFixture() {
-    Phantom leg = Phantom.leg(300, 900, 21);
-    List<Phantom.Cut> cuts =
+    this(
+        Phantom.leg(300, 900, 21),
         List.of(
             new Phantom.Cut(new Rigid(0, 50, 0), W, H, 0.3, 1, 0),
             new Phantom.Cut(new Rigid(Math.toRadians(0.7), 54, 250), W, H, 0.3, 1.4, 0.2),
-            new Phantom.Cut(new Rigid(Math.toRadians(-0.5), 47, 500), W, H, 0.35, 0.8, -0.1));
+            new Phantom.Cut(new Rigid(Math.toRadians(-0.5), 47, 500), W, H, 0.35, 0.8, -0.1)),
+        0.01,
+        30);
+  }
+
+  /** Two pieces of a film of both legs that moved alike: target leg Both can pass on it. */
+  static StitchFixture twoLegs() {
+    return new StitchFixture(
+        Phantom.twoLegs(427, 900, 110, 320, 41),
+        List.of(
+            new Phantom.Cut(Rigid.IDENTITY, 427, 356, 0.139, 1, 0),
+            new Phantom.Cut(new Rigid(Math.toRadians(0.3), 2, 280), 427, 356, 0.139, 1.2, 0)),
+        0.02,
+        43);
+  }
+
+  private StitchFixture(Phantom leg, List<Phantom.Cut> cuts, double noise, int seed) {
     for (int i = 0; i < cuts.size(); i++) {
       Phantom.Cut c = cuts.get(i);
       headers.add(header(i, c.spacingMm()));
-      pixels.add(leg.piece(c, 0.01, 30 + i));
-      sizes.add(
-          new int[] {
-            (int) Math.round(c.widthMm() / c.spacingMm()),
-            (int) Math.round(c.heightMm() / c.spacingMm())
-          });
+      pixels.add(leg.piece(c, noise, seed + i));
+      int[] size = {
+        (int) Math.round(c.widthMm() / c.spacingMm()),
+        (int) Math.round(c.heightMm() / c.spacingMm())
+      };
+      sizes.add(size);
+      headers.get(i).setInt(Tag.Columns, VR.US, size[0]);
+      headers.get(i).setInt(Tag.Rows, VR.US, size[1]);
     }
   }
 

@@ -219,11 +219,18 @@ final class StitchService {
 
   /**
    * Saves the picture, then the stitch as a new version of its project so it can be edited later.
-   * The picture is saved first and stands whatever becomes of the version; neither replaces
-   * anything saved before.
+   * Neither replaces anything saved before.
+   *
+   * <p>Everything that can be known beforehand is checked before a byte is written: a failed seam
+   * goes out only as an unverified draft, and where versions are kept the version must be one the
+   * project format accepts, under a parent that is saved. A stitch refused here leaves no picture.
+   * The two stores cannot be written as one, though: when the picture is written and the project
+   * store then fails, the picture stands on its own, as every stitch did before projects, and
+   * {@link Saved#versionProblem} says why it cannot be edited later.
    *
    * @param projects null to save the picture only
    * @param recipes how each seam of {@code s} was set
+   * @throws IOException when nothing was saved
    */
   static Saved save(
       StudyStore store,
@@ -233,19 +240,31 @@ final class StitchService {
       StitchResume.Lineage lineage,
       Compositor.Progress progress)
       throws IOException {
-    StudyStore.SavedDerived picture = save(store, s, progress);
-    if (projects == null) {
-      return new Saved(picture, null, null);
+    if (s.anyFailed() && !s.unverified) {
+      throw new IOException(
+          "%s failed, so the stitch can only be saved as an unverified draft"
+              .formatted(s.failedSeams()));
     }
-    try {
-      StitchProject version =
+    StitchProject planned = null;
+    if (projects != null) {
+      planned =
           StitchResume.capture(
               s,
               recipes,
               lineage,
               Instant.now(),
-              picture.instance().sopUid(),
-              picture.instance().seriesUid());
+              StitchProject.Output.PENDING,
+              StitchProject.Output.PENDING);
+      planned.check();
+      projects.checkLineage(planned);
+    }
+    StudyStore.SavedDerived picture = save(store, s, progress);
+    if (planned == null) {
+      return new Saved(picture, null, null);
+    }
+    try {
+      StitchProject version =
+          planned.withOutput(picture.instance().sopUid(), picture.instance().seriesUid());
       projects.save(version);
       return new Saved(picture, version, null);
     } catch (IOException | RuntimeException e) {

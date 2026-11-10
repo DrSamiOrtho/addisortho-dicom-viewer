@@ -67,7 +67,11 @@ class StitchDialogEditTest {
     final List<String> told = new CopyOnWriteArrayList<>();
     final List<String[]> asked = new CopyOnWriteArrayList<>();
     final List<StoredInstance> opened = new CopyOnWriteArrayList<>();
+    final List<String> questions = new CopyOnWriteArrayList<>();
+    final List<String[]> buttons = new CopyOnWriteArrayList<>();
     volatile int pick;
+    // the button pressed when the window asks about unsaved work, by its message key
+    volatile String answer = "StitchDialog.cancel";
 
     TestHost(boolean keepsProjects) {
       projects = keepsProjects ? new StitchProjects(folder) : null;
@@ -102,6 +106,13 @@ class StitchDialogEditTest {
     public int choose(String question, String[] options) {
       asked.add(options);
       return pick;
+    }
+
+    @Override
+    public int ask(String question, String[] offered) {
+      questions.add(question);
+      buttons.add(offered);
+      return List.of(offered).indexOf(Messages.getString(answer));
     }
   }
 
@@ -305,19 +316,8 @@ class StitchDialogEditTest {
         one.seams().get(0).result(), two.seams().get(0).result(), "the seam itself is as it was");
 
     // ---- edit 2: seam 2 nudged in the seam window and refined again, then Save
-    SeamRecipe matched = SeamRecipe.match(SeamMatcher.Band.WHOLE);
-    Seam seam = matched.compute(open.get(1).match(), open.get(2).match());
-    SeamEditor editor =
-        onEdt(
-            () ->
-                new SeamEditor(
-                    second.dialog,
-                    1,
-                    open.get(1),
-                    open.get(2),
-                    new SeamRecipe.Made(matched, seam),
-                    SeamMatcher.Band.WHOLE,
-                    null));
+    Seam seam = two.seams().get(1).result();
+    SeamEditor editor = onEdt(() -> second.dialog.seamWindow(1));
     AbstractButton refine = editorButton(editor, "SeamEditor.refine");
     onEdt(
         () -> {
@@ -506,7 +506,14 @@ class StitchDialogEditTest {
         onEdt(
             () ->
                 new SeamEditor(
-                    null, 0, pieces.get(0), pieces.get(1), start, SeamMatcher.Band.WHOLE, null));
+                    null,
+                    0,
+                    pieces.get(0),
+                    pieces.get(1),
+                    start,
+                    SeamMatcher.Band.WHOLE,
+                    SeamRecipe.match(SeamMatcher.Band.WHOLE),
+                    null));
     hands.call();
     onEdt(
         () -> {
@@ -619,6 +626,275 @@ class StitchDialogEditTest {
             },
             w);
     assertEquals(start, again, "the hand move is gone with the new match");
+  }
+
+  /** Presses a button of the seam window that works in the background, and waits for it. */
+  private static void pressAndWait(SeamEditor editor, String key) throws Exception {
+    AbstractButton button = editorButton(editor, key);
+    onEdt(
+        () -> {
+          button.doClick(0);
+          return null;
+        });
+    await(key, () -> onEdt(button::isEnabled));
+  }
+
+  private static SeamRecipe.Made use(SeamEditor editor) throws Exception {
+    onEdt(
+        () -> {
+          editorButton(editor, "SeamEditor.apply").doClick(0);
+          return null;
+        });
+    return editor.result().orElseThrow();
+  }
+
+  @Test
+  void changingTheTargetLegDiscardsTheSeamsUntilLineUpIsRepeated() throws Exception {
+    TestHost host = new TestHost(true);
+    Window w = new Window(host, new StitchFixture().pieces());
+    w.tickAndConfirm(3);
+    w.click("StitchDialog.lineUp");
+    await("Line up", () -> w.enabled("StitchDialog.save"));
+
+    // seams matched for the right leg are not kept for another target leg
+    onEdt(
+        () -> {
+          assertEquals(Stitch.Leg.RIGHT, w.combos().get(2).getSelectedItem());
+          w.combos().get(2).setSelectedItem(Stitch.Leg.BOTH);
+          assertEquals(0, w.seams().getRowCount());
+          return null;
+        });
+    assertFalse(w.enabled("StitchDialog.save"), "nothing can be saved under the new leg");
+    assertFalse(w.enabled("StitchDialog.saveUnverified"));
+    assertFalse(w.enabled("StitchDialog.inspect"));
+    assertTrue(w.enabled("StitchDialog.lineUp"), "until Line up is pressed again");
+    assertEquals(List.of(), host.opened);
+
+    // choosing the leg already chosen, or another projection, changes no seam
+    onEdt(
+        () -> {
+          w.combos().get(2).setSelectedItem(Stitch.Leg.LEFT);
+          return null;
+        });
+    w.click("StitchDialog.lineUp");
+    await("Line up again", () -> w.enabled("StitchDialog.save"));
+    onEdt(
+        () -> {
+          w.combos().get(2).setSelectedItem(Stitch.Leg.LEFT);
+          w.combos().get(0).setSelectedIndex(2);
+          assertEquals(2, w.seams().getRowCount());
+          return null;
+        });
+    assertTrue(w.enabled("StitchDialog.save"));
+    w.click("StitchDialog.save");
+    await("the save", () -> host.opened.size() == 1);
+    await("the version", () -> host.projects.list(StitchFixture.STUDY).size() == 1);
+    assertEquals(
+        Stitch.Leg.LEFT,
+        host.projects.list(StitchFixture.STUDY).get(0).project().choices().leg(),
+        "the leg saved is the leg the seams were matched for");
+    w.close();
+  }
+
+  @Test
+  void aFilmOfBothLegsIsMatchedLegByLegThroughRematchSaveAndReopen() throws Exception {
+    StitchFixture fixture = StitchFixture.twoLegs();
+    TestHost host = new TestHost(true);
+    Window first = new Window(host, fixture.pieces());
+    first.tickAndConfirm(2);
+    onEdt(
+        () -> {
+          first.combos().get(2).setSelectedItem(Stitch.Leg.BOTH);
+          assertEquals(SeamMatcher.Band.WHOLE, first.combos().get(3).getSelectedItem());
+          return null;
+        });
+    first.click("StitchDialog.lineUp");
+    await("Line up", () -> first.enabled("StitchDialog.save"));
+
+    // Automatic match again in the seam window matches as Line up did: each leg on its own too
+    SeamEditor editor = onEdt(() -> first.dialog.seamWindow(0));
+    pressAndWait(editor, "SeamEditor.auto");
+    SeamRecipe.Made again = use(editor);
+    assertEquals(SeamRecipe.matchBothLegs(), again.recipe());
+    assertTrue(
+        again.seam().reasons().get(0).contains("left and right legs, matched one at a time"),
+        again.seam().reasons().toString());
+    onEdt(
+        () -> {
+          first.dialog.useSeam(0, again);
+          return null;
+        });
+    first.click("StitchDialog.save");
+    await("the save", () -> host.opened.size() == 1);
+    await("the list of versions", () -> first.enabled("StitchDialog.edit"));
+    StitchProject saved = host.projects.list(StitchFixture.STUDY).get(0).project();
+    assertEquals(Stitch.Leg.BOTH, saved.choices().leg());
+    assertEquals(SeamRecipe.matchBothLegs(), saved.seams().get(0).decision());
+    assertEquals(again.seam(), saved.seams().get(0).result());
+    first.close();
+
+    // reopened, it is checked leg by leg again, and a rematch there is still leg by leg
+    TestHost later = new TestHost(true);
+    Window second = new Window(later, fixture.pieces());
+    await("the list of versions", () -> second.enabled("StitchDialog.edit"));
+    second.click("StitchDialog.edit");
+    await("the saved stitch to open", () -> second.enabled("StitchDialog.save"));
+    assertEquals(List.of(), later.told);
+    SeamEditor reopened = onEdt(() -> second.dialog.seamWindow(0));
+    pressAndWait(reopened, "SeamEditor.auto");
+    assertEquals(SeamRecipe.matchBothLegs(), use(reopened).recipe());
+
+    // one target leg on its half of the film is the ordinary match on that half
+    onEdt(
+        () -> {
+          second.combos().get(2).setSelectedItem(Stitch.Leg.LEFT);
+          second.combos().get(3).setSelectedItem(SeamMatcher.Band.LEFT_HALF);
+          return null;
+        });
+    second.click("StitchDialog.lineUp");
+    await("Line up on one leg", () -> second.enabled("StitchDialog.inspect"));
+    SeamEditor oneLeg = onEdt(() -> second.dialog.seamWindow(0));
+    pressAndWait(oneLeg, "SeamEditor.auto");
+    assertEquals(SeamRecipe.match(SeamMatcher.Band.LEFT_HALF), use(oneLeg).recipe());
+    second.close();
+  }
+
+  @Test
+  void unsavedWorkIsAskedAboutAndOutlivesAReopenThatDoesNotHappen() throws Exception {
+    StitchFixture fixture = new StitchFixture();
+    TestHost host = new TestHost(true);
+    // a version saved earlier
+    List<Piece> earlier = fixture.pieces();
+    List<SeamRecipe> recipes = StitchFixture.lineUp(2);
+    StitchProject kept =
+        StitchService.save(
+                host.library,
+                host.projects,
+                new Stitch(earlier, StitchFixture.seams(earlier, recipes), StitchFixture.CHOICES),
+                recipes,
+                StitchResume.Lineage.NEW,
+                (d, t) -> true)
+            .version();
+
+    // a new stitch lined up in the window and not saved
+    Window w = new Window(host, fixture.pieces());
+    await("the list of versions", () -> w.enabled("StitchDialog.edit"));
+    w.tickAndConfirm(3);
+    w.click("StitchDialog.lineUp");
+    await("Line up", () -> w.enabled("StitchDialog.save"));
+
+    // Edit stitch asks first; Cancel leaves everything
+    host.answer = "StitchDialog.cancel";
+    w.click("StitchDialog.edit");
+    assertEquals(1, host.questions.size());
+    assertEquals(
+        List.of(
+            Messages.getString("StitchDialog.editSaveFirst"),
+            Messages.getString("StitchDialog.editDiscard"),
+            Messages.getString("StitchDialog.cancel")),
+        List.of(host.buttons.get(0)));
+    assertTrue(w.enabled("StitchDialog.save"), "nothing was started");
+    onEdt(
+        () -> {
+          assertEquals(2, w.seams().getRowCount());
+          assertFalse(w.dialog.getTitle().contains("editing"));
+          return null;
+        });
+
+    // Discard, then the reopen is cancelled while it is checked: the stitch is still there
+    host.answer = "StitchDialog.editDiscard";
+    onEdt(
+        () -> {
+          w.button("StitchDialog.edit").doClick(0);
+          assertTrue(w.button("StitchDialog.cancel").isEnabled(), "the check can be stopped");
+          w.button("StitchDialog.cancel").doClick(0);
+          return null;
+        });
+    await("the cancelled reopen to stop", () -> w.enabled("StitchDialog.save"));
+    onEdt(
+        () -> {
+          assertEquals(2, w.seams().getRowCount());
+          assertEquals(true, w.pieces().getValueAt(2, 0));
+          assertEquals(Stitch.Leg.RIGHT, w.combos().get(2).getSelectedItem());
+          assertFalse(w.dialog.getTitle().contains("editing"));
+          return null;
+        });
+    assertEquals(List.of(), host.opened);
+
+    // Save it first: the stitch is saved as its own project, then the chosen version opens
+    host.answer = "StitchDialog.editSaveFirst";
+    w.click("StitchDialog.edit");
+    await("the save before opening", () -> host.opened.size() == 1);
+    await(
+        "the saved stitch to open",
+        () ->
+            onEdt(() -> w.dialog.getTitle().contains("editing")) && w.enabled("StitchDialog.save"));
+    List<StitchProjects.Listed> all = host.projects.list(StitchFixture.STUDY);
+    assertEquals(2, all.size());
+    StitchProject mine =
+        all.stream()
+            .map(StitchProjects.Listed::project)
+            .filter(p -> !p.versionId().equals(kept.versionId()))
+            .findFirst()
+            .orElseThrow();
+    assertNull(mine.parentVersionId(), "the unsaved stitch was a new project of its own");
+    assertNotEquals(kept.projectId(), mine.projectId());
+
+    // what is open now is the version chosen, saved: opening another asks nothing
+    int asked = host.questions.size();
+    await("the list of versions", () -> w.enabled("StitchDialog.edit"));
+    w.click("StitchDialog.edit");
+    await("the saved stitch to open again", () -> w.enabled("StitchDialog.save"));
+    assertEquals(asked, host.questions.size());
+    w.close();
+  }
+
+  @Test
+  void aRefusedReopenLeavesTheUnsavedStitchAsItWas() throws Exception {
+    StitchFixture fixture = new StitchFixture();
+    TestHost host = new TestHost(true);
+    List<Piece> earlier = fixture.pieces();
+    List<SeamRecipe> recipes = StitchFixture.lineUp(2);
+    StitchService.save(
+        host.library,
+        host.projects,
+        new Stitch(earlier, StitchFixture.seams(earlier, recipes), StitchFixture.CHOICES),
+        recipes,
+        StitchResume.Lineage.NEW,
+        (d, t) -> true);
+
+    // the study with one piece changed: a new stitch of what is there, lined up and not saved
+    List<Piece> open = new ArrayList<>(fixture.pieces());
+    open.set(1, fixture.pieceWithOnePixelChanged(1));
+    Window w = new Window(host, open);
+    await("the list of versions", () -> w.enabled("StitchDialog.edit"));
+    w.tickAndConfirm(3);
+    w.click("StitchDialog.lineUp");
+    await("Line up", () -> w.enabled("StitchDialog.save"));
+
+    host.answer = "StitchDialog.editDiscard";
+    w.click("StitchDialog.edit");
+    await("the refusal", () -> host.told.size() == 1);
+    assertTrue(host.told.get(0).contains("piece 2 of 3 has changed"), host.told.get(0));
+    assertTrue(host.told.get(0).contains("This window"), host.told.get(0));
+    await("the window to settle", () -> w.enabled("StitchDialog.save"));
+    onEdt(
+        () -> {
+          assertEquals(2, w.seams().getRowCount(), "the seams lined up here are still here");
+          assertEquals("check", w.seams().getValueAt(0, 2));
+          for (int i = 0; i < 3; i++) {
+            assertEquals(true, w.pieces().getValueAt(i, 0));
+          }
+          assertEquals("AP", w.combos().get(0).getSelectedItem());
+          assertFalse(w.dialog.getTitle().contains("editing"));
+          return null;
+        });
+
+    // and it can still be saved, as a new project of its own
+    w.click("StitchDialog.save");
+    await("the save", () -> host.opened.size() == 1);
+    await("the version", () -> host.projects.list(StitchFixture.STUDY).size() == 2);
+    w.close();
   }
 
   @Test

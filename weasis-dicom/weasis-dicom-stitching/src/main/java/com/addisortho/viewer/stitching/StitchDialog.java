@@ -17,6 +17,7 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Window;
+import java.awt.event.ItemEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Line2D;
@@ -95,6 +96,9 @@ final class StitchDialog extends JDialog {
 
     /** Asks which of {@code options}; -1 when the user chose none. */
     int choose(String question, String[] options);
+
+    /** Asks a question answered by one of {@code buttons}; -1 when the user closed it. */
+    int ask(String question, String[] buttons);
   }
 
   private final StitchService.Study study;
@@ -159,12 +163,15 @@ final class StitchDialog extends JDialog {
       return;
     }
     cuts[draggedSeam] = stitch().cut(draggedSeam).yMm() + dy * previewMm;
+    unsaved = true;
     showPreview();
   }
 
   private List<Seam> seams = List.of();
   // how each seam was set, in step with seams: what a saved version makes them again from
   private List<SeamRecipe> recipes = List.of();
+  // the seams or cuts in the window are not saved anywhere: asked about before they are replaced
+  private boolean unsaved;
   // the project and version the next save continues: the one reopened, then each one saved here
   private StitchResume.Lineage lineage = StitchResume.Lineage.NEW;
   // the versions saved for this study, oldest first; filled in the background
@@ -273,6 +280,19 @@ final class StitchDialog extends JDialog {
               options,
               options[0]);
       return picked == null ? -1 : Arrays.asList(options).indexOf(picked);
+    }
+
+    @Override
+    public int ask(String question, String[] buttons) {
+      return JOptionPane.showOptionDialog(
+          StitchDialog.this,
+          question,
+          Messages.getString("StitchDialog.edit"),
+          JOptionPane.DEFAULT_OPTION,
+          JOptionPane.WARNING_MESSAGE,
+          null,
+          buttons,
+          buttons[buttons.length - 1]);
     }
   }
 
@@ -504,12 +524,20 @@ final class StitchDialog extends JDialog {
     projection.addActionListener(e -> refresh());
     position.addActionListener(e -> refresh());
     leg.addActionListener(e -> refresh());
+    // the leg decides how the seams are matched (Both: each leg on its own as well), so seams
+    // made for one target leg are never kept, or saved, under another
+    leg.addItemListener(
+        e -> {
+          if (e.getStateChange() == ItemEvent.SELECTED) {
+            discardSeams();
+          }
+        });
     band.addActionListener(e -> discardSeams());
     lineUp.addActionListener(e -> lineUp());
     inspect.addActionListener(e -> inspectSelected());
-    save.addActionListener(e -> save(stitch()));
+    save.addActionListener(e -> save(stitch(), null));
     edit.addActionListener(e -> editStitch());
-    saveUnverified.addActionListener(e -> saveUnverified());
+    saveUnverified.addActionListener(e -> saveUnverified(null));
     cancel.addActionListener(
         e -> {
           if (running != null) {
@@ -567,6 +595,7 @@ final class StitchDialog extends JDialog {
     generation++;
     seams = List.of();
     recipes = List.of();
+    unsaved = false;
     chosen = List.of();
     cuts = new double[0];
     seamModel.fireTableDataChanged();
@@ -611,9 +640,7 @@ final class StitchDialog extends JDialog {
 
   private void lineUp() {
     List<Piece> pieces = ticked();
-    SeamMatcher.Band on = (SeamMatcher.Band) band.getSelectedItem();
-    boolean bothLegs = leg.getSelectedItem() == Stitch.Leg.BOTH && on == SeamMatcher.Band.WHOLE;
-    SeamRecipe how = bothLegs ? SeamRecipe.matchBothLegs() : SeamRecipe.match(on);
+    SeamRecipe how = automatic();
     int job = generation;
     running =
         new SwingWorker<List<Seam>, String>() {
@@ -660,6 +687,7 @@ final class StitchDialog extends JDialog {
               chosen = pieces;
               seams = new ArrayList<>(get());
               recipes = new ArrayList<>(Collections.nCopies(seams.size(), how));
+              unsaved = !seams.isEmpty();
               cuts = new double[seams.size()];
               Arrays.fill(cuts, Double.NaN);
               state.setText(" ");
@@ -691,27 +719,41 @@ final class StitchDialog extends JDialog {
     if (i < 0 || i >= seams.size()) {
       return;
     }
-    SeamEditor editor =
-        new SeamEditor(
-            this,
-            i,
-            chosen.get(i),
-            chosen.get(i + 1),
-            new SeamRecipe.Made(recipes.get(i), seams.get(i)),
-            (SeamMatcher.Band) band.getSelectedItem(),
-            s -> {
-              List<Seam> trial = new ArrayList<>(seams);
-              trial.set(i, s);
-              return new Stitch(chosen, trial, choices(), cuts);
-            });
+    SeamEditor editor = seamWindow(i);
     editor.setVisible(true);
     editor.result().ifPresent(made -> useSeam(i, made));
+  }
+
+  /** How Line up, and Automatic match again in the seam window, match for the leg and band. */
+  private SeamRecipe automatic() {
+    SeamMatcher.Band on = (SeamMatcher.Band) band.getSelectedItem();
+    return leg.getSelectedItem() == Stitch.Leg.BOTH && on == SeamMatcher.Band.WHOLE
+        ? SeamRecipe.matchBothLegs()
+        : SeamRecipe.match(on);
+  }
+
+  /** The seam window for seam i as it stands, not yet shown. */
+  SeamEditor seamWindow(int i) {
+    return new SeamEditor(
+        this,
+        i,
+        chosen.get(i),
+        chosen.get(i + 1),
+        new SeamRecipe.Made(recipes.get(i), seams.get(i)),
+        (SeamMatcher.Band) band.getSelectedItem(),
+        automatic(),
+        s -> {
+          List<Seam> trial = new ArrayList<>(seams);
+          trial.set(i, s);
+          return new Stitch(chosen, trial, choices(), cuts);
+        });
   }
 
   /** Takes the seam the user settled on in the seam window, with how it was set. */
   void useSeam(int i, SeamRecipe.Made made) {
     seams.set(i, made.seam());
     recipes.set(i, made.recipe());
+    unsaved = true;
     seamModel.fireTableRowsUpdated(i, i);
     showPreview();
     refresh();
@@ -761,7 +803,7 @@ final class StitchDialog extends JDialog {
 
   // a failed seam may still be saved for viewing: the user is told what failed and what the
   // saved image cannot be used for, and the image says so itself (burned in, no scale)
-  private void saveUnverified() {
+  private void saveUnverified(Runnable then) {
     Stitch s = new Stitch(chosen, seams, choices(), cuts, true);
     // one HTML string without newlines: JOptionPane splits a message at newlines into separate
     // labels, and only a label that starts with <html> is laid out as HTML (7 Nov 2026: the
@@ -781,11 +823,15 @@ final class StitchDialog extends JDialog {
             JOptionPane.OK_CANCEL_OPTION,
             JOptionPane.WARNING_MESSAGE);
     if (answer == JOptionPane.OK_OPTION) {
-      save(s);
+      save(s, then);
     }
   }
 
-  private void save(Stitch s) {
+  /**
+   * @param then what to go on with once the stitch is saved and, where versions are kept, kept as
+   *     one; null for nothing. It is not run when the save fails or is cancelled.
+   */
+  private void save(Stitch s, Runnable then) {
     List<SeamRecipe> how = List.copyOf(recipes);
     StitchResume.Lineage from = lineage;
     running =
@@ -836,6 +882,14 @@ final class StitchDialog extends JDialog {
                         .formatted(result.versionProblem()),
                     JOptionPane.WARNING_MESSAGE);
               }
+              // kept for editing, or nowhere to keep it: nothing more to lose from this window
+              boolean kept = projects == null || result.version() != null;
+              unsaved = !kept;
+              refresh();
+              if (kept && then != null) {
+                then.run();
+              }
+              return;
             } catch (CancellationException e) {
               state.setText(" ");
             } catch (Exception e) {
@@ -910,8 +964,36 @@ final class StitchDialog extends JDialog {
     StitchProjects.Listed version = newestFirst.get(picked);
     if (version.project() == null) {
       host.tell(version.problem(), JOptionPane.ERROR_MESSAGE);
-    } else {
+    } else if (!unsaved) {
       reopen(version.project());
+    } else {
+      askThenReopen(version.project());
+    }
+  }
+
+  // the window holds a stitch that is saved nowhere: save it first, let it go, or stay
+  private void askThenReopen(StitchProject p) {
+    boolean canSave = !seams.isEmpty() && seams.size() == chosen.size() - 1 && confirmed();
+    String saveFirst = Messages.getString("StitchDialog.editSaveFirst");
+    String discard = Messages.getString("StitchDialog.editDiscard");
+    String stay = Messages.getString("StitchDialog.cancel");
+    String[] buttons =
+        canSave ? new String[] {saveFirst, discard, stay} : new String[] {discard, stay};
+    int answer =
+        host.ask(
+            Messages.getString("StitchDialog.editUnsaved")
+                + (canSave ? "" : Messages.getString("StitchDialog.editUnsavedNoSave")),
+            buttons);
+    String picked = answer < 0 || answer >= buttons.length ? stay : buttons[answer];
+    if (picked.equals(discard)) {
+      reopen(p);
+    } else if (picked.equals(saveFirst)) {
+      Runnable then = () -> reopen(p);
+      if (seams.stream().anyMatch(s -> s.status() == Seam.Status.FAILED)) {
+        saveUnverified(then);
+      } else {
+        save(stitch(), then);
+      }
     }
   }
 
@@ -942,9 +1024,9 @@ final class StitchDialog extends JDialog {
   }
 
   /**
-   * Brings a saved version back into the window: its pieces ticked in its order, its confirmations,
-   * then every seam made again in the background. Refused, with nothing changed, unless every piece
-   * is here and unchanged.
+   * Brings a saved version back into the window. Nothing in the window changes until the version
+   * has been checked in the background: every piece here and unchanged, every seam made again.
+   * Refused or cancelled, the window and whatever stitch it holds stay exactly as they were.
    */
   private void reopen(StitchProject p) {
     List<Piece> found;
@@ -954,26 +1036,6 @@ final class StitchDialog extends JDialog {
       refused(e);
       return;
     }
-    rows.sort(
-        Comparator.comparingInt(
-            r -> {
-              int i = found.indexOf(r.candidate.piece());
-              return i < 0 ? Integer.MAX_VALUE : i;
-            }));
-    rows.forEach(r -> r.use = found.contains(r.candidate.piece()));
-    pieceModel.fireTableDataChanged();
-    // what the user confirmed for this stitch when it was made
-    oneAcquisition.setSelected(true);
-    projection.setSelectedItem(p.choices().projection());
-    for (int i = 1; i < position.getItemCount(); i++) {
-      if (position.getItemAt(i).equalsIgnoreCase(p.choices().position())) {
-        position.setSelectedIndex(i);
-      }
-    }
-    leg.setSelectedItem(p.choices().leg());
-    band.setSelectedItem(p.choices().band());
-    discardSeams();
-    int job = generation;
     running =
         new SwingWorker<StitchResume.Resumed, Void>() {
           @Override
@@ -996,16 +1058,11 @@ final class StitchDialog extends JDialog {
           @Override
           protected void done() {
             progress.setValue(0);
-            if (job != generation) {
-              refresh(); // the pieces, their order or the band changed meanwhile
-              return;
-            }
             try {
               reopened(p, get());
             } catch (CancellationException e) {
-              forget();
+              state.setText(Messages.getString("StitchDialog.editCancelled"));
             } catch (Exception e) {
-              forget();
               if (e.getCause() instanceof StitchProjectException refusal) {
                 refused(refusal);
               } else {
@@ -1026,21 +1083,29 @@ final class StitchDialog extends JDialog {
     refresh();
   }
 
-  // a saved stitch that did not reopen leaves nothing ticked and nothing confirmed: its
-  // confirmations were given for its own pieces, not for whatever is open now
-  private void forget() {
-    rows.forEach(r -> r.use = false);
-    pieceModel.fireTableDataChanged();
-    oneAcquisition.setSelected(false);
-    projection.setSelectedIndex(0);
-    position.setSelectedIndex(0);
-    leg.setSelectedIndex(0);
-    band.setSelectedIndex(0);
-    discardSeams();
-  }
-
+  // the checked version takes the window over: its pieces ticked in its order, what the user
+  // confirmed for it when it was made, its seams as they came out again
   private void reopened(StitchProject p, StitchResume.Resumed r) {
-    chosen = r.pieces();
+    List<Piece> found = r.pieces();
+    rows.sort(
+        Comparator.comparingInt(
+            row -> {
+              int i = found.indexOf(row.candidate.piece());
+              return i < 0 ? Integer.MAX_VALUE : i;
+            }));
+    rows.forEach(row -> row.use = found.contains(row.candidate.piece()));
+    pieceModel.fireTableDataChanged();
+    oneAcquisition.setSelected(true);
+    projection.setSelectedItem(p.choices().projection());
+    for (int i = 1; i < position.getItemCount(); i++) {
+      if (position.getItemAt(i).equalsIgnoreCase(p.choices().position())) {
+        position.setSelectedIndex(i);
+      }
+    }
+    leg.setSelectedItem(p.choices().leg());
+    band.setSelectedItem(p.choices().band());
+    discardSeams();
+    chosen = found;
     seams = new ArrayList<>(r.seams());
     recipes = new ArrayList<>(r.recipes());
     cuts = r.cuts().clone();

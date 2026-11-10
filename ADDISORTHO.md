@@ -448,6 +448,15 @@ automatic, semi-automatic or manual, and not reviewed.
   window saves the picture only and shows no **Edit stitch...** button. Once the study library supplies a store there,
   Save also keeps a version and Edit stitch lists the study's versions. `StitchDialogEditTest` drives the real window
   against a store in a temporary folder (`FolderProjectStore`, test code only); it is skipped where there is no display.
+  After Kimi's review of the branch (10 Nov 2026): changing the target leg now discards the seams, as changing the
+  band does, so seams matched for one leg are never saved under another; **Automatic match again** in the seam window
+  matches as Line up does for the leg and band (Both on the whole width: each leg on its own as well); Edit stitch asks
+  before it replaces a stitch that is not saved (save it first, discard it, or cancel), and the window changes only
+  once the chosen version has been checked, so a refused or cancelled reopen leaves it as it was; and the save checks
+  the version and its parent before the picture is written, and refuses an ordinary save of a failed seam, so a refused
+  stitch leaves no picture. A project-store failure after the picture is written still leaves the picture alone, and
+  the user is told. Still open: **Refine automatically from here** and **Fit to the points** apply no leg-by-leg check
+  when the target leg is Both (`SeamMatcher` has none for them).
 
 ## Shortcuts (6 Nov 2026)
 
