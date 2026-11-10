@@ -36,6 +36,7 @@ import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JTable;
 import javax.swing.SwingUtilities;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -48,10 +49,11 @@ import org.weasis.dicom.explorer.library.StudyStore;
  * message the window would show goes to the test instead. Skipped where there is no display, and
  * with {@code -Dstitch.window.tests=false}.
  *
- * <p>That switch is there because of one run on macOS with JDK 27 (10 Nov 2026) in which the test
- * JVM itself died in a native display thread (CVDisplayLink) while these tests ran against a build
- * broken on purpose. It was not seen in any other run and could not be made to happen again with
- * windows built and disposed in a loop. If the JVM dies here, that is what to look at first.
+ * <p>That switch is there because of two runs on macOS with JDK 27 (10 Nov 2026) in which the test
+ * JVM itself died in a native display thread (CVDisplayLink). Both were runs against a build broken
+ * on purpose, in which a failing test left its window undisposed; no run in which every window was
+ * disposed has died. Every window is therefore disposed after each test, pass or fail. The crash
+ * could not be reproduced outside these tests, so that is a strong lead, not a proven cause.
  */
 class StitchDialogEditTest {
 
@@ -215,6 +217,33 @@ class StitchDialogEditTest {
     }
   }
 
+  // every window a test builds, so that it is disposed whether the test passes or fails
+  private final List<java.awt.Window> built = new CopyOnWriteArrayList<>();
+
+  private Window window(TestHost host, List<Piece> open) throws Exception {
+    Window w = new Window(host, open);
+    built.add(w.dialog);
+    return w;
+  }
+
+  /**
+   * Disposes the test's windows and the seam windows they own. A window left behind by a failing
+   * test is the one thing the two runs that lost the JVM had in common (see the class comment).
+   */
+  @AfterEach
+  void disposeWindows() throws Exception {
+    onEdt(
+        () -> {
+          for (java.awt.Window w : built) {
+            for (java.awt.Window owned : w.getOwnedWindows()) {
+              owned.dispose();
+            }
+            w.dispose();
+          }
+          return null;
+        });
+  }
+
   private static <T> T onEdt(Callable<T> call) throws Exception {
     AtomicReference<T> out = new AtomicReference<>();
     AtomicReference<Exception> failed = new AtomicReference<>();
@@ -254,7 +283,7 @@ class StitchDialogEditTest {
 
     // ---- a new stitch: tick, confirm, Line up, Save
     TestHost host = new TestHost(true);
-    Window first = new Window(host, fixture.pieces());
+    Window first = window(host, fixture.pieces());
     assertFalse(first.enabled("StitchDialog.edit"), "nothing is saved yet");
     assertFalse(first.enabled("StitchDialog.lineUp"), "nothing is confirmed yet");
     first.tickAndConfirm(3);
@@ -277,7 +306,7 @@ class StitchDialogEditTest {
     // ---- the viewer restarted: a new window on the study opened again
     TestHost later = new TestHost(true);
     List<Piece> open = fixture.pieces();
-    Window second = new Window(later, open);
+    Window second = window(later, open);
     await("the list of versions", () -> second.enabled("StitchDialog.edit"));
     assertFalse(second.enabled("StitchDialog.save"));
     second.click("StitchDialog.edit");
@@ -389,7 +418,7 @@ class StitchDialogEditTest {
   void aMissingOrChangedPieceGivesAClearRefusalAndNothingIsOpened() throws Exception {
     StitchFixture fixture = new StitchFixture();
     TestHost host = new TestHost(true);
-    Window first = new Window(host, fixture.pieces());
+    Window first = window(host, fixture.pieces());
     first.tickAndConfirm(3);
     first.click("StitchDialog.lineUp");
     await("Line up", () -> first.enabled("StitchDialog.save"));
@@ -399,7 +428,7 @@ class StitchDialogEditTest {
 
     // the study opened without its third piece
     TestHost partial = new TestHost(true);
-    Window missing = new Window(partial, fixture.pieces().subList(0, 2));
+    Window missing = window(partial, fixture.pieces().subList(0, 2));
     await("the list of versions", () -> missing.enabled("StitchDialog.edit"));
     missing.click("StitchDialog.edit");
     await("the refusal", () -> partial.told.size() == 1);
@@ -420,7 +449,7 @@ class StitchDialogEditTest {
     TestHost altered = new TestHost(true);
     List<Piece> open = new ArrayList<>(fixture.pieces());
     open.set(1, fixture.pieceWithOnePixelChanged(1));
-    Window changed = new Window(altered, open);
+    Window changed = window(altered, open);
     await("the list of versions", () -> changed.enabled("StitchDialog.edit"));
     changed.click("StitchDialog.edit");
     await("the refusal", () -> altered.told.size() == 1);
@@ -479,7 +508,7 @@ class StitchDialogEditTest {
         "{\"format\":\"addisortho-stitch-project\",\"schemaVersion\":9}"
             .getBytes(StandardCharsets.UTF_8));
 
-    Window w = new Window(host, fixture.pieces());
+    Window w = window(host, fixture.pieces());
     await("the list of versions", () -> w.enabled("StitchDialog.edit"));
 
     // the version of the unknown schema is listed, and refused when chosen
@@ -507,7 +536,7 @@ class StitchDialogEditTest {
   }
 
   /** Opens the seam window on a seam, lets {@code hands} work in it, and presses Use this seam. */
-  private static SeamRecipe.Made inSeamWindow(
+  private SeamRecipe.Made inSeamWindow(
       List<Piece> pieces, SeamRecipe.Made start, Callable<Void> hands, SeamEditor[] window)
       throws Exception {
     window[0] =
@@ -522,6 +551,7 @@ class StitchDialogEditTest {
                     SeamMatcher.Band.WHOLE,
                     SeamRecipe.match(SeamMatcher.Band.WHOLE),
                     null));
+    built.add(window[0]);
     hands.call();
     onEdt(
         () -> {
@@ -693,7 +723,7 @@ class StitchDialogEditTest {
   @Test
   void changingTheTargetLegDiscardsTheSeamsUntilLineUpIsRepeated() throws Exception {
     TestHost host = new TestHost(true);
-    Window w = new Window(host, new StitchFixture().pieces());
+    Window w = window(host, new StitchFixture().pieces());
     w.tickAndConfirm(3);
     w.click("StitchDialog.lineUp");
     await("Line up", () -> w.enabled("StitchDialog.save"));
@@ -742,7 +772,7 @@ class StitchDialogEditTest {
   void aFilmOfBothLegsIsMatchedLegByLegThroughRematchSaveAndReopen() throws Exception {
     StitchFixture fixture = StitchFixture.twoLegs();
     TestHost host = new TestHost(true);
-    Window first = new Window(host, fixture.pieces());
+    Window first = window(host, fixture.pieces());
     first.tickAndConfirm(2);
     onEdt(
         () -> {
@@ -778,7 +808,7 @@ class StitchDialogEditTest {
     // reopened, it is checked leg by leg again, and a rematch there is still leg by leg
     TestHost later = new TestHost(true);
     List<Piece> secondPieces = fixture.pieces();
-    Window second = new Window(later, secondPieces);
+    Window second = window(later, secondPieces);
     await("the list of versions", () -> second.enabled("StitchDialog.edit"));
     second.click("StitchDialog.edit");
     await("the saved stitch to open", () -> second.enabled("StitchDialog.save"));
@@ -877,7 +907,7 @@ class StitchDialogEditTest {
             .version();
 
     // a new stitch lined up in the window and not saved
-    Window w = new Window(host, fixture.pieces());
+    Window w = window(host, fixture.pieces());
     await("the list of versions", () -> w.enabled("StitchDialog.edit"));
     w.tickAndConfirm(3);
     w.click("StitchDialog.lineUp");
@@ -966,7 +996,7 @@ class StitchDialogEditTest {
     // the study with one piece changed: a new stitch of what is there, lined up and not saved
     List<Piece> open = new ArrayList<>(fixture.pieces());
     open.set(1, fixture.pieceWithOnePixelChanged(1));
-    Window w = new Window(host, open);
+    Window w = window(host, open);
     await("the list of versions", () -> w.enabled("StitchDialog.edit"));
     w.tickAndConfirm(3);
     w.click("StitchDialog.lineUp");
@@ -1011,7 +1041,7 @@ class StitchDialogEditTest {
             throw new IOException("the disk is full");
           }
         };
-    Window w = new Window(host, new StitchFixture().pieces());
+    Window w = window(host, new StitchFixture().pieces());
     w.tickAndConfirm(3);
     w.click("StitchDialog.lineUp");
     await("Line up", () -> w.enabled("StitchDialog.save"));
@@ -1041,7 +1071,7 @@ class StitchDialogEditTest {
   void handWorkIsAskedAboutBeforeALegBandOrPieceChangeDiscardsIt() throws Exception {
     TestHost host = new TestHost(true);
     List<Piece> open = new StitchFixture().pieces();
-    Window w = new Window(host, open);
+    Window w = window(host, open);
     w.tickAndConfirm(3);
     w.click("StitchDialog.lineUp");
     await("Line up", () -> w.enabled("StitchDialog.save"));
@@ -1155,7 +1185,7 @@ class StitchDialogEditTest {
   @Test
   void withoutAProjectStoreThereIsNoEditStitchAndSaveIsAsBefore() throws Exception {
     TestHost host = new TestHost(false);
-    Window w = new Window(host, new StitchFixture().pieces());
+    Window w = window(host, new StitchFixture().pieces());
     assertNull(onEdt(() -> w.button("StitchDialog.edit")), "the button is not in the window");
     w.tickAndConfirm(3);
     w.click("StitchDialog.lineUp");
