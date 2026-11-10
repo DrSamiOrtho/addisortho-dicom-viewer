@@ -498,6 +498,129 @@ class StitchDialogEditTest {
     w.close();
   }
 
+  /** Opens the seam window on a seam, lets {@code hands} work in it, and presses Use this seam. */
+  private static SeamRecipe.Made inSeamWindow(
+      List<Piece> pieces, SeamRecipe.Made start, Callable<Void> hands, SeamEditor[] window)
+      throws Exception {
+    window[0] =
+        onEdt(
+            () ->
+                new SeamEditor(
+                    null, 0, pieces.get(0), pieces.get(1), start, SeamMatcher.Band.WHOLE, null));
+    hands.call();
+    onEdt(
+        () -> {
+          editorButton(window[0], "SeamEditor.apply").doClick(0);
+          return null;
+        });
+    return window[0].result().orElseThrow();
+  }
+
+  @Test
+  void theSeamWindowReportsHowEachSeamWasSet() throws Exception {
+    List<Piece> pieces = new StitchFixture().pieces();
+    SeamRecipe matched = SeamRecipe.match(SeamMatcher.Band.WHOLE);
+    Seam seam = StitchFixture.seams(pieces, List.of(matched)).get(0);
+    SeamRecipe.Made start = new SeamRecipe.Made(matched, seam);
+    MatchImage upper = pieces.get(0).match();
+    MatchImage lower = pieces.get(1).match();
+    SeamEditor[] w = new SeamEditor[1];
+
+    // untouched: the seam and its decision as they came
+    assertEquals(start, inSeamWindow(pieces, start, () -> null, w));
+
+    // nudged with the arrow keys and turned: moved by hand, and nothing more is claimed
+    SeamRecipe.Made nudged =
+        inSeamWindow(
+            pieces,
+            start,
+            () ->
+                onEdt(
+                    () -> {
+                      JComponent root = (JComponent) w[0].getContentPane();
+                      root.getActionMap().get("down").actionPerformed(null);
+                      root.getActionMap().get("left1").actionPerformed(null);
+                      root.getActionMap().get("turnRight").actionPerformed(null);
+                      return null;
+                    }),
+            w);
+    assertEquals(SeamRecipe.Kind.MATCH, nudged.recipe().kind());
+    assertEquals(nudged.seam().transform(), nudged.recipe().movedTo());
+    assertNotEquals(seam.transform(), nudged.seam().transform());
+    assertEquals(nudged.seam(), nudged.recipe().compute(upper, lower), "it can be made again");
+    assertEquals(Seam.Method.SEMI_AUTOMATIC, nudged.seam().method());
+    assertTrue(Double.isNaN(nudged.seam().rmsMm()));
+
+    // three matching points picked in the two pieces, then Fit to the points
+    SeamRecipe.Made fitted =
+        inSeamWindow(
+            pieces,
+            start,
+            () -> {
+              List<ImagePanel> views = new ArrayList<>();
+              Window.collect(w[0].getContentPane(), ImagePanel.class, views);
+              ImagePanel upperView = views.get(1);
+              ImagePanel lowerView = views.get(2);
+              // the upper view begins 20 mm above the overlap
+              double top =
+                  Math.max(
+                      0,
+                      SeamMatcher.overlap(
+                              pieces.get(0).widthMm(),
+                              pieces.get(0).heightMm(),
+                              seam.transform(),
+                              lower)[1]
+                          - 20);
+              onEdt(
+                  () -> {
+                    editorButton(w[0], "SeamEditor.pick").doClick(0);
+                    return null;
+                  });
+              for (double[] q : new double[][] {{40, 12}, {110, 30}, {165, 18}}) {
+                double[] to = seam.transform().apply(q[0], q[1]);
+                mouse(
+                    upperView,
+                    MouseEvent.MOUSE_PRESSED,
+                    (int) Math.round(to[0]),
+                    (int) Math.round(to[1] - top));
+                mouse(lowerView, MouseEvent.MOUSE_PRESSED, (int) q[0], (int) q[1]);
+              }
+              return onEdt(
+                  () -> {
+                    editorButton(w[0], "SeamEditor.fit").doClick(0);
+                    return null;
+                  });
+            },
+            w);
+    assertEquals(SeamRecipe.Kind.POINTS, fitted.recipe().kind());
+    assertEquals(3, fitted.recipe().points().size());
+    assertEquals(Seam.Method.MANUAL, fitted.seam().method());
+    assertEquals(fitted.seam(), fitted.recipe().compute(upper, lower));
+    double[] byPoints = fitted.seam().transform().apply(105, 20);
+    double[] byMatch = seam.transform().apply(105, 20);
+    assertTrue(
+        Math.hypot(byPoints[0] - byMatch[0], byPoints[1] - byMatch[1]) < 1,
+        "points picked to the nearest millimetre put the pieces together within that");
+
+    // Automatic match again, from a seam that had been moved
+    SeamRecipe.Made again =
+        inSeamWindow(
+            pieces,
+            nudged,
+            () -> {
+              AbstractButton auto = editorButton(w[0], "SeamEditor.auto");
+              onEdt(
+                  () -> {
+                    auto.doClick(0);
+                    return null;
+                  });
+              await("Automatic match again", () -> onEdt(auto::isEnabled));
+              return null;
+            },
+            w);
+    assertEquals(start, again, "the hand move is gone with the new match");
+  }
+
   @Test
   void withoutAProjectStoreThereIsNoEditStitchAndSaveIsAsBefore() throws Exception {
     TestHost host = new TestHost(false);
