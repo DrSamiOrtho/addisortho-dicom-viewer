@@ -9,7 +9,11 @@
 package com.addisortho.viewer.stitching;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import org.dcm4che3.data.Attributes;
@@ -38,6 +42,7 @@ final class Piece {
   private final Object readLock = new Object();
   private MatchImage match;
   private Gray level;
+  private String pixelHash;
 
   Piece(Attributes header, int width, int height, PixelSource source) {
     this.header = header;
@@ -113,6 +118,7 @@ final class Piece {
       return;
     }
     float[] v = read();
+    pixelHash = hash(v, width, height);
     match = MatchImage.of(v, width, height, spacing.colMm(), spacing.rowMm(), false);
     level = Gray.resample(v, width, height, spacing.colMm(), spacing.rowMm(), MatchImage.COARSE_MM);
   }
@@ -124,6 +130,35 @@ final class Piece {
   /** The 2 mm copy in output polarity (bone bright), not normalised: for exposure and preview. */
   synchronized Gray level() {
     return level;
+  }
+
+  /**
+   * SHA-256 of the pixels as the stitch uses them, known once {@link #prepare} has read them: the
+   * width and height as 32-bit integers, then every value of {@link #read} row by row as a 32-bit
+   * float, all big-endian. It follows the decoded values, not the file, so a copy of the same image
+   * in another transfer syntax is the same source and any change to a pixel is another.
+   */
+  synchronized String pixelHash() {
+    return pixelHash;
+  }
+
+  static String hash(float[] values, int width, int height) {
+    try {
+      MessageDigest sha = MessageDigest.getInstance("SHA-256");
+      ByteBuffer buffer = ByteBuffer.allocate(1 << 16);
+      buffer.putInt(width).putInt(height);
+      for (float v : values) {
+        if (buffer.remaining() < Float.BYTES) {
+          sha.update(buffer.flip());
+          buffer.clear();
+        }
+        buffer.putFloat(v);
+      }
+      sha.update(buffer.flip());
+      return HexFormat.of().formatHex(sha.digest());
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e); // every Java runtime has SHA-256
+    }
   }
 
   /** Full-resolution values in output polarity: MONOCHROME1 is negated so bone is bright. */

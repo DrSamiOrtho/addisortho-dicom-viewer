@@ -13,9 +13,12 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 import javax.swing.SwingUtilities;
 import org.dcm4che3.data.Attributes;
@@ -186,6 +189,62 @@ final class StitchService {
   static StudyStore.SavedDerived save(StudyStore store, Stitch s, Compositor.Progress progress)
       throws IOException {
     return store.saveDerived(file -> writeComplete(s, file, progress));
+  }
+
+  /**
+   * Where editable stitch projects are kept, when this viewer keeps them. None yet: the study
+   * library's own {@link ProjectStore} is to be supplied here, and until it is the window saves the
+   * picture only and offers no Edit stitch, since a version kept nowhere durable could not be
+   * reopened after a restart.
+   */
+  static Optional<ProjectStore> projectStore() {
+    return Optional.empty();
+  }
+
+  /**
+   * What one save left: the picture, and the editable version saved with it.
+   *
+   * @param version null when no projects are kept, or when the version could not be saved
+   * @param versionProblem why the version was not saved although the picture was, else null
+   */
+  record Saved(StudyStore.SavedDerived picture, StitchProject version, String versionProblem) {}
+
+  /**
+   * Saves the picture, then the stitch as a new version of its project so it can be edited later.
+   * The picture is saved first and stands whatever becomes of the version; neither replaces
+   * anything saved before.
+   *
+   * @param projects null to save the picture only
+   * @param recipes how each seam of {@code s} was set
+   */
+  static Saved save(
+      StudyStore store,
+      StitchProjects projects,
+      Stitch s,
+      List<SeamRecipe> recipes,
+      StitchResume.Lineage lineage,
+      Compositor.Progress progress)
+      throws IOException {
+    StudyStore.SavedDerived picture = save(store, s, progress);
+    if (projects == null) {
+      return new Saved(picture, null, null);
+    }
+    try {
+      StitchProject version =
+          StitchResume.capture(
+              s,
+              recipes,
+              lineage,
+              Instant.now().truncatedTo(ChronoUnit.SECONDS),
+              picture.instance().sopUid(),
+              picture.instance().seriesUid());
+      projects.save(version);
+      return new Saved(picture, version, null);
+    } catch (IOException | RuntimeException e) {
+      // Its message can hold a path: for the user, not for the log.
+      LOGGER.error("The stitch project was not saved: {}", e.getClass().getSimpleName());
+      return new Saved(picture, null, String.valueOf(e.getMessage()));
+    }
   }
 
   private static void writeComplete(Stitch s, Path file, Compositor.Progress progress)

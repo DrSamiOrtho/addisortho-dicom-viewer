@@ -90,6 +90,11 @@ final class Stitch {
     this.rows = new Cut.Row[seams.size()];
   }
 
+  /** Where the user put the cut of seam i, in its upper piece's mm; NaN when it is automatic. */
+  double requestedCut(int i) {
+    return cuts[i];
+  }
+
   /** The cut of seam i: where the lower piece takes over from the upper, and why. */
   synchronized Cut.Row cut(int i) {
     if (rows[i] == null) {
