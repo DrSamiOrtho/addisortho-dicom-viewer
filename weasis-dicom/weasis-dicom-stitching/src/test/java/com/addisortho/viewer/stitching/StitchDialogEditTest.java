@@ -44,8 +44,14 @@ import org.weasis.dicom.explorer.library.StudyStore;
 
 /**
  * The stitch window itself, driven by its own buttons, tables and mouse, with a project store in a
- * temporary folder in place of the viewer's. The windows are built but never shown. Skipped where
- * there is no display.
+ * temporary folder in place of the viewer's. The windows are built but never shown, and every
+ * message the window would show goes to the test instead. Skipped where there is no display, and
+ * with {@code -Dstitch.window.tests=false}.
+ *
+ * <p>That switch is there because of one run on macOS with JDK 27 (10 Nov 2026) in which the test
+ * JVM itself died in a native display thread (CVDisplayLink) while these tests ran against a build
+ * broken on purpose. It was not seen in any other run and could not be made to happen again with
+ * windows built and disposed in a loop. If the JVM dies here, that is what to look at first.
  */
 class StitchDialogEditTest {
 
@@ -56,11 +62,13 @@ class StitchDialogEditTest {
   @BeforeAll
   static void needsADisplay() {
     System.setProperty("apple.awt.UIElement", "true"); // no Dock icon while the tests run
+    assumeFalse(
+        "false".equals(System.getProperty("stitch.window.tests")), "the window tests are off");
     assumeFalse(GraphicsEnvironment.isHeadless(), "the stitch window needs a display");
   }
 
   /** The viewer around the window: temporary stores, and what the window told or asked. */
-  private final class TestHost implements StitchDialog.Host {
+  private class TestHost implements StitchDialog.Host {
     final StudyStore library = new StudyStore(dir.resolve("library"), true);
     final FolderProjectStore folder = new FolderProjectStore(dir.resolve("projects"));
     final StitchProjects projects;
@@ -894,6 +902,37 @@ class StitchDialogEditTest {
     w.click("StitchDialog.save");
     await("the save", () -> host.opened.size() == 1);
     await("the version", () -> host.projects.list(StitchFixture.STUDY).size() == 2);
+    w.close();
+  }
+
+  @Test
+  void aSaveThatFailsIsToldAndTheStitchStaysInTheWindow() throws Exception {
+    TestHost host =
+        new TestHost(true) {
+          @Override
+          public StitchService.Saved save(
+              Stitch s,
+              List<SeamRecipe> recipes,
+              StitchResume.Lineage lineage,
+              Compositor.Progress progress)
+              throws IOException {
+            throw new IOException("the disk is full");
+          }
+        };
+    Window w = new Window(host, new StitchFixture().pieces());
+    w.tickAndConfirm(3);
+    w.click("StitchDialog.lineUp");
+    await("Line up", () -> w.enabled("StitchDialog.save"));
+    w.click("StitchDialog.save");
+    await("the failure to be told", () -> host.told.size() == 1);
+    assertTrue(host.told.get(0).contains("the disk is full"), host.told.get(0));
+    await("the window to settle", () -> w.enabled("StitchDialog.save"));
+    onEdt(
+        () -> {
+          assertEquals(2, w.seams().getRowCount(), "the stitch is still there to save again");
+          return null;
+        });
+    assertEquals(List.of(), host.opened);
     w.close();
   }
 

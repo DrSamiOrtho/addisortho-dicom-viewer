@@ -1150,11 +1150,7 @@ final class StitchDialog extends JDialog {
   }
 
   private void notOpened() {
-    JOptionPane.showMessageDialog(
-        this,
-        Messages.getString("StitchDialog.savedNotOpened"),
-        Messages.getString("StitchDialog.title"),
-        JOptionPane.WARNING_MESSAGE);
+    host.tell(Messages.getString("StitchDialog.savedNotOpened"), JOptionPane.WARNING_MESSAGE);
   }
 
   /** The stitch stays in this dialog, so the user can free some space and press Save again. */
@@ -1163,10 +1159,8 @@ final class StitchDialog extends JDialog {
     // Its message can hold a path with the patient's name: for the user, not for the log.
     LOGGER.error("The stitch could not be saved: {}", cause.getClass().getSimpleName());
     state.setText(" ");
-    JOptionPane.showMessageDialog(
-        this,
+    host.tell(
         Messages.getString("StitchDialog.saveFailed").formatted(cause.getMessage()),
-        Messages.getString("StitchDialog.title"),
         JOptionPane.ERROR_MESSAGE);
   }
 
@@ -1174,10 +1168,8 @@ final class StitchDialog extends JDialog {
     Throwable cause = e.getCause() == null ? e : e.getCause();
     LOGGER.error("Stitching failed", cause);
     state.setText(" ");
-    JOptionPane.showMessageDialog(
-        this,
+    host.tell(
         Messages.getString("StitchDialog.error").formatted(cause.getMessage()),
-        Messages.getString("StitchDialog.title"),
         JOptionPane.ERROR_MESSAGE);
   }
 
