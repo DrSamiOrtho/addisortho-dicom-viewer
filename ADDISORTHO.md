@@ -477,8 +477,8 @@ automatic, semi-automatic or manual, and not reviewed.
   plain move under the same locks. The folder is flushed and the bytes read back before put returns; leftovers of a
   stopped write are never listed and the next write removes them. Deleting a study from the library deletes its projects
   with it (Sami, 10 Nov 2026; `StudyStore.deleteStudy` reads the study's UID from its images, deletes the folder, then
-  every project of that study under the write locks); other studies' projects are untouched. Projects do not travel
-  in exports, pending Sami's word. Tested on synthetic data in unit tests, including
+  every project of that study under the write locks); other studies' projects are untouched. Projects never leave the
+  computer: ZIP, disc and DICOM send carry the stitched pictures only (Sami, 10 Nov 2026). Tested on synthetic data in unit tests, including
   two threads and two processes. Installed-app round trip, 10 Nov 2026, on the Latest Full build (ec3a72bf8) with
   only the explorer and stitching bundles swapped, three synthetic CR pieces: the bundle resolves with its Jackson
   imports; Line up and Save keep version 1; after a quit and restart Edit stitch lists and reopens it with pieces,
