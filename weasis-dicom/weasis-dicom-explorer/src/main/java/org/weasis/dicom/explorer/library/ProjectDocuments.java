@@ -59,7 +59,9 @@ import java.util.regex.Pattern;
  *       macOS and Linux that makes the name durable on a local disk. Windows offers no folder flush
  *       to Java: there the named file is forced and NTFS's journal is relied on, which has not been
  *       tested with a power cut. Network and synced folders, and file systems that refuse a folder
- *       flush, give no durability guarantee (the same as for the library's images).
+ *       flush, give no durability guarantee (the same as for the library's images). When the force
+ *       or a flush fails after the name is given, the document stays, whole, and {@link #put}
+ *       throws {@link KeptUnconfirmedException} to say so.
  * </ul>
  *
  * Messages of its exceptions are meant for the user and hold no path; their causes may, and must
@@ -121,7 +123,11 @@ public final class ProjectDocuments {
    *
    * @throws FileAlreadyExistsException when a document of that identifier is already kept; what is
    *     kept is untouched
-   * @throws IOException when it could not be kept; then it is not kept
+   * @throws KeptUnconfirmedException when it is kept, whole and listed, but the disk did not
+   *     confirm it (Codex recheck, 10 Nov 2026: this was reported as not kept)
+   * @throws IOException otherwise when it could not be kept; then it is not kept, except that a
+   *     failure after the name was given leaves it kept and whole, so a caller that must know asks
+   *     {@link #get}
    */
   public void put(String studyUid, String documentId, byte[] document) throws IOException {
     Path study = studyFolder(studyUid);
@@ -150,12 +156,32 @@ public final class ProjectDocuments {
       } finally {
         Files.deleteIfExists(temp);
       }
-      forceFile(target);
-      persistPath(study);
+      try {
+        forceFile(target);
+        persistPath(study);
+      } catch (IOException e) {
+        // it has its name: kept and whole, only not known to be safe against a power cut
+        throw new KeptUnconfirmedException(e);
+      }
     } catch (FileAlreadyExistsException e) {
       throw new FileAlreadyExistsException(id); // without the path
+    } catch (KeptUnconfirmedException e) {
+      throw e;
     } catch (IOException e) {
       throw unwritable(e);
+    }
+  }
+
+  /**
+   * The document is kept, whole and listed, but forcing it or flushing its folders failed after it
+   * was named, so it is not known to survive a power cut. Its message holds no path.
+   */
+  public static final class KeptUnconfirmedException extends IOException {
+    KeptUnconfirmedException(IOException cause) {
+      super(
+          "It was written to the study library on this computer, but the disk did not confirm it,"
+              + " so a power cut just now could still lose it.",
+          cause);
     }
   }
 

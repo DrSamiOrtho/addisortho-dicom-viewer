@@ -211,8 +211,10 @@ final class StitchService {
   /**
    * What one save left: the picture, and the editable version saved with it.
    *
-   * @param version null when no projects are kept, or when the version could not be saved
-   * @param versionProblem why the version was not saved although the picture was, else null
+   * @param version null when no projects are kept, or when the version is not kept
+   * @param versionProblem what went wrong saving the version although the picture was saved, else
+   *     null. With {@code version} null it was not kept; with a version it is kept and can be
+   *     edited, but the store failed after writing it
    */
   record Saved(StudyStore.SavedDerived picture, StitchProject version, String versionProblem) {}
 
@@ -261,15 +263,20 @@ final class StitchService {
     if (planned == null) {
       return new Saved(picture, null, null);
     }
+    StitchProject version = null;
     try {
-      StitchProject version =
-          planned.withOutput(picture.instance().sopUid(), picture.instance().seriesUid());
+      version = planned.withOutput(picture.instance().sopUid(), picture.instance().seriesUid());
       projects.save(version);
       return new Saved(picture, version, null);
     } catch (IOException | RuntimeException e) {
+      // A store can fail after the version is whole; then it is kept, and is said to be.
+      boolean kept = version != null && projects.kept(version);
       // Its message can hold a path: for the user, not for the log.
-      LOGGER.error("The stitch project was not saved: {}", e.getClass().getSimpleName());
-      return new Saved(picture, null, String.valueOf(e.getMessage()));
+      LOGGER.error(
+          "The stitch project was not saved cleanly (kept: {}): {}",
+          kept,
+          e.getClass().getSimpleName());
+      return new Saved(picture, kept ? version : null, String.valueOf(e.getMessage()));
     }
   }
 

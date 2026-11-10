@@ -229,6 +229,41 @@ class SeamMatcherTest {
     assertTrue(off < 3, "%.1f mm from the nearer leg's seam".formatted(off));
   }
 
+  /**
+   * The known limit of that rule (reviews of 10 Nov 2026): on a whole-width match of two legs that
+   * moved differently, no single shift suits both, and the refused seam follows the leg its matched
+   * points lie on. The other leg is then several millimetres off, the seam stays refused, and
+   * "Both" stays refused too. Printed so a change to the matcher shows what it did to the far leg.
+   */
+  @Test
+  void aRefusedWholeWidthSeamFollowsOneLegAndIsOffOnTheOther() {
+    double w = 427;
+    double h = 427;
+    Phantom legs = Phantom.twoLegs(w, 1100, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lowerLeft = new Phantom.Cut(Rigid.shift(2, 85), w, h, 0.139, 1, 0);
+    var lowerRight = new Phantom.Cut(new Rigid(Math.toRadians(1.2), 2, 87), w, h, 0.139, 1, 0);
+    MatchImage up = legs.matchImage(upper, 0.02, 45);
+    MatchImage low = legs.splicedMatchImage(lowerLeft, lowerRight, 0.02, 46);
+    Seam seam = SeamMatcher.match(up, low, SeamMatcher.Band.WHOLE);
+
+    assertEquals(Seam.Status.FAILED, seam.status(), seam.summary());
+    // each leg's axis, mid-height of the overlap, in the upper piece
+    double y = (85 + h) / 2;
+    double offLeft = off(seam.transform(), Phantom.truth(upper, lowerLeft), 110, y);
+    double offRight = off(seam.transform(), Phantom.truth(upper, lowerRight), 320, y);
+    String both = "left %.1f mm, right %.1f mm".formatted(offLeft, offRight);
+    assertTrue(Math.min(offLeft, offRight) < 3, both);
+    assertTrue(Math.max(offLeft, offRight) < 15, both);
+    assertEquals(Seam.Status.FAILED, SeamMatcher.matchBothLegs(up, low).status());
+  }
+
+  private static double off(Rigid got, Rigid truth, double x, double y) {
+    double[] g = got.apply(x, y);
+    double[] t = truth.apply(x, y);
+    return Math.hypot(g[0] - t[0], g[1] - t[1]);
+  }
+
   @Test
   void theAverageShiftOfMatchedPointsIsTheirMeanDisplacement() {
     var pairs =

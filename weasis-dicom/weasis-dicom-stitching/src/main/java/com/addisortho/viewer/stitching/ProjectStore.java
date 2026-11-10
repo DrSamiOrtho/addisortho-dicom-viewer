@@ -40,6 +40,8 @@ interface ProjectStore {
    * Keeps a new version.
    *
    * @throws java.nio.file.FileAlreadyExistsException when the identifier is already kept
+   * @throws IOException when it failed; the version is then absent, or complete when only the last
+   *     steps failed, and {@link #get} tells which
    */
   void put(String studyInstanceUid, String versionId, byte[] document) throws IOException;
 

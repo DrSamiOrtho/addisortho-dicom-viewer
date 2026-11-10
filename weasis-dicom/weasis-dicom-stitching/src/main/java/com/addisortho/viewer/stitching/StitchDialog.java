@@ -926,7 +926,10 @@ final class StitchDialog extends JDialog {
               host.open(saved, StitchDialog.this::notOpened);
               if (result.versionProblem() != null) {
                 host.tell(
-                    Messages.getString("StitchDialog.versionNotSaved")
+                    Messages.getString(
+                            result.version() == null
+                                ? "StitchDialog.versionNotSaved"
+                                : "StitchDialog.versionUnconfirmed")
                         .formatted(result.versionProblem()),
                     JOptionPane.WARNING_MESSAGE);
               }

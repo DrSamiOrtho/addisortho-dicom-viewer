@@ -434,6 +434,26 @@ class ProjectDocumentsTest {
     assertEquals(chain, flushed, "the retry flushes the whole path, not only the study's folder");
   }
 
+  /** Codex recheck, 10 Nov 2026: a flush that failed after the name was reported as not kept. */
+  @Test
+  void aFlushThatFailsAfterTheNameSaysTheDocumentIsKept() throws IOException {
+    ProjectDocuments failing = docs();
+    failing.folderFlush =
+        f -> {
+          throw new IOException("flush failed in " + f);
+        };
+    String id = id();
+
+    IOException e =
+        assertThrows(
+            ProjectDocuments.KeptUnconfirmedException.class,
+            () -> failing.put(STUDY, id, doc("whole")));
+
+    assertFalse(e.getMessage().contains(root.toString()), "no path for the user");
+    assertEquals(List.of(id), docs().list(STUDY));
+    assertArrayEquals(doc("whole"), docs().get(STUDY, id));
+  }
+
   @Test
   void aDocumentThatDoesNotReadBackIsNeverKept() throws IOException {
     ProjectDocuments corrupting = docs();

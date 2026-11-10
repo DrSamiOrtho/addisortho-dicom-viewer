@@ -205,8 +205,9 @@ final class SeamMatcher {
   /**
    * The rough position refined by shift alone: the 1 mm intensity of the overlap correlated at
    * every whole-millimetre shift within {@link #LEVEL_MM} of the 2 mm rough peak, then the peak
-   * read to a fraction of a millimetre. No rotation. This is where a failed automatic seam is left
-   * (case LL-001, 7 Nov 2026: the 2 mm grid alone put the femoral cortex 1.6 mm off).
+   * read to a fraction of a millimetre. No rotation. A failed automatic seam with fewer than {@link
+   * #MIN_INLIERS} matched points is left here (case LL-001, 7 Nov 2026: the 2 mm grid alone put the
+   * femoral cortex 1.6 mm off); with more it is left at {@link #meanShift} (stitch 0.6).
    */
   static Rigid levelShift(MatchImage upper, MatchImage lower, Band band, Coarse coarse) {
     Gray u = upper.fine();
@@ -273,10 +274,12 @@ final class SeamMatcher {
   }
 
   /**
-   * The gates on a fine match. {@code rough} is where a failed seam is left: the rough position
-   * refined by shift only, or the position set by hand, never the failed fit. A fit the gates
-   * refused must not tilt the picture: on case LL-001 (7 Nov 2026) a -1.17 deg fit, parallax
-   * absorbed as rotation, failed its hold-out and still turned the tibiae in the saved image.
+   * The gates on a fine match. {@code rough} is the rough position refined by shift only, or the
+   * position set by hand. A failed seam is left there, except an automatic one with at least {@link
+   * #MIN_INLIERS} matched points, which is left at their {@link #meanShift} (stitch 0.6, 10 Nov
+   * 2026); never at the failed fit. A fit the gates refused must not tilt the picture: on case
+   * LL-001 (7 Nov 2026) a -1.17 deg fit, parallax absorbed as rotation, failed its hold-out and
+   * still turned the tibiae in the saved image.
    */
   private static Seam judge(
       MatchImage upper,

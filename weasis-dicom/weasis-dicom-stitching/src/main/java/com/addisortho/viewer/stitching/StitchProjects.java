@@ -58,6 +58,21 @@ final class StitchProjects {
     }
   }
 
+  /**
+   * Whether exactly this version is kept and reads back. Asked after {@link #save} failed: a store
+   * can fail after the version is whole (Codex recheck, 10 Nov 2026), and saying it was not kept
+   * would then be false.
+   */
+  boolean kept(StitchProject version) {
+    try {
+      return Arrays.equals(
+          StitchProjectIO.write(version),
+          store.get(version.studyInstanceUid(), version.versionId()));
+    } catch (IOException | RuntimeException e) {
+      return false;
+    }
+  }
+
   /** Refuses a version that could not be saved where it says it belongs; writes nothing. */
   void checkLineage(StitchProject version) throws IOException {
     if (version.parentVersionId() == null) {

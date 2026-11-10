@@ -289,6 +289,47 @@ class StitchEditFlowTest {
     assertEquals(1, pictures());
   }
 
+  /** Codex recheck, 10 Nov 2026: such a version was reported as not kept and not continued from. */
+  @Test
+  void whenTheProjectStoreFailsAfterKeepingTheVersionItIsStillTheVersionSaved() throws IOException {
+    StudyStore library = new StudyStore(dir.resolve("library"), true);
+    java.util.Map<String, byte[]> kept = new java.util.HashMap<>();
+    ProjectStore unconfirmed =
+        new ProjectStore() {
+          @Override
+          public void put(String study, String version, byte[] document) throws IOException {
+            kept.put(version, document.clone());
+            throw new IOException("the disk did not confirm it");
+          }
+
+          @Override
+          public byte[] get(String study, String version) throws IOException {
+            byte[] document = kept.get(version);
+            if (document == null) {
+              throw new NoSuchFileException(version);
+            }
+            return document.clone();
+          }
+
+          @Override
+          public List<String> list(String study) {
+            return List.copyOf(kept.keySet());
+          }
+        };
+    List<Piece> pieces = new StitchFixture().pieces();
+    List<SeamRecipe> recipes = StitchFixture.lineUp(2);
+    Stitch s = new Stitch(pieces, StitchFixture.seams(pieces, recipes), StitchFixture.CHOICES);
+    StitchProjects projects = new StitchProjects(unconfirmed);
+
+    StitchService.Saved saved =
+        StitchService.save(library, projects, s, recipes, StitchResume.Lineage.NEW, GO);
+
+    assertEquals("the disk did not confirm it", saved.versionProblem());
+    assertEquals(
+        saved.version().versionId(), projects.list(StitchFixture.STUDY).get(0).versionId());
+    assertEquals(1, pictures());
+  }
+
   @Test
   void withoutAProjectStoreTheSaveIsThePictureAloneAsBefore() throws IOException {
     StudyStore library = new StudyStore(dir.resolve("library"), true);
