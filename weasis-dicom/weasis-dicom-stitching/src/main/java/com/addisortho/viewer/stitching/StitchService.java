@@ -13,9 +13,11 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 import javax.swing.SwingUtilities;
 import org.dcm4che3.data.Attributes;
@@ -174,9 +176,18 @@ final class StitchService {
     }
   }
 
-  /** Saves the stitch for good in the study library of this computer. */
-  static StudyStore.SavedDerived save(Stitch s, Compositor.Progress progress) throws IOException {
-    return save(StudyLibrary.getInstance().store(), s, progress);
+  /**
+   * Saves the stitch for good in the study library of this computer and, where {@code projects} are
+   * kept, as an editable version.
+   */
+  static Saved save(
+      StitchProjects projects,
+      Stitch s,
+      List<SeamRecipe> recipes,
+      StitchResume.Lineage lineage,
+      Compositor.Progress progress)
+      throws IOException {
+    return save(StudyLibrary.getInstance().store(), projects, s, recipes, lineage, progress);
   }
 
   /**
@@ -186,6 +197,87 @@ final class StitchService {
   static StudyStore.SavedDerived save(StudyStore store, Stitch s, Compositor.Progress progress)
       throws IOException {
     return store.saveDerived(file -> writeComplete(s, file, progress));
+  }
+
+  /**
+   * Where editable stitch projects are kept: the study library of this computer, beside the
+   * pictures ({@link LibraryProjectStore}). Empty would switch editing off: the window then saves
+   * the picture only and offers no Edit stitch.
+   */
+  static Optional<ProjectStore> projectStore() {
+    return Optional.of(new LibraryProjectStore(() -> StudyLibrary.getInstance().store()));
+  }
+
+  /**
+   * What one save left: the picture, and the editable version saved with it.
+   *
+   * @param version null when no projects are kept, or when the version is not kept
+   * @param versionProblem what went wrong saving the version although the picture was saved, else
+   *     null. With {@code version} null it was not kept; with a version it is kept and can be
+   *     edited, but the store failed after writing it
+   */
+  record Saved(StudyStore.SavedDerived picture, StitchProject version, String versionProblem) {}
+
+  /**
+   * Saves the picture, then the stitch as a new version of its project so it can be edited later.
+   * Neither replaces anything saved before.
+   *
+   * <p>Everything that can be known beforehand is checked before a byte is written: a failed seam
+   * goes out only as an unverified draft, and where versions are kept the version must be one the
+   * project format accepts, under a parent that is saved. A stitch refused here leaves no picture.
+   * The two stores cannot be written as one, though: when the picture is written and the project
+   * store then fails, the picture stands on its own, as every stitch did before projects, and
+   * {@link Saved#versionProblem} says why it cannot be edited later.
+   *
+   * @param projects null to save the picture only
+   * @param recipes how each seam of {@code s} was set
+   * @throws IOException when nothing was saved
+   */
+  static Saved save(
+      StudyStore store,
+      StitchProjects projects,
+      Stitch s,
+      List<SeamRecipe> recipes,
+      StitchResume.Lineage lineage,
+      Compositor.Progress progress)
+      throws IOException {
+    if (s.anyFailed() && !s.unverified) {
+      throw new IOException(
+          "%s failed, so the stitch can only be saved as an unverified draft"
+              .formatted(s.failedSeams()));
+    }
+    StitchProject planned = null;
+    if (projects != null) {
+      planned =
+          StitchResume.capture(
+              s,
+              recipes,
+              lineage,
+              Instant.now(),
+              StitchProject.Output.PENDING,
+              StitchProject.Output.PENDING);
+      planned.check();
+      projects.checkLineage(planned);
+    }
+    StudyStore.SavedDerived picture = save(store, s, progress);
+    if (planned == null) {
+      return new Saved(picture, null, null);
+    }
+    StitchProject version = null;
+    try {
+      version = planned.withOutput(picture.instance().sopUid(), picture.instance().seriesUid());
+      projects.save(version);
+      return new Saved(picture, version, null);
+    } catch (IOException | RuntimeException e) {
+      // A store can fail after the version is whole; then it is kept, and is said to be.
+      boolean kept = version != null && projects.kept(version);
+      // Its message can hold a path: for the user, not for the log.
+      LOGGER.error(
+          "The stitch project was not saved cleanly (kept: {}): {}",
+          kept,
+          e.getClass().getSimpleName());
+      return new Saved(picture, kept ? version : null, String.valueOf(e.getMessage()));
+    }
   }
 
   private static void writeComplete(Stitch s, Path file, Compositor.Progress progress)

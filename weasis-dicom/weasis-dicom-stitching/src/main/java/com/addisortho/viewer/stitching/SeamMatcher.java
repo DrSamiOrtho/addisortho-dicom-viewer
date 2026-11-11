@@ -205,8 +205,9 @@ final class SeamMatcher {
   /**
    * The rough position refined by shift alone: the 1 mm intensity of the overlap correlated at
    * every whole-millimetre shift within {@link #LEVEL_MM} of the 2 mm rough peak, then the peak
-   * read to a fraction of a millimetre. No rotation. This is where a failed automatic seam is left
-   * (case LL-001, 7 Nov 2026: the 2 mm grid alone put the femoral cortex 1.6 mm off).
+   * read to a fraction of a millimetre. No rotation. A failed automatic seam with fewer than {@link
+   * #MIN_INLIERS} matched points is left here (case LL-001, 7 Nov 2026: the 2 mm grid alone put the
+   * femoral cortex 1.6 mm off); with more it is left at {@link #meanShift} (stitch 0.6).
    */
   static Rigid levelShift(MatchImage upper, MatchImage lower, Band band, Coarse coarse) {
     Gray u = upper.fine();
@@ -273,10 +274,12 @@ final class SeamMatcher {
   }
 
   /**
-   * The gates on a fine match. {@code rough} is where a failed seam is left: the rough position
-   * refined by shift only, or the position set by hand, never the failed fit. A fit the gates
-   * refused must not tilt the picture: on case LL-001 (7 Nov 2026) a -1.17 deg fit, parallax
-   * absorbed as rotation, failed its hold-out and still turned the tibiae in the saved image.
+   * The gates on a fine match. {@code rough} is the rough position refined by shift only, or the
+   * position set by hand. A failed seam is left there, except an automatic one with at least {@link
+   * #MIN_INLIERS} matched points, which is left at their {@link #meanShift} (stitch 0.6, 10 Nov
+   * 2026); never at the failed fit. A fit the gates refused must not tilt the picture: on case
+   * LL-001 (7 Nov 2026) a -1.17 deg fit, parallax absorbed as rotation, failed its hold-out and
+   * still turned the tibiae in the saved image.
    */
   private static Seam judge(
       MatchImage upper,
@@ -418,6 +421,13 @@ final class SeamMatcher {
     check.add("ruler and skin are not yet excluded from the match automatically");
     boolean failed = !fail.isEmpty();
     if (failed) {
+      // An automatic seam with enough agreeing points is left where those points agree, by shift
+      // alone: the rough position's shift-only search over a long overlap trades a small turn of
+      // the leg for a vertical error along a slanted shaft (real case, 10 Nov 2026: the knee-to-
+      // ankle seam left 7 mm above where the matched points, every band of the overlap and the
+      // machine's own stitch put it). Still no rotation, and still failed.
+      boolean onPoints = method == Seam.Method.AUTOMATIC && inliers.size() >= MIN_INLIERS;
+      Rigid placed = onPoints ? meanShift(inliers) : rough;
       check.add(
           0,
           String.format(
@@ -425,16 +435,18 @@ final class SeamMatcher {
               "placed at the %s (shift %.1f, %.1f mm, rotation %.2f deg) without the failed fit"
                   + " (%d points, rotation %.2f deg, residual %.2f mm): a match the gates refuse"
                   + " keeps no fitted rotation",
-              method == Seam.Method.AUTOMATIC
-                  ? "rough position refined by shift only"
-                  : "position set by hand",
-              rough.tx(),
-              rough.ty(),
-              rough.degrees(),
+              onPoints
+                  ? "average shift of the matched points"
+                  : method == Seam.Method.AUTOMATIC
+                      ? "rough position refined by shift only"
+                      : "position set by hand",
+              placed.tx(),
+              placed.ty(),
+              placed.degrees(),
               inliers.size(),
               fit.degrees(),
               rms));
-      fit = rough;
+      fit = placed;
       rms = Double.NaN;
       sigma = new double[] {Double.NaN, Double.NaN};
       scale = Double.NaN;
@@ -455,6 +467,20 @@ final class SeamMatcher {
         reasons);
   }
 
+  /**
+   * The shift alone that best carries the matched points of the lower piece onto the upper one:
+   * their average displacement, which is right at their centre whatever small turn the fit found.
+   */
+  static Rigid meanShift(List<Rigid.Pair> pairs) {
+    double dx = 0;
+    double dy = 0;
+    for (Rigid.Pair q : pairs) {
+      dx += q.tx() - q.fx();
+      dy += q.ty() - q.fy();
+    }
+    return Rigid.shift(dx / pairs.size(), dy / pairs.size());
+  }
+
   /** Two legs' seams may differ by this much at the overlap's centre and still be one seam. */
   static final double MAX_LEG_DISAGREE_MM = 1.5;
 
@@ -468,9 +494,53 @@ final class SeamMatcher {
    * smaller uncertainty is used and the other half's agreement is stated.
    */
   static Seam matchBothLegs(MatchImage upper, MatchImage lower) {
-    Seam whole = match(upper, lower, Band.WHOLE);
-    Seam left = match(upper, lower, Band.LEFT_HALF);
-    Seam right = match(upper, lower, Band.RIGHT_HALF);
+    return bothLegs(
+        upper,
+        lower,
+        match(upper, lower, Band.WHOLE),
+        match(upper, lower, Band.LEFT_HALF),
+        match(upper, lower, Band.RIGHT_HALF),
+        ", or line the seam up by hand");
+  }
+
+  /**
+   * Target leg "Both", refined from a position set by hand (Sami, 10 Nov 2026): {@link #refine} on
+   * the whole width and on each half from that position, judged exactly as {@link #matchBothLegs}
+   * judges, so a hand-set seam on a film of both legs cannot become "check" on one leg's evidence.
+   * A seam this refuses stays where the user put it, without the refused fit.
+   */
+  static Seam refineBothLegs(MatchImage upper, MatchImage lower, Rigid start) {
+    Seam judged =
+        bothLegs(
+            upper,
+            lower,
+            refine(upper, lower, Band.WHOLE, start),
+            refine(upper, lower, Band.LEFT_HALF, start),
+            refine(upper, lower, Band.RIGHT_HALF, start),
+            ", or fit matching points picked on both legs");
+    if (judged.status() == Seam.Status.FAILED && !judged.transform().equals(start)) {
+      return new Seam(
+          start,
+          judged.method(),
+          Seam.Status.FAILED,
+          Double.NaN,
+          Double.NaN,
+          Double.NaN,
+          Double.NaN,
+          judged.uniqueness(),
+          Double.NaN,
+          List.of(),
+          judged.reasons());
+    }
+    return judged;
+  }
+
+  /**
+   * @param otherwise what else the user can do when the legs cannot be confirmed, after "choose one
+   *     target leg and match on its half of the image"
+   */
+  private static Seam bothLegs(
+      MatchImage upper, MatchImage lower, Seam whole, Seam left, Seam right, String otherwise) {
     // Both needs both legs matched on their own, agreeing, and the whole-width match passing;
     // a failure of any of these fails the seam (Kimi, second review: a passing whole-width seam
     // must not stand in for a leg that failed, and two halves must not erase a whole-width failure)
@@ -480,8 +550,8 @@ final class SeamMatcher {
           Seam.Status.FAILED,
           "the legs could not be matched one at a time to check that they agree: %s leg failed;"
                   .formatted(left.status() == Seam.Status.FAILED ? "the left" : "the right")
-              + " choose one target leg and match on its half of the image, or line the seam up"
-              + " by hand");
+              + " choose one target leg and match on its half of the image"
+              + otherwise);
     }
     Rigid base = whole.status() == Seam.Status.CHECK ? whole.transform() : left.transform();
     double[] box = overlap(upper.widthMm(), upper.heightMm(), base, lower);
@@ -512,7 +582,34 @@ final class SeamMatcher {
         Seam.Status.FAILED,
         words
             + ", within the limits, but the match on the whole width failed; choose one target"
-            + " leg and match on its half of the image, or line the seam up by hand");
+            + " leg and match on its half of the image"
+            + otherwise);
+  }
+
+  /**
+   * Target leg "Both", from the user's point pairs (Sami, 10 Nov 2026): {@link #manual}, and the
+   * pairs must lie on both legs, at least one in each half of the upper piece as shown. The
+   * left-out check then holds each leg's points against the fit of the others, so pairs picked on
+   * one leg alone cannot confirm a seam for both.
+   */
+  static Seam manualBothLegs(List<Rigid.Pair> pairs, double upperWidthMm) {
+    Seam seam = manual(pairs);
+    long onLeft = pairs.stream().filter(p -> p.tx() < upperWidthMm / 2).count();
+    if (pairs.isEmpty()) {
+      return seam;
+    }
+    if (onLeft == 0 || onLeft == pairs.size()) {
+      return withReason(
+          seam,
+          Seam.Status.FAILED,
+          "target leg Both, but every point pair is on the %s half of the image: pick at least"
+                  .formatted(onLeft == 0 ? "right" : "left")
+              + " one pair on the other leg too, so that both legs are held to one seam; or"
+              + " choose one target leg");
+    }
+    return seam.status() == Seam.Status.CHECK
+        ? withReason(seam, Seam.Status.CHECK, "the point pairs lie on both legs")
+        : seam;
   }
 
   private static Seam withReason(Seam s, Seam.Status status, String reason) {

@@ -149,6 +149,14 @@ public class StudyStore {
     return root;
   }
 
+  /**
+   * The documents of one kind this store keeps beside its studies, such as editable stitches. They
+   * are not images and live in a hidden folder that no walk over studies enters.
+   */
+  public ProjectDocuments projects(String kind) {
+    return new ProjectDocuments(root, kind);
+  }
+
   void setIncludeName(boolean includeName) {
     this.includeName = includeName;
   }
@@ -727,7 +735,12 @@ public class StudyStore {
     return studies;
   }
 
-  /** Deletes a study folder. Only a folder directly in the storage folder and made here. */
+  /**
+   * Deletes a study folder, and the projects kept for that study beside it, such as editable
+   * stitches (Sami, 10 Nov 2026), found by the folder's study key. The projects go first: if they
+   * cannot be deleted the study is left whole. Only a folder directly in the storage folder and
+   * made here.
+   */
   public synchronized void deleteStudy(Path folder) throws IOException {
     Path normal = folder.toAbsolutePath().normalize();
     Optional<String> key =
@@ -736,6 +749,13 @@ public class StudyStore {
             : StoreNaming.studyKeyOfFolder(normal.getFileName().toString());
     if (!root.equals(normal.getParent()) || key.isEmpty() || Files.isSymbolicLink(normal)) {
       throw new IOException("Not a study folder of the storage folder");
+    }
+    try {
+      // first, so that a failure leaves the study whole and listed, to be deleted again
+      ProjectDocuments.deleteStudy(root, key.get());
+    } catch (IOException e) {
+      throw new IOException(
+          "The study was not deleted: its saved stitch projects could not be deleted", e);
     }
     folders.remove(key.get());
     imagesOfFolder.remove(normal);
