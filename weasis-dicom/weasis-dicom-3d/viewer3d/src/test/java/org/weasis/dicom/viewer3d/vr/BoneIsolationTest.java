@@ -275,6 +275,30 @@ class BoneIsolationTest {
     assertEquals(1, r.implants());
   }
 
+  /**
+   * A thin bone wholly within two voxels of the metal inside it (a small bone on a thick wire),
+   * beside a larger bone: its shell is all rim, but a rim that touches no outside air is bone as
+   * before, so the small bone and its implant stay (Astra, 11 Nov 2026: with every rim set aside
+   * both vanished).
+   */
+  @Test
+  void aThinBoneRoundItsImplantStaysWithIt() {
+    Scene scene =
+        new Scene(W, H, D, MM1)
+            .cylinder(CX + 9, CY, 1.5, 1.5, 6, 33, 3500) // the wire
+            .cylinder(CX + 9, CY, 3.5, 3.5, 6, 33, 900) // a shell two voxels thick round it
+            .cylinder(CX - 4, CY, 6, 6, 4, 35, 900) // the larger bone, 3 mm away
+            .cylinder(CX, CY, 22, 22, 0, D - 1, 40);
+    Result r = scene.isolate();
+    VoxelBits kept = r.region();
+    assertAll(
+        () -> assertTrue(kept.get(CX - 4, CY + 5, 20), "the larger bone"),
+        () -> assertEquals(1, r.joinedPieces(), "the thin bone is a piece of its own, joined"),
+        () -> assertTrue(kept.get(CX + 9, CY + 3, 20), "the thin bone's shell"),
+        () -> assertTrue(kept.get(CX + 9, CY, 20), "its wire"),
+        () -> assertEquals(1, r.implants()));
+  }
+
   @Test
   void aBoneCutByTheFirstAndLastSliceStays() {
     Result r = new Forearm(true, 0, D - 1, false, false, false, false).isolate();
@@ -523,9 +547,7 @@ class BoneIsolationTest {
     assertAll(
         () -> assertEquals(1, r.bonePieces()),
         () -> assertEquals(0, r.joinedPieces()),
-        // the shell is the metal's rim and takes no part; only its 8 corner voxels, three steps
-        // from the core, are left as specks to drop
-        () -> assertEquals(8, r.droppedPieces(), "the corners of the marker's shell"),
+        () -> assertEquals(1, r.droppedPieces(), "the marker's shell"),
         () -> assertEquals(0, r.implants(), "the marker's core"),
         () -> assertFalse(kept.get(40, 57, 19), "the core"),
         () -> assertFalse(kept.get(35, 56, 17), "the shell"),

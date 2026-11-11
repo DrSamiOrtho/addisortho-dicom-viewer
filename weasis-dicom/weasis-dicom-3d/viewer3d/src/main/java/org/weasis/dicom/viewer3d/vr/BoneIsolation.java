@@ -35,8 +35,8 @@ import org.weasis.dicom.viewer3d.vr.VoxelFlood.IntQueue;
  * <ol>
  *   <li>dense voxels: from the bone threshold up to {@link #METAL_HU}; metal above it is kept
  *       apart, and the dense voxels within {@link #METAL_HALO_VOXELS} of it (its blurred rim) are
- *       set aside until the pieces are told apart, so a fixator pin never joins the bone to the
- *       outside;
+ *       set aside until the pieces are told apart where that rim reaches the outside air, so a
+ *       fixator pin never joins the bone to the outside;
  *   <li>outside air: the voxels below {@link #AIR_HU} joined, within their own axial slice, to the
  *       slice's border; in two dimensions the lungs, the bowel and an air gap under a cast never
  *       count as outside, and the volume's own edge is not air, so a bone cut by the first slice or
@@ -277,6 +277,34 @@ public final class BoneIsolation {
       boolean anyRim = metal.count() > 0;
       if (anyRim) {
         takeMetalRim(dense, metal, rim, region);
+        // Only a rim that reaches the outside air is kept aside: that is the rim of a pin through
+        // the skin, the one that passed for a bridge from the bone to the outside. The rim round a
+        // nail, a screw or a prosthesis touches no air and goes back as the bone it always was, so
+        // a thin bone wholly inside the rim of its implant is still a piece of its own and is not
+        // lost with it (Astra, 11 Nov 2026).
+        for (int z = 0; z < sz; z++) {
+          long[] r = rim.sliceWords(z);
+          for (int w = 0; w < r.length; w++) {
+            while (r[w] != 0) {
+              if (cancelled.getAsBoolean()) {
+                return Optional.empty();
+              }
+              int i = (w << 6) + Long.numberOfTrailingZeros(r[w]);
+              int x = i % sx;
+              int y = i / sx;
+              Piece part = flood(rim, region, air, null, x, y, z, queue);
+              if (part.airVoxels() == 0) {
+                flood(region, dense, null, null, x, y, z, queue);
+              }
+            }
+          }
+        }
+        // The rim volume is empty now and the parts kept aside are in the region's: they change
+        // places, so the region is clear again for the pieces.
+        VoxelBits aside = region;
+        region = rim;
+        rim = aside;
+        anyRim = rim.count() > 0;
       }
 
       // Every dense piece: external, bone by size, noise, or a candidate between the two sizes.
@@ -449,7 +477,8 @@ public final class BoneIsolation {
    * ran from the bone out through the skin into the air, or into a cast or a carbon rod: the bone
    * touched outside air through it, was taken for something external and was cut away. With four
    * pins in a tibia the view lost the tibia and kept the fibula (review of 11 Nov 2026). The rim
-   * takes no part in telling the pieces apart; {@link #restoreRim} gives the bone its own back.
+   * takes no part in telling the pieces apart; {@link #restoreRim} gives the bone its own back. The
+   * caller puts back at once every part of the rim that touches no outside air.
    *
    * @param scratch clear, and clear again on return
    */
