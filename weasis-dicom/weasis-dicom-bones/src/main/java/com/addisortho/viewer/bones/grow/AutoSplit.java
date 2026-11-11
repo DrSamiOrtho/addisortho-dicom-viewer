@@ -1091,8 +1091,7 @@ public final class AutoSplit {
     private final class Reach {
       private final int[] label;
       private final long[] voxels;
-      private final double[] nearestMm2;
-      private final int[] nearestAt;
+      private final int[] target;
       private final double ux = o.mmX() * fx;
       private final double uy = o.mmY() * fy;
       private final double uz = o.mmZ() * fz;
@@ -1105,15 +1104,27 @@ public final class AutoSplit {
           g[i] = large(label[i]) ? 0 : INF;
         }
         squaredDistance(g, wx, wy, wz, ux, uy, uz, caller);
-        nearestMm2 = new double[count + 1];
+        double[] nearestMm2 = new double[count + 1];
         Arrays.fill(nearestMm2, Double.POSITIVE_INFINITY);
-        nearestAt = new int[count + 1];
-        Arrays.fill(nearestAt, -1);
         for (int i = 0; i < g.length; i++) {
           int m = label[i];
           if (m > 0 && g[i] < nearestMm2[m]) {
             nearestMm2[m] = g[i];
-            nearestAt[m] = i;
+          }
+        }
+        // Every voxel of a piece that lies at its least distance is asked which large piece is
+        // that near, so two bones equally near different ends of a long fragment are both seen
+        // and the tie is settled by rule (Astra, 11 Nov 2026).
+        target = new int[count + 1];
+        Arrays.fill(target, -1);
+        double reach2 = o.attachMm() * o.attachMm();
+        for (int i = 0; i < g.length; i++) {
+          int m = label[i];
+          if (m > 0 && !large(m) && g[i] <= reach2 && g[i] <= nearestMm2[m] * (1 + 1e-6) + 1e-6) {
+            int to = nearestTo(i, Math.sqrt(g[i]), m);
+            if (to > 0 && (target[m] < 0 || better(to, target[m]))) {
+              target[m] = to;
+            }
           }
         }
       }
@@ -1122,13 +1133,18 @@ public final class AutoSplit {
         return m > 0 && voxels[m] * fineMm3 >= o.fragmentMm3();
       }
 
+      /** Of two large pieces equally near: the larger, then the earlier. */
+      private boolean better(int a, int b) {
+        return voxels[a] > voxels[b] || (voxels[a] == voxels[b] && a < b);
+      }
+
       /** The large piece nearest piece {@code l}, within the reach; -1 when there is none. */
       int nearestLarge(int l) {
-        int i = nearestAt[l];
-        double mm = i < 0 ? Double.POSITIVE_INFINITY : Math.sqrt(nearestMm2[l]);
-        if (mm > o.attachMm()) {
-          return -1;
-        }
+        return target[l];
+      }
+
+      /** The large piece nearest working voxel {@code i}, which lies {@code mm} from one. */
+      private int nearestTo(int i, double mm, int self) {
         int x = i % wx;
         int y = (i / wx) % wy;
         int z = i / (wx * wy);
@@ -1141,17 +1157,13 @@ public final class AutoSplit {
           for (int py = Math.max(0, y - ry); py <= Math.min(wy - 1, y + ry); py++) {
             for (int px = Math.max(0, x - rx); px <= Math.min(wx - 1, x + rx); px++) {
               int m = label[index(px, py, pz)];
-              if (m == l || !large(m)) {
+              if (m == self || !large(m)) {
                 continue;
               }
               double d2 = sq((px - x) * ux) + sq((py - y) * uy) + sq((pz - z) * uz);
-              // equally near: the larger bone, then the earlier one, so the answer never
-              // depends on the order of the search
               boolean nearer = d2 < bestMm2 - 1e-6;
               boolean same = Math.abs(d2 - bestMm2) <= 1e-6;
-              if (nearer
-                  || (same
-                      && (voxels[m] > voxels[best] || (voxels[m] == voxels[best] && m < best)))) {
+              if (nearer || (same && better(m, best))) {
                 best = m;
                 bestMm2 = d2;
               }

@@ -139,6 +139,42 @@ class AutoSplitTest {
     assertTrue(r.pieces().get(1).mask().contains(26, 19, 19));
   }
 
+  /**
+   * A long fragment with one end 3 mm from a bone and the other end 3 mm from a larger one: equally
+   * near both, it goes to the larger, whichever end the search meets first (Astra, 11 Nov 2026).
+   */
+  @Test
+  void aFragmentEquallyNearTwoBonesGoesToTheLarger() {
+    for (boolean largerOnTheLeft : new boolean[] {true, false}) {
+      double big = 9;
+      double small = 7;
+      Phantom two =
+          new Phantom(
+              90,
+              40,
+              40,
+              (x, y, z) -> {
+                boolean left =
+                    z >= 4
+                        && z <= 35
+                        && Phantom.inDisc(x, y, 12, 20, largerOnTheLeft ? big : small);
+                boolean right =
+                    z >= 4
+                        && z <= 35
+                        && Phantom.inDisc(x, y, 78, 20, largerOnTheLeft ? small : big);
+                // a 3 mm thick bar across the gap, each end 3 voxels short of its bone
+                int from = 12 + (int) (largerOnTheLeft ? big : small) + 4;
+                int to = 78 - (int) (largerOnTheLeft ? small : big) - 4;
+                boolean bar = x >= from && x <= to && y >= 19 && y <= 21 && z >= 19 && z <= 21;
+                return left || right || bar ? 700 : 0;
+              });
+      Result r = split(two);
+      assertEquals(2, r.pieces().size(), "larger on the left: " + largerOnTheLeft);
+      assertEquals(1, r.fragments());
+      assertEquals(1, r.pieces().get(0).fragments(), "the larger bone, listed first, has it");
+    }
+  }
+
   @Test
   void aCoarseGridStillSplitsTheJoint() {
     Result r = split(Phantom.twoBones(), AutoSplit.Options.of(1, 1, 1).withMaxWorkVoxels(10_000));
