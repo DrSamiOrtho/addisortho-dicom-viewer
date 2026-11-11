@@ -477,54 +477,126 @@ final class SeamMatcher {
         reasons);
   }
 
+  /** Matched points this far apart sideways, with none between, are two separate groups. */
+  static final double SIDE_GAP_MM = 40;
+
   /**
-   * On a band that spans both halves of the image: do the matched points of one half, fitted on
-   * their own, need a different rotation from the fit of them all? Two legs that moved differently
-   * between the exposures (parallax) each keep their own seam, and one rigid fit of both turns that
-   * difference into a tilt that passes every other gate: on a phantom with the right leg 3 mm
-   * higher in the lower piece the whole width passed at -0.77 deg, and at 4 mm at -1.05 deg, where
-   * each leg alone is level (review of 11 Nov 2026; case LL-001 showed the same on its knee seam).
-   * A film that truly turned shows the same rotation in each half. A half is asked only when its
-   * points fix its rotation as well as a whole seam must ({@link #MAX_ROTATION_SIGMA_DEG}), and it
-   * disagrees only beyond {@link #MAX_LEG_DISAGREE_DEG} and three times its own uncertainty, so a
-   * single leg that straddles the middle of a wide film is not judged by a handful of points on one
-   * side.
+   * On a band that spans both halves of the image: do the matched points on the two sides share
+   * one seam? Two legs that moved differently between the exposures (parallax) each keep their own
+   * seam, and one rigid fit of both turns that difference into a tilt that passes every other gate:
+   * on a phantom with the right leg 3 mm higher in the lower piece the whole width passed at -0.77
+   * deg, and at 4 mm at -1.05 deg, where each leg alone is level (review of 11 Nov 2026; case
+   * LL-001 showed the same on its knee seam). A film that truly turned shows the same rotation on
+   * each side.
+   *
+   * <p>The points are parted at their widest sideways gap when it is {@link #SIDE_GAP_MM} or more
+   * (two legs wherever they lie on the film), else at the middle of the image. Each side is fitted
+   * on its own and fails the seam when its rotation is fixed as well as a whole seam's must be
+   * ({@link #MAX_ROTATION_SIGMA_DEG}) and differs from the fit of all by more than {@link
+   * #MAX_LEG_DISAGREE_DEG} and three times its own uncertainty; two sides that are both fixed must
+   * also put the middle between them within {@link #MAX_LEG_DISAGREE_MM} of each other. And when
+   * two separate groups are both too small or too narrow to fix a rotation, a rotation beyond
+   * {@link #MAX_LEG_DISAGREE_DEG} rests on the difference between the groups alone, which is
+   * exactly what parallax between two legs looks like: five points on each leg 4 mm apart fit a
+   * 1.1 deg turn with 0.1 mm residual (Astra, 11 Nov 2026). That fails too; missing evidence is
+   * not agreement. A single leg, one group, is not parted by a handful of points on one side.
    *
    * @return the reason the seam fails, or null
    */
   static String halvesDisagree(MatchImage upper, Band band, Rigid fit, List<Rigid.Pair> inliers) {
-    if (band.from() >= 0.5 || band.to() <= 0.5) {
+    if (band.from() >= 0.5 || band.to() <= 0.5 || inliers.size() < 4) {
       return null;
     }
-    double mid = upper.widthMm() / 2;
+    double[] xs = inliers.stream().mapToDouble(Rigid.Pair::tx).sorted().toArray();
+    double gap = 0;
+    double split = upper.widthMm() / 2;
+    for (int i = 1; i < xs.length; i++) {
+      if (xs[i] - xs[i - 1] > gap) {
+        gap = xs[i] - xs[i - 1];
+      }
+    }
+    boolean separate = gap >= SIDE_GAP_MM;
+    if (separate) {
+      for (int i = 1; i < xs.length; i++) {
+        if (xs[i] - xs[i - 1] == gap) {
+          split = (xs[i] + xs[i - 1]) / 2;
+          break;
+        }
+      }
+    }
+    double at = split;
+    List<Rigid.Pair> left = inliers.stream().filter(q -> q.tx() < at).toList();
+    List<Rigid.Pair> right = inliers.stream().filter(q -> q.tx() >= at).toList();
+    if (left.size() < 2 || right.size() < 2) {
+      return null;
+    }
+    Rigid[] own = new Rigid[2];
+    boolean[] fixed = new boolean[2];
     String worst = null;
     double worstDeg = MAX_LEG_DISAGREE_DEG;
-    for (boolean leftHalf : new boolean[] {true, false}) {
-      List<Rigid.Pair> part = inliers.stream().filter(q -> (q.tx() < mid) == leftHalf).toList();
+    for (int s = 0; s < 2; s++) {
+      List<Rigid.Pair> part = s == 0 ? left : right;
       if (part.size() < MIN_INLIERS) {
         continue;
       }
-      Rigid own = Rigid.fit(part);
-      double sigma = Rigid.uncertainty(own, part)[0];
-      double deg = Math.abs(own.degrees() - fit.degrees());
-      if (sigma <= MAX_ROTATION_SIGMA_DEG && deg > Math.max(worstDeg, 3 * sigma)) {
+      own[s] = Rigid.fit(part);
+      double sigma = Rigid.uncertainty(own[s], part)[0];
+      fixed[s] = sigma <= MAX_ROTATION_SIGMA_DEG;
+      double deg = Math.abs(own[s].degrees() - fit.degrees());
+      if (fixed[s] && deg > Math.max(worstDeg, 3 * sigma)) {
         worstDeg = deg;
         worst =
             String.format(
                 Locale.ROOT,
-                "the %d matched points on the %s half of the image, fitted on their own, turn"
+                "the %d matched points on the %s side of the image, fitted on their own, turn"
                     + " %.2f deg where the fit of all %d points turns %.2f deg: the two sides do"
                     + " not share one seam (two legs that moved differently between the"
                     + " exposures, parallax). Choose one target leg and match on its half of the"
                     + " image",
                 part.size(),
-                leftHalf ? "left" : "right",
-                own.degrees(),
+                s == 0 ? "left" : "right",
+                own[s].degrees(),
                 inliers.size(),
                 fit.degrees());
       }
     }
-    return worst;
+    if (worst != null) {
+      return worst;
+    }
+    if (fixed[0] && fixed[1]) {
+      // where the two sides meet, in the lower piece's mm: half way between their centres
+      double fx = inliers.stream().mapToDouble(Rigid.Pair::fx).average().orElse(0);
+      double fy = inliers.stream().mapToDouble(Rigid.Pair::fy).average().orElse(0);
+      double[] a = own[0].apply(fx, fy);
+      double[] b = own[1].apply(fx, fy);
+      double mm = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      if (mm > MAX_LEG_DISAGREE_MM) {
+        return String.format(
+            Locale.ROOT,
+            "the matched points on the left and on the right side of the image, fitted one side at"
+                + " a time, put the middle of the overlap %.1f mm apart: the two sides do not"
+                + " share one seam (two legs that moved differently between the exposures,"
+                + " parallax). Choose one target leg and match on its half of the image",
+            mm);
+      }
+    } else if (separate
+        && !fixed[0]
+        && !fixed[1]
+        && Math.abs(fit.degrees()) > MAX_LEG_DISAGREE_DEG) {
+      return String.format(
+          Locale.ROOT,
+          "the rotation of %.2f deg rests only on the difference between two separate groups of"
+              + " matched points (%d on the left, %d on the right, %.0f mm apart), and neither"
+              + " group fixes a rotation on its own: a film that turned cannot be told from two"
+              + " legs that moved differently between the exposures (parallax), so the two sides"
+              + " do not share one seam that is known. Choose one target leg and match on its"
+              + " half of the image, or pick matching points",
+          fit.degrees(),
+          left.size(),
+          right.size(),
+          gap);
+    }
+    return null;
   }
 
   /**

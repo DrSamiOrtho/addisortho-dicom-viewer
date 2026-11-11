@@ -308,6 +308,12 @@ final class StitchService {
           "%s failed, so the stitch can only be saved as an unverified draft"
               .formatted(s.failedSeams()));
     }
+    if (!s.cutsInOrder()) {
+      // not even as a draft: the piece between two crossed cuts would be left out of the picture
+      throw new IOException(
+          "the cuts of two neighbouring seams cross, so a piece would be left out of the picture:"
+              + " drag the seam lines in the preview so that they follow each other down the leg");
+    }
     StitchProject planned = null;
     if (projects != null) {
       planned =

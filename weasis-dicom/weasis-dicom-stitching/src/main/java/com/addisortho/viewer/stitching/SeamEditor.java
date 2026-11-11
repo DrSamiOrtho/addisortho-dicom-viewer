@@ -130,7 +130,9 @@ final class SeamEditor extends JDialog {
     Seam seam = made.seam();
     this.seam = seam;
     this.recipe = made.recipe();
-    if (recipe.movedTo() == null) {
+    if (recipe.movedTo() == null || seam.status() == Seam.Status.FAILED) {
+      // A failed seam stays failed however it is moved, so it is its own anchor: a seam that
+      // reopening held failed is never judged afresh, and so never passed, by a hand move.
       this.anchor = seam;
     } else {
       findAnchor(recipe);
@@ -293,6 +295,11 @@ final class SeamEditor extends JDialog {
     super.dispose();
   }
 
+  /** Whether hand moves can be measured yet: false while the seam's match is made again. */
+  boolean anchorKnown() {
+    return anchor != null;
+  }
+
   /** The seam the user chose and how it was set, empty when cancelled. */
   Optional<SeamRecipe.Made> result() {
     return Optional.ofNullable(result);
@@ -323,13 +330,29 @@ final class SeamEditor extends JDialog {
         if (generation != anchorGeneration || !isDisplayable()) {
           return;
         }
+        Seam shown = seam;
         try {
           anchor = get();
         } catch (Exception ex) {
-          return; // the seam stays as it was opened; a move is then judged from there
+          // Without its match no further hand move can be measured: every one fails the seam
+          // until a match is made again (Astra, 11 Nov 2026).
+          anchor =
+              Seam.failed(
+                  shown.transform(),
+                  shown.method(),
+                  List.of(
+                      "the match this seam was moved from could not be made again, so a further"
+                          + " move cannot be measured against it: press Refine automatically from"
+                          + " here, or Automatic match again"));
+          return;
         }
-        if (recipe.movedTo() != null) {
-          setSeam(adjusted(anchor, recipe.movedTo()));
+        // The seam as opened was not moved meanwhile (moving waits for this). Judged against its
+        // match it can only be lowered, never passed.
+        Seam judged = adjusted(anchor, recipe.movedTo());
+        if (judged.status() == Seam.Status.FAILED && shown.status() != Seam.Status.FAILED) {
+          setSeam(judged);
+        } else {
+          setSeam(shown); // shows the seam's own words again in place of the waiting note
         }
       }
     }.execute();
@@ -538,6 +561,14 @@ final class SeamEditor extends JDialog {
 
   // moves the lower piece in the upper piece's frame; turns about the overlap's centre
   private void move(double dx, double dy, double degrees) {
+    if (anchor == null) {
+      // The match this seam was moved from is being made again. Until it is known a move could
+      // not be measured against it, and nudges could add up unseen (Astra, 11 Nov 2026).
+      status.setText(
+          "Checking where the match put this seam; it can be moved in a moment.\n"
+              + seam.summary());
+      return;
+    }
     double[] box =
         SeamMatcher.overlap(upper.widthMm(), upper.heightMm(), seam.transform(), lower.match());
     double cx = (box[0] + box[2]) / 2;
@@ -547,7 +578,7 @@ final class SeamEditor extends JDialog {
             .after(new Rigid(Math.toRadians(degrees), 0, 0))
             .after(Rigid.shift(-cx, -cy));
     Rigid to = Rigid.shift(dx, dy).after(turn).after(seam.transform());
-    setSeam(recipe.moved(to), adjusted(anchor != null ? anchor : seam, to));
+    setSeam(recipe.moved(to), adjusted(anchor, to));
   }
 
   private void bindKeys(JComponent root) {

@@ -9,6 +9,8 @@
 package com.addisortho.viewer.stitching;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -140,6 +142,78 @@ class SeamMatcherTest {
           seam.reasons().stream().anyMatch(r -> r.contains("do not share one seam")),
           seam.reasons().toString());
     }
+  }
+
+  private static List<Rigid.Pair> group(Rigid truth, double x, double y0, double dy, int n) {
+    List<Rigid.Pair> out = new ArrayList<>();
+    for (int i = 0; i < n; i++) {
+      double fx = x + (i % 2) * 3;
+      double fy = y0 + i * dy;
+      double[] t = truth.apply(fx, fy);
+      out.add(new Rigid.Pair(fx, fy, t[0], t[1]));
+    }
+    return out;
+  }
+
+  /**
+   * The two sides of the image on their matched points alone (Astra, 11 Nov 2026): five points on
+   * each leg, the right leg 4 mm lower, fit a 1.1 deg turn with a tenth of a millimetre left over.
+   * Neither group fixes a rotation by itself, so the turn rests on the difference between the legs
+   * alone and the seam is refused; missing evidence is not agreement.
+   */
+  @Test
+  void twoSmallGroupsOfPointsCannotVouchForARotation() {
+    MatchImage upper = Phantom.leg(427, 400, 21).matchImage(
+        new Phantom.Cut(Rigid.IDENTITY, 427, 356, 0.5, 1, 0), 0.01, 30);
+    List<Rigid.Pair> pairs = new ArrayList<>(group(Rigid.shift(0, 280), 100, 20, 4, 5));
+    pairs.addAll(group(Rigid.shift(0, 284), 300, 20, 4, 5));
+    Rigid fit = Rigid.fit(pairs);
+    assertTrue(Math.abs(fit.degrees()) > 1.0 && fit.rms(pairs) < 0.3, "the fit looks sound");
+    String why = SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, fit, pairs);
+    assertNotNull(why);
+    assertTrue(why.contains("neither group fixes a rotation"), why);
+
+    // the same two small groups under a level seam: nothing rests on them
+    List<Rigid.Pair> level = new ArrayList<>(group(Rigid.shift(0, 280), 100, 20, 4, 5));
+    level.addAll(group(Rigid.shift(0, 280.3), 300, 20, 4, 5));
+    assertNull(
+        SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, Rigid.fit(level), level));
+
+    // one leg, one group of points, however it lies about the middle: not parted, not judged
+    List<Rigid.Pair> one = new ArrayList<>();
+    Rigid turned = new Rigid(Math.toRadians(1.2), 3, 280);
+    for (int i = 0; i < 30; i++) {
+      double fx = 180 + (i % 6) * 12;
+      double fy = 10 + (i / 6) * 12;
+      double[] t = turned.apply(fx, fy);
+      one.add(new Rigid.Pair(fx, fy, t[0], t[1]));
+    }
+    assertNull(SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, Rigid.fit(one), one));
+
+    // two legs that each show the same turn: a film that turned
+    List<Rigid.Pair> both = new ArrayList<>();
+    for (double x : new double[] {70, 290}) {
+      for (int i = 0; i < 30; i++) {
+        double fx = x + (i % 6) * 12;
+        double fy = 10 + (i / 6) * 12;
+        double[] t = turned.apply(fx, fy);
+        both.add(new Rigid.Pair(fx, fy, t[0] + (i % 3 - 1) * 0.1, t[1] + (i % 2) * 0.1));
+      }
+    }
+    assertNull(SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, Rigid.fit(both), both));
+
+    // and two legs, each level, one 2 mm lower: both sides fixed, and they disagree
+    List<Rigid.Pair> apart = new ArrayList<>();
+    for (double[] leg : new double[][] {{70, 280}, {290, 282}}) {
+      for (int i = 0; i < 30; i++) {
+        double fx = leg[0] + (i % 6) * 12;
+        double fy = 10 + (i / 6) * 12;
+        apart.add(
+            new Rigid.Pair(fx, fy, fx + (i % 3 - 1) * 0.1, fy + leg[1] + (i % 2) * 0.1));
+      }
+    }
+    assertNotNull(
+        SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, Rigid.fit(apart), apart));
   }
 
   /** The same films with the legs moved alike: a film that truly turned is not refused for it. */

@@ -89,6 +89,22 @@ class StitchCutOrderTest {
     assertEquals("cut placed by hand", s.cut(1).note());
   }
 
+  /** Wherever the two lines are dragged, the cuts come out in order (Astra, 11 Nov 2026). */
+  @Test
+  void noPairOfHandPositionsLeavesTheCutsOutOfOrder() {
+    for (double first : new double[] {1, 135, 200, 260, 289, 400}) {
+      for (double second : new double[] {1, 91, 95, 150, 289, 400, Double.NaN}) {
+        Stitch s = stitch(first, second);
+        assertTrue(s.cutsInOrder(), "%.0f and %.0f".formatted(first, second));
+        assertTrue(
+            s.seamY(1) >= s.seamY(0) + Stitch.FEATHER_MM - 1e-6,
+            "%.0f and %.0f: seam 1 at %.1f, seam 2 at %.1f"
+                .formatted(first, second, s.seamY(0), s.seamY(1)));
+      }
+      assertTrue(stitch(Double.NaN, first).cutsInOrder());
+    }
+  }
+
   /** With the cuts held in order no part of the middle piece's band is left to its neighbours. */
   @Test
   void theMiddlePieceIsDrawnBetweenTheCuts() {

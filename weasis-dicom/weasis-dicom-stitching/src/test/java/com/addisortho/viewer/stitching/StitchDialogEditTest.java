@@ -560,6 +560,67 @@ class StitchDialogEditTest {
     return window[0].result().orElseThrow();
   }
 
+  /**
+   * A seam opened already moved by hand is measured from where its match put it, not from where it
+   * stood when the window opened: 1.5 mm before and 1 mm now are 2.5 mm, more than a small
+   * correction. Moving waits until the match is made again, so nudges cannot add up unseen in the
+   * meantime, and a seam opened failed stays failed whatever its match would say (Astra, 11 Nov
+   * 2026).
+   */
+  @Test
+  void aSeamOpenedAlreadyMovedIsMeasuredFromItsMatch() throws Exception {
+    List<Piece> pieces = new StitchFixture().pieces();
+    SeamRecipe matched = SeamRecipe.match(SeamMatcher.Band.WHOLE);
+    Seam seam = StitchFixture.seams(pieces, List.of(matched)).get(0);
+    MatchImage upper = pieces.get(0).match();
+    MatchImage lower = pieces.get(1).match();
+    SeamRecipe moved = matched.moved(Rigid.shift(1.5, 0).after(seam.transform()));
+    SeamRecipe.Made start = new SeamRecipe.Made(moved, moved.compute(upper, lower));
+    assertEquals(Seam.Status.CHECK, start.seam().status(), "1.5 mm is a small correction");
+    SeamEditor[] w = new SeamEditor[1];
+
+    // opened and used at once, untouched: as it came
+    assertEquals(start, inSeamWindow(pieces, start, () -> null, w));
+
+    SeamRecipe.Made further =
+        inSeamWindow(
+            pieces,
+            start,
+            () -> {
+              await("the seam's match to be made again", () -> onEdt(() -> w[0].anchorKnown()));
+              return onEdt(
+                  () -> {
+                    JComponent root = (JComponent) w[0].getContentPane();
+                    root.getActionMap().get("right1").actionPerformed(null);
+                    return null;
+                  });
+            },
+            w);
+    assertEquals(Seam.Status.FAILED, further.seam().status(), "2.5 mm from its match in all");
+    assertEquals(further.seam(), further.recipe().compute(upper, lower), "and reopens the same");
+
+    // a seam that came failed is its own anchor: no hand move passes it
+    SeamRecipe far = matched.moved(Rigid.shift(30, 0).after(seam.transform()));
+    SeamRecipe.Made failed = new SeamRecipe.Made(far, far.compute(upper, lower));
+    assertEquals(Seam.Status.FAILED, failed.seam().status());
+    SeamRecipe.Made back =
+        inSeamWindow(
+            pieces,
+            failed,
+            () ->
+                onEdt(
+                    () -> {
+                      assertTrue(w[0].anchorKnown(), "no match is made again for a failed seam");
+                      JComponent root = (JComponent) w[0].getContentPane();
+                      for (int i = 0; i < 30; i++) {
+                        root.getActionMap().get("left1").actionPerformed(null);
+                      }
+                      return null;
+                    }),
+            w);
+    assertEquals(Seam.Status.FAILED, back.seam().status(), "dragged back by hand, still failed");
+  }
+
   @Test
   void theSeamWindowReportsHowEachSeamWasSet() throws Exception {
     List<Piece> pieces = new StitchFixture().pieces();
