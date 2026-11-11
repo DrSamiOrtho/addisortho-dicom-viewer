@@ -308,7 +308,7 @@ async function boot() {
   const q = new URLSearchParams(location.search);
   // wording that stays true once projects are saved to the server (Astra, 13 Oct: "nothing is uploaded" would not be)
   if (STANDALONE) $('foot').textContent = 'Addis Ortho Trading PLC · X-ray templating for surgeons. A planning aid: the plan is a draft and the surgeon decides. The X-ray opens in this browser; a saved project is stored for your team.';
-  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r46). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
+  if (VIEWER) $('foot').textContent = 'Addis Ortho DICOM Viewer · X-ray templating on this computer, offline (templating r48). Trial software for planning practice; not for clinical decisions until validated and approved. Implants: the Addis Ortho ranges (made by Chunli), outlines from the manufacturer\'s 1:1 template sheets and 3D models.';
   pendingNote();
   for (const [text, fn] of kcOpenItems()) { const li = document.createElement('li'), a = document.createElement('a'); a.href = '#'; a.textContent = text; a.onclick = e => { e.preventDefault(); fn(); }; li.appendChild(a); $('openList').appendChild(li); }
   // the short part on top and the rest under the templated-patients list, so a phone sees the list without scrolling far
@@ -1253,9 +1253,9 @@ function phrRows(R, t) {
   R.push(['Placement', 'placed, not sized: the head centre on the native head centre, the axis along the humeral shaft; drag and turn to fine-tune', 'warn']);
   R.push(['Scale', 'lengths use this film\'s ball; the resection level lies further from it, where magnification may differ (not validated)', 'warn']);
 }
-// r37: Chunli confirmed (Kevin, 27 Oct 2026) that the PFR's Ø24 tapers and their 2.25 mm gap are the knee's; the shoulder's Ø22
+// r37: Chunli confirmed (Kevin, 27 Oct 2026) that the PFR's Ø24 tapers and their gap are the knee's (2.25 until r46, 2.5 from r47); the shoulder's Ø22
 // system has its own rule since r46 (Kevin, 4 Nov 2026: marked lengths minus 3 per connection), printed by phrRuleNote
-const pfrGapNote = (z, phr) => phr && z.lengthRule ? phrRuleNote(z) : `Each taper junction is taken as ${z.junctionGapMm} mm open after impaction (${phr ? "Chunli's figure for its Ø24 tapers, confirmed for the knee and the femoral replacement; taken for this Ø22 system, not confirmed" : "Chunli: the same Ø24 taper and gap as the knee, confirmed 27 Oct 2026"}): ${z.junctions} junction${z.junctions > 1 ? 's' : ''}, so the stack can sit up to about ${f1(z.junctions * 0.25)} mm longer or shorter: check the length with the trial.`;
+const pfrGapNote = (z, phr) => phr && z.lengthRule ? phrRuleNote(z) : `Each taper junction is taken as ${z.junctionGapMm} mm open after impaction (${phr ? "Chunli's figure for its Ø24 tapers, confirmed for the knee and the femoral replacement; taken for this Ø22 system, not confirmed" : z.junctionGapMm >= 2.5 ? "Chunli confirmed on 27 Oct 2026 that this is the knee's Ø24 taper and gap; on 10 Nov 2026 he gave the knee's gap as 2.5 mm, at the tibial tray's taper, a theoretical value, actual parts have tolerances; he earlier said about 2 to 2.5 mm" : "Chunli: the same Ø24 taper and gap as the knee, confirmed 27 Oct 2026"}): ${z.junctions} junction${z.junctions > 1 ? 's' : ''}, so the stack can sit up to about ${!phr && z.junctionGapMm >= 2.5 ? `${fmm(z.junctions * 0.5)} mm shorter` : `${fmm(z.junctions * 0.25)} mm longer or shorter`}: check the length with the trial.`;
 // r46: the PHR's taper note from Chunli's rule; his 1.7 mm joined gap and the minus 3 differ by about 0.3 mm a junction
 const phrRuleNote = z => `Chunli's rule (Kevin, 4 Nov 2026): the length from the top of the upper end to the osteotomy is the marked lengths (upper end ${fmm(z.lengthRule.markedMm[0])}${z.lengthRule.markedMm[1] ? `, extension ${fmm(z.lengthRule.markedMm[1])}` : ''}, stem collar) minus ${fmm(z.lengthRule.perJunctionMm)} mm ${z.junctions > 1 ? `at each of its ${z.junctions} junctions` : 'at its one junction'}. Chunli also gives the joined taper gap as ${z.junctionGapMm} mm; the two differ by about 0.3 mm a junction, so the stack can sit up to about ${f1(z.junctions * 0.3)} mm longer or shorter: check the length with the trial.`;
 function tumAxis(t) {   // {p0, dir} in the template's frame: where the body's axis crosses the joint line, and up/down it into the bone
@@ -1273,17 +1273,19 @@ const TUM_SRC = { MRI: 'MRI', CT: 'CT' };
 // against the reference level, the far joint and a physis, and which of Chunli's two defect ranges the defect falls in. It
 // never chooses the margin, a stem diameter, a cement mantle or a rounding direction: every value is shown with Chunli's
 // neighbouring steps and their consequence, never clamped. A schematic is drawn only from sizes the surgeon typed. Chunli's
-// tables: DIA_TYPES (slides 18-19); which length is L1/L2/L3, how the parts add up to the defect, the mantle and press-fit,
-// the minimum bone each side and whether a stem may cross a physis are not stated by Chunli (asked: KEVIN-REQUEST). No
+// tables: DIA_TYPES (slides 18-19; r47: which length is which, from Chunli's part sketches of 10 Nov 2026, read by Addis
+// Ortho); how the parts add up to the defect, the mantle and press-fit, the minimum bone each side and whether a stem may
+// cross a physis are not stated by Chunli (asked: KEVIN-REQUEST). No
 // library family: the libraryId and every geomId are unchanged; the plan is offered with the Chunli tumour range (ao-tumour).
-const DIA_SRC = 'Chunli, Segmental Bone Defect Prosthesis, range tables (slides 18-19), received 29 Oct 2026';
+const DIA_SRC = 'Chunli, Segmental Bone Defect Prosthesis, range tables (slides 18-19), received 29 Oct 2026; which length is which from Chunli\'s part sketches (Specifications of Long Segmental Bone Defect Reconstruction Prosthesis), received 10 Nov 2026, as read by Addis Ortho';
+// r47 (10 Nov 2026): stem = the length in the bone, stemName = Chunli's letter for it (shared.js has the same table and the reasons)
 const DIA_TYPES = {
-  III: { defect: [40, 165], fix: 'split body joined by screws, no cross-lock', A: { model: 'SZ-A(III)', L1: [20, 200], phi: [9, 40] }, B: { model: 'SZ-B(I)', L1: [10, 130], phi: [9, 40] } },
-  VI: { defect: [50, 310], fix: 'tapered press-fit intercalary segments (JGD(I)), stem B cross-locked (LD(I) screw)', A: { model: 'SZ-A(IV)', L1: [20, 200], phi: [9, 39] }, B: { model: 'SZ-B(VI)', L1: [10, 130], phi: null } },
+  III: { defect: [40, 165], fix: 'split body joined by screws, no cross-lock', A: { model: 'SZ-A(III)', L1: [20, 200], stem: [20, 200], stemName: 'L1', phi: [9, 40] }, B: { model: 'SZ-B(I)', L1: [10, 130], stem: [10, 130], stemName: 'L1', phi: [9, 40] } },
+  VI: { defect: [50, 310], fix: 'tapered press-fit intercalary segments (JGD(I)), stem B cross-locked (LD(I) screw)', A: { model: 'SZ-A(IV)', L1: [20, 200], stem: [20, 200], stemName: 'L1', phi: [9, 39] }, B: { model: 'SZ-B(VI)', L1: [10, 130], stem: [20, 140], stemName: 'L2', phi: null } },
 };
 const DIA_TIP_MM = 30;   // the page's stem-tip warning (as the tumour plans', tumRowsOf), not a Chunli minimum
 const DIA_SAFETY = 'Measurements for a Chunli order request, not a plan of parts. The page does not choose the margin, the stem diameter, the cement mantle or the rounding; it reports what you measured and typed, projected on this film and scaled by its ball, which sits at the joint while the lesion is mid-shaft (magnification there not validated). Canal widths on a plain film are a check, not a measurement: take them from the CT. Chunli confirms the configuration; nothing here is a part number.';
-const DIA_NOT_STATED = ['which length is L1, L2 and L3 on each part, and what the second "L2" (10-36, ±0.45) of SZ-A(III) is', 'how the parts add up to the defect (Type III: defect = L3 is our reading of the table; Type VI: stem A L2, segments, stem B L2 and shims)', 'the cement mantle of stem A and the press-fit of the porous stem', 'the minimum bone and stem length each side, and whether a stem may cross an open physis', 'a stem diameter for Type VI stem B SZ-B(VI) (its Φ1 3-7 mm is probably the locking-screw hole)', 'whether any part is made per patient from the CT'];
+const DIA_NOT_STATED = ['in words, which length is which: the lengths here follow Chunli\'s part sketches of 10 Nov 2026 as Addis Ortho read them (in the bone: L1, but L2 on Type VI stem B, whose L1 is its body; Type III L2 10-36 is the spacing of the two clamp screws)', 'how the parts add up to the defect (Type III: defect = L3, the whole split body, is our reading of the sketch; Type VI: stem A body L2, an extension L, stem B body L1 and their taper gaps: 100 + 80 + 130 = 310 fits its upper limit with one extension, its lower limit of 50 is not explained; whether the shims add length)', 'the cement mantle of stem A and the press-fit of the porous stem', 'the minimum bone and stem length each side, and whether a stem may cross an open physis', 'a stem diameter for Type VI stem B SZ-B(VI): its table gives none (its Φ1 3-7 mm is the locking-screw hole, 15 mm from the stem tip on the sketch)', 'whether any part is made per patient from the CT'];
 const DIA_CAN = ['diaCanN1', 'diaCanN2', 'diaCanN3', 'diaCanF1', 'diaCanF2', 'diaCanF3'];
 const DIA_LM = [
   { key: 'diaAxis', short: 'bone axis', type: 'line', label: 'Bone axis (femur or tibia)', hint: 'the middle of the shaft: one point towards the reference end, one towards the far end (the levels are measured along it)' },
@@ -1352,8 +1354,8 @@ function diaPhi(w) {
   return { inn, out };
 }
 const diaPhiTxt = w => { const { inn, out } = diaPhi(w), [lo, hi] = diaStep(w, 1); return `Chunli 1 mm steps ${lo === hi ? lo : `${lo} / ${hi}`}; ${inn.length ? `inside Φ1 of ${inn.join(', ')}` : 'outside every stem Φ1 in Chunli\'s tables'}${inn.length && out.length ? `; outside ${out.join(', ')}` : ''}`; };
-const diaL1Txt = l => { const [lo, hi] = diaStep(l, 5), inn = [], out = []; for (const [t, T] of Object.entries(DIA_TYPES)) for (const s of ['A', 'B']) { const r = T[s].L1; (l >= r[0] && l <= r[1] ? inn : out).push(`${t} stem ${s} ${r[0]}-${r[1]}`); }
-  return `Chunli 5 mm steps ${lo === hi ? lo : `${lo} (${sgnMm(lo - l)} mm: the tip that much nearer the osteotomy) / ${hi} (${sgnMm(hi - l)} mm: that much nearer the joint)`}; ${inn.length ? `inside L1 of ${[...new Set(inn)].join(', ')}` : 'outside every stem L1 in Chunli\'s tables'}${inn.length && out.length ? `; outside ${[...new Set(out)].join(', ')}` : ''} (which length L1 is, and which stem sits in which fragment: not stated by Chunli)`; };
+const diaL1Txt = l => { const [lo, hi] = diaStep(l, 5), inn = [], out = []; for (const [t, T] of Object.entries(DIA_TYPES)) for (const s of ['A', 'B']) { const r = T[s].stem || T[s].L1; (l >= r[0] && l <= r[1] ? inn : out).push(`${t} stem ${s} ${T[s].stemName || 'L1'} ${r[0]}-${r[1]}`); }
+  return `Chunli 5 mm steps ${lo === hi ? lo : `${lo} (${sgnMm(lo - l)} mm: the tip that much nearer the osteotomy) / ${hi} (${sgnMm(hi - l)} mm: that much nearer the joint)`}; ${inn.length ? `inside the stem length of ${[...new Set(inn)].join(', ')}` : 'outside every stem length in Chunli\'s tables'}${inn.length && out.length ? `; outside ${[...new Set(out)].join(', ')}` : ''} (the length in the bone by Chunli's part sketches of 10 Nov 2026, as read by Addis Ortho; which stem sits in which fragment: not stated by Chunli)`; };
 // everything the rows, the card, the drawing and the order sheet use, from one calculation
 function diaCalc() {
   const u = diaU(), k = mm(), P = diaPlan(), F = k ? diaFrame() : null, C = { u, k, P, F, far: null, stations: [], stems: [], phys: [] };
@@ -1395,7 +1397,7 @@ function diaRows(R, k) {
     else {
       for (const t of ty) R.push([`Type ${t} (defect ${DIA_TYPES[t].defect[0]}-${DIA_TYPES[t].defect[1]} mm)`, `qualifies by its stated range: ${DIA_TYPES[t].fix}`]);
       if (ty.length > 1) R.push(['Type III or VI', 'both qualify for a defect of 50-165 mm: the choice is yours with Chunli; the page does not choose']);
-      R.push(['Chunli 5 mm steps', lo === hi ? `${lo} mm is a step (${tw(lo)})` : `${lo} mm (${sgnMm(lo - P.defect)} mm against the defect: the gap shorter, the limb about that much shorter unless the bone is cut longer; ${tw(lo)}) or ${hi} mm (${sgnMm(hi - P.defect)} mm: the limb about that much longer, or resect that much more; ${tw(hi)}); defect = Type III L3 is our reading of the table, and how Type VI's parts add up to the defect is not stated by Chunli`, 'warn']);
+      R.push(['Chunli 5 mm steps', lo === hi ? `${lo} mm is a step (${tw(lo)})` : `${lo} mm (${sgnMm(lo - P.defect)} mm against the defect: the gap shorter, the limb about that much shorter unless the bone is cut longer; ${tw(lo)}) or ${hi} mm (${sgnMm(hi - P.defect)} mm: the limb about that much longer, or resect that much more; ${tw(hi)}); defect = Type III L3 is our reading of Chunli's sketch (L3 is the whole split body), and how Type VI's parts add up to the defect is not stated by Chunli`, 'warn']);
     }
   }
   if (!k) { R.push(['Film', 'calibrate first: the levels are drawn and the bone measured on the calibrated film', 'warn']); return; }
@@ -1433,7 +1435,7 @@ function diaRows(R, k) {
       if (s.toPhys !== null) R.push([`Stem tip vs physis, ${DIA_FRAG[s.side]}`, s.toPhys <= 0 ? `crosses the physis mark by ${f1(-s.toPhys)} mm: outside what the page can plan until Chunli says whether a stem may cross it` : `${f1(s.toPhys)} mm short of the physis mark${s.toPhys < DIA_TIP_MM ? ` (under ${DIA_TIP_MM} mm)` : ''}`, s.toPhys <= 0 ? 'bad' : s.toPhys < DIA_TIP_MM ? 'warn' : '']);
     }
   }
-  if (Number.isFinite(u.dBody)) { const [lo, hi] = diaStep(u.dBody, 1); R.push(['Body (as you typed)', `Ø ${f1(u.dBody)} mm: Chunli 1 mm steps ${lo === hi ? lo : `${lo} / ${hi}`}; which Φ is the body is not stated by Chunli (Type III stem A Φ2 16-50, Type VI segment JGD(I) Φ 16-50)`]); }
+  if (Number.isFinite(u.dBody)) { const [lo, hi] = diaStep(u.dBody, 1); R.push(['Body (as you typed)', `Ø ${f1(u.dBody)} mm: Chunli 1 mm steps ${lo === hi ? lo : `${lo} / ${hi}`}; the body is Φ2 on Type III (16-50) and Φ on Type VI's extension JGD(I) (16-50), by Chunli's part sketches of 10 Nov 2026 as read by Addis Ortho`]); }
   if (C.stems.some(s => Number.isFinite(s.d) && Number.isFinite(s.l)) || Number.isFinite(u.dBody)) R.push(['Schematic', 'drawn dashed only from the sizes you typed: schematic, not a Chunli drawing', 'warn']);
   for (const a of DIA_NOT_STATED) R.push(['Not stated by Chunli', a, 'warn']);
   R.push(['Scale', 'lengths use this film\'s ball, which sits at the joint; the lesion is mid-shaft, where magnification may differ (not validated)', 'warn']);
@@ -1510,7 +1512,7 @@ function diaCard(R, cur) {
   const ns = el(`<details class="note warn"><summary>Not stated by Chunli (${DIA_NOT_STATED.length})</summary></details>`), ul = document.createElement('ul');
   for (const a of DIA_NOT_STATED) { const li = document.createElement('li'); li.textContent = a; ul.appendChild(li); }
   ns.appendChild(ul); b.appendChild(ns);
-  b.appendChild(el(`<p class="note">Ranges: ${esc(DIA_SRC)}. Type III defect 40-165 mm, Type VI 50-310 mm (both for 50-165); stems: L1 in 5 mm steps (A 20-200, B 10-130), Φ1 in 1 mm steps (III A and B 9-40, VI A 9-39, VI B none stated).</p>`));
+  b.appendChild(el(`<p class="note">Ranges: ${esc(DIA_SRC)}. Type III defect 40-165 mm, Type VI 50-310 mm (both for 50-165); stems in 5 mm steps, the length in the bone (${Object.entries(DIA_TYPES).flatMap(([t, T]) => ['A', 'B'].map(s => `${t} ${s} ${T[s].stemName || 'L1'} ${(T[s].stem || T[s].L1).join('-')}`)).join(', ')}; VI B's L1 10-130 is its body), Φ1 in 1 mm steps (III A and B 9-40, VI A 9-39, VI B none stated).</p>`));
   b.addEventListener('change', e => { const i = e.target.closest('[data-dia]'); if (i) diaInput(i); });
   return d;
 }
@@ -1524,7 +1526,8 @@ function tumPlan(t) {   // {ok, why, src, extent, margin, resection} from the va
 }
 // Osteotomy below the joint line = reconstructionMm (the body, the gap at each taper junction and the extension) + the stem's own
 // collar (30/40/50/60). r24 (21 Oct 2026; Kevin, Chunli, and Sami's rule): body 59.5 = tray 55 + (insert 8.5 - 4), each
-// junction about 2-2.5 mm open after impaction, taken as junctionGapMm 2.25; one junction without an extension, two with one.
+// junction about 2-2.5 mm open after impaction, taken as junctionGapMm 2.25 until r46; r47 (10 Nov 2026): 2.5, Kevin's figure
+// (his 62 = 59.5 + 2.5, the gap between the tray and the extension or stem; theoretical). One junction without an extension, two with one.
 // tumLenWarn stays for a family that still carries techniqueBodyMm (r23 data). The options keep the body size chosen (its width)
 // and list extension + collar within 5 mm.
 const fmm = x => (Number.isFinite(x) ? String(Math.round(x * 100) / 100) : '–');   // r26 (Fable r24 P3 3): tumour lengths to 0.01 mm, no trailing zeros (91.75, 134)
@@ -1532,7 +1535,7 @@ const tumBodyLen = z => Number.isFinite(z.bodyLengthMm) ? z.bodyLengthMm : z.rec
 const tumParts = (z, c) => { const g = Number.isFinite(z.junctionGapMm) ? ` + gap ${z.junctionGapMm}` : '';
   return `${fmm(tumBodyLen(z))}${g}${z.extensionMm ? ` + extension ${z.extensionMm}${g}` : ''} + collar ${c === null || c === undefined ? 'c' : c}`; };
 const tumGapNote = z => Number.isFinite(z.junctionGapMm)
-  ? `${z.insertMm ? `Joint line = the surface of the ${z.insertMm} mm insert.` : 'Joint line = the distal condyle surface (no insert on the femur).'} Each taper junction is taken as ${z.junctionGapMm} mm open after impaction (Chunli: about 2 to 2.5 mm), so the parts can sit up to about ${z.extensionMm ? 0.5 : 0.25} mm longer or shorter: check the length with the trial.` : '';
+  ? `${z.insertMm ? `Joint line = the surface of the ${z.insertMm} mm insert.` : 'Joint line = the distal condyle surface (no insert on the femur).'} Each taper junction is taken as ${z.junctionGapMm} mm open after impaction (${z.junctionGapMm >= 2.5 ? `Chunli, 10 Nov 2026: 2.5 mm${z.insertMm ? (z.extensionMm ? " at the tray's taper, the same taken at the extension's taper to the stem" : '') : " at the tibial tray's taper, taken for the same Ø24 taper here"}, a theoretical value, actual parts have tolerances; he earlier said about 2 to 2.5 mm, so the parts can sit up to about ${z.extensionMm ? 1 : 0.5} mm shorter` : `Chunli: about 2 to 2.5 mm), so the parts can sit up to about ${z.extensionMm ? 0.5 : 0.25} mm longer or shorter`}${z.junctionGapMm >= 2.5 ? ')' : ''}: check the length with the trial.` : '';
 const tumLenWarn = (f, z) => Number.isFinite(f.techniqueBodyMm) && Math.abs(f.techniqueBodyMm - tumBodyLen(z)) > 1
   ? `Chunli's 1:1 sheet gives this body ${f1(tumBodyLen(z))} mm from the joint line to the stem junction; its technique (${f.techniqueRef || 'p. 11'}) says ${f1(f.techniqueBodyMm)}. If ${f1(f.techniqueBodyMm)} is right, these parts reach ${f1(f.techniqueBodyMm - tumBodyLen(z))} mm further below the joint line than planned here: not confirmed by Chunli, check the length with the trial before cutting.` : '';
 const collarsOf = f => { const sf = f && S.fam[f.stems]; return sf ? [...new Set(sf.sizes.map(q => q.collarMm).filter(Number.isFinite))].sort((a, b) => a - b) : []; };
@@ -2990,8 +2993,9 @@ function kneeSystemRow(R) {
     R.push(['Femur and tibia pairing', `femur ${fe.size} with tray ${ti.size}: allowed (LDK matching table: any femur with any tray)${zf && zf.axleMm ? `; axle ${zf.axleMm} mm` : ''}${zt && zt.rotatingComponentMm ? `; rotating component ${zt.rotatingComponentMm} mm` : ''}`]);
   } else if (ff.range === 'ao-cck') R.push(['Femur and tibia pairing', `femur ${fe.size} with tray ${ti.size}: pairing not confirmed (no maker's chart for the CCK in this library)`, 'warn']);
   else if (sys(ff) === 'ao-tumour') {   // Chunli's technique lists the femoral and tibial tumour components by the same size numbers
-    const fn = parseInt(fe.size, 10), tn = parseInt(String(ti.size), 10);
-    R.push(['Femur and tibia pairing', fn === tn ? `femur ${fn}# with tibial body ${tn}#: the same size number (Chunli's technique lists them in pairs; not confirmed as a rule)` : `femur ${fn}# with tibial body ${tn}#: different size numbers; Chunli's technique lists them in pairs (2#, 4#, 6#, 8#, 10#): check with Chunli`, fn === tn ? '' : 'warn']);
+    const fn = parseInt(fe.size, 10), tn = parseInt(String(ti.size), 10), PTR = { 2: '1#', 4: '2#', 6: '4#', 8: '6#', 10: '8#' };   // r48: Chunli's order table (Kevin, 10 Nov 2026): the tray for each femoral size
+    if (ti.fam === 'chunli-ptr-tibia' && fe.fam === 'chunli-ptr-femur') R.push(['Femur and tibia pairing', fn === tn ? `femur ${fn}# with tibial body sheet ${tn}# (order tray ${PTR[tn] || '?'}): the pair in Chunli's order table (Kevin, 10 Nov 2026)` : `femur ${fn}# with tibial body sheet ${tn}# (order tray ${PTR[tn] || '?'}): not the pair in Chunli's order table (femur ${fn}# takes tray ${PTR[fn] || '?'}): check with Chunli`, fn === tn ? '' : 'warn']);
+    else R.push(['Femur and tibia pairing', fn === tn ? `femur ${fn}# with tibial body ${tn}#: the same size number (Chunli's technique lists them in pairs; not confirmed as a rule)` : `femur ${fn}# with tibial body ${tn}#: different size numbers; Chunli's technique lists them in pairs (2#, 4#, 6#, 8#, 10#): check with Chunli`, fn === tn ? '' : 'warn']);
   }
 }
 function kneePairRow(R) {
