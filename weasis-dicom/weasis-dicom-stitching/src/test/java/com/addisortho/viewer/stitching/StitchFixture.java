@@ -76,6 +76,21 @@ final class StitchFixture {
         30);
   }
 
+  /** The cuts of {@link #shortThird}: where each piece truly lies on the leg. */
+  static final List<Phantom.Cut> SHORT_THIRD =
+      List.of(
+          new Phantom.Cut(new Rigid(0, 50, 0), W, 300, 0.3, 1, 0),
+          new Phantom.Cut(new Rigid(0, 50, 100), W, 200, 0.3, 1, 0),
+          new Phantom.Cut(new Rigid(0, 50, 150), W, 50, 0.3, 1, 0));
+
+  /**
+   * Three pieces over 0 to 300, 100 to 300 and 150 to 200 mm of one leg: the third is short, so
+   * seam 2's cut can lie no lower than 190 mm while seam 1's overlap reaches 290 mm.
+   */
+  static StitchFixture shortThird() {
+    return new StitchFixture(Phantom.leg(300, 900, 21), SHORT_THIRD, 0.01, 30);
+  }
+
   private StitchFixture(Phantom leg, List<Phantom.Cut> cuts, double noise, int seed) {
     for (int i = 0; i < cuts.size(); i++) {
       Phantom.Cut c = cuts.get(i);

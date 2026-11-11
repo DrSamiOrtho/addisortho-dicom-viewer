@@ -501,6 +501,12 @@ final class SeamMatcher {
    * deg turn with 0.1 mm residual (Astra, 11 Nov 2026). That fails too; missing evidence is not
    * agreement. A single leg, one group, is not parted by a handful of points on one side.
    *
+   * <p>A side that is fixed must also carry the other side's points to within {@link
+   * #MAX_LEG_DISAGREE_MM} of where they matched, allowing for its own uncertainty over the distance
+   * between the two, whether or not the other side fixes a rotation of its own. The cost of all
+   * this is known: a film that truly turned, matched on two small separate groups only, is refused
+   * as well and needs matching points or one half of the image.
+   *
    * @return the reason the seam fails, or null
    */
   static String halvesDisagree(MatchImage upper, Band band, Rigid fit, List<Rigid.Pair> inliers) {
@@ -562,6 +568,41 @@ final class SeamMatcher {
     }
     if (worst != null) {
       return worst;
+    }
+    // A side that is fixed says where the other side's points should lie. When they lie further
+    // off than the limit, and than that side's own rotation can account for over the distance
+    // between the two, the other side has moved on its own, whether or not it has points enough
+    // to fix a rotation itself: six level points on one leg and five on the other, 2 mm lower and
+    // 400 mm away, fit a turn of 0.29 deg that every other gate passes (Astra, 11 Nov 2026).
+    for (int s = 0; s < 2; s++) {
+      if (!fixed[s]) {
+        continue;
+      }
+      List<Rigid.Pair> mine = s == 0 ? left : right;
+      List<Rigid.Pair> others = s == 0 ? right : left;
+      double ox = others.stream().mapToDouble(Rigid.Pair::fx).average().orElse(0);
+      double oy = others.stream().mapToDouble(Rigid.Pair::fy).average().orElse(0);
+      double tx = others.stream().mapToDouble(Rigid.Pair::tx).average().orElse(0);
+      double ty = others.stream().mapToDouble(Rigid.Pair::ty).average().orElse(0);
+      double mx = mine.stream().mapToDouble(Rigid.Pair::fx).average().orElse(0);
+      double my = mine.stream().mapToDouble(Rigid.Pair::fy).average().orElse(0);
+      double[] put = own[s].apply(ox, oy);
+      double off = Math.hypot(put[0] - tx, put[1] - ty);
+      double lever = Math.hypot(ox - mx, oy - my);
+      double sigma = Math.toRadians(Rigid.uncertainty(own[s], mine)[0]);
+      if (off > MAX_LEG_DISAGREE_MM + 3 * sigma * lever) {
+        return String.format(
+            Locale.ROOT,
+            "the %d matched points on the %s side of the image lie %.1f mm from where the seam of"
+                + " the %d points on the %s side puts them: the two sides do not share one seam"
+                + " (two legs that moved differently between the exposures, parallax). Choose one"
+                + " target leg and match on its half of the image",
+            others.size(),
+            s == 0 ? "right" : "left",
+            off,
+            mine.size(),
+            s == 0 ? "left" : "right");
+      }
     }
     if (fixed[0] && fixed[1]) {
       // where the two sides meet, in the lower piece's mm: half way between their centres

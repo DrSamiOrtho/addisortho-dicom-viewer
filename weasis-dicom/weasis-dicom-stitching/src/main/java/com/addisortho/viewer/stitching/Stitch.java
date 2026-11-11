@@ -125,22 +125,28 @@ final class Stitch {
         frame[i] = onFrame(poses, i, found[i].yMm());
       }
     }
+    // The lowest each cut may lie so that every cut below it still has room: an automatic cut is
+    // where it is, a hand cut may go to the end of its own overlap, and each must stay a feather
+    // above the one below. Without this a hand cut could take the room the hand cut below it
+    // needed (Astra, 11 Nov 2026: a first cut at 280 left a second one, held to 190 by its short
+    // overlap, nowhere to go).
+    double[] ceiling = new double[n];
+    for (int i = n - 1; i >= 0; i--) {
+      if (Double.isNaN(cuts[i])) {
+        ceiling[i] = frame[i]; // not moved, even when the cuts below leave it too little room
+      } else {
+        double own = onFrame(poses, i, overlapRows(i)[1]);
+        ceiling[i] = i == n - 1 ? own : Math.min(own, ceiling[i + 1] - FEATHER_MM);
+      }
+    }
     for (int i = 0; i < n; i++) {
       if (!Double.isNaN(cuts[i])) {
         double[] own = overlapRows(i);
         double lo = onFrame(poses, i, own[0]);
-        double hi = onFrame(poses, i, own[1]);
-        int above = -1;
-        int below = -1;
-        if (i > 0 && frame[i - 1] + FEATHER_MM > lo) {
+        double hi = ceiling[i];
+        boolean above = i > 0 && frame[i - 1] + FEATHER_MM > lo;
+        if (above) {
           lo = frame[i - 1] + FEATHER_MM;
-          above = i - 1;
-        }
-        for (int j = i + 1; j < n; j++) {
-          if (Double.isNaN(cuts[j]) && frame[j] - (j - i) * FEATHER_MM < hi) {
-            hi = frame[j] - (j - i) * FEATHER_MM;
-            below = j;
-          }
         }
         double asked = Math.max(own[0], Math.min(own[1], cuts[i]));
         double at = onFrame(poses, i, asked);
@@ -157,19 +163,15 @@ final class Stitch {
           found[i] =
               new Cut.Row(
                   y,
-                  above < 0
-                      ? "cut placed by hand"
-                      : "cut placed by hand, held clear of seam %d's cut".formatted(above + 1),
+                  above
+                      ? "cut placed by hand, held clear of seam %d's cut".formatted(i)
+                      : "cut placed by hand",
                   false);
         } else if (at > hi) {
           double y = asked + (hi - at) / Math.cos(poses.get(i).theta());
           found[i] =
               new Cut.Row(
-                  y,
-                  below < 0
-                      ? "cut placed by hand"
-                      : "cut placed by hand, held clear of seam %d's cut".formatted(below + 1),
-                  false);
+                  y, "cut placed by hand, held clear of seam %d's cut".formatted(i + 2), false);
         } else {
           found[i] = new Cut.Row(asked, "cut placed by hand", false);
         }
@@ -201,8 +203,14 @@ final class Stitch {
     double[] box =
         SeamMatcher.overlap(
             upper.widthMm(), upper.heightMm(), seams.get(i).transform(), pieces.get(i + 1).match());
+    double end = Math.min(upper.heightMm(), box[3]);
     double first = box[1] + FEATHER_MM;
-    double last = Math.max(first, Math.min(upper.heightMm(), box[3]) - FEATHER_MM);
+    double last = end - FEATHER_MM;
+    if (last < first) {
+      // an overlap shorter than two feathers: its middle, never a row outside it
+      first = (box[1] + end) / 2;
+      last = first;
+    }
     return new double[] {first, last};
   }
 

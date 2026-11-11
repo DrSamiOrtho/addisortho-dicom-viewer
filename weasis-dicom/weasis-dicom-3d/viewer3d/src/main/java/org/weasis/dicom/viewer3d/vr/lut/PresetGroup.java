@@ -58,26 +58,25 @@ public class PresetGroup {
    * (Astra, 11 Nov 2026).
    */
   public static OptionalDouble opacityCrossing(List<PresetGroup> groups, double level) {
-    double best = Double.POSITIVE_INFINITY;
-    for (PresetGroup g : groups) {
-      PresetPoint[] pts =
-          Arrays.stream(g.getPoints())
-              .sorted(Comparator.comparingInt(PresetPoint::getIntensity))
-              .toArray(PresetPoint[]::new);
-      for (int i = 0; i < pts.length; i++) {
-        if (pts[i].getOpacity() >= level) {
-          double at = pts[i].getIntensity();
-          if (i > 0 && pts[i - 1].getOpacity() < level) {
-            double rise = pts[i].getOpacity() - pts[i - 1].getOpacity();
-            double span = pts[i].getIntensity() - pts[i - 1].getIntensity();
-            at = pts[i - 1].getIntensity() + span * (level - pts[i - 1].getOpacity()) / rise;
-          }
-          best = Math.min(best, at);
-          break;
+    // one line through the points of every group, as the colour map is filled (Preset.initColors
+    // joins the groups end to end and draws from each point to the next, across groups too)
+    PresetPoint[] pts =
+        groups.stream()
+            .flatMap(g -> Arrays.stream(g.getPoints()))
+            .sorted(Comparator.comparingInt(PresetPoint::getIntensity))
+            .toArray(PresetPoint[]::new);
+    for (int i = 0; i < pts.length; i++) {
+      if (pts[i].getOpacity() >= level) {
+        double at = pts[i].getIntensity();
+        if (i > 0 && pts[i - 1].getOpacity() < level) {
+          double rise = pts[i].getOpacity() - pts[i - 1].getOpacity();
+          double span = pts[i].getIntensity() - pts[i - 1].getIntensity();
+          at = pts[i - 1].getIntensity() + span * (level - pts[i - 1].getOpacity()) / rise;
         }
+        return OptionalDouble.of(at);
       }
     }
-    return best == Double.POSITIVE_INFINITY ? OptionalDouble.empty() : OptionalDouble.of(best);
+    return OptionalDouble.empty();
   }
 
   public PresetGroup copy() {

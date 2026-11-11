@@ -105,6 +105,57 @@ class StitchCutOrderTest {
     }
   }
 
+  private static Seam at(Rigid transform) {
+    return new Seam(
+        transform,
+        Seam.Method.AUTOMATIC,
+        Seam.Status.CHECK,
+        0.2,
+        0.01,
+        0.01,
+        1,
+        2,
+        0.1,
+        List.of(),
+        List.of("placed for the test"));
+  }
+
+  /**
+   * A short third piece: seam 2's cut can lie no lower than 190 mm on the leg. A hand cut of seam 1
+   * at 280 mm, well inside its own overlap, would leave it nowhere to go; seam 1's cut stops at 180
+   * mm instead and both stay in order (Astra, 11 Nov 2026). An overlap shorter than two feathers
+   * takes its cut at its middle, never outside it.
+   */
+  @Test
+  void aHandCutLeavesRoomForTheCutBelowIt() throws IOException {
+    List<Piece> three = StitchFixture.shortThird().pieces();
+    for (Piece p : three) {
+      p.prepare();
+    }
+    List<Phantom.Cut> where = StitchFixture.SHORT_THIRD;
+    List<Seam> placed =
+        List.of(
+            at(Phantom.truth(where.get(0), where.get(1))),
+            at(Phantom.truth(where.get(1), where.get(2))));
+    for (double second : new double[] {1, 70, 95, 400}) {
+      Stitch s = new Stitch(three, placed, StitchFixture.CHOICES, new double[] {280, second});
+      String both = "seam 1 at %.1f, seam 2 at %.1f".formatted(s.seamY(0), s.seamY(1));
+      assertTrue(s.cutsInOrder(), both);
+      assertTrue(s.seamY(1) >= s.seamY(0) + Stitch.FEATHER_MM - 1e-6, both);
+      assertTrue(s.seamY(1) <= 190 + 1e-6, both + ": inside the short overlap");
+      assertTrue(s.seamY(0) <= 180 + 1e-6, both);
+    }
+    Stitch automaticBelow =
+        new Stitch(three, placed, StitchFixture.CHOICES, new double[] {280, Double.NaN});
+    assertTrue(automaticBelow.cutsInOrder());
+    assertTrue(automaticBelow.seamY(0) <= automaticBelow.seamY(1) - Stitch.FEATHER_MM + 1e-6);
+
+    // an overlap of 12 mm, shorter than two feathers: the cut at its middle
+    List<Seam> barely = List.of(at(Rigid.shift(0, 288)), placed.get(1));
+    Stitch thin = new Stitch(three, barely, StitchFixture.CHOICES, new double[] {250, Double.NaN});
+    assertEquals(294, thin.cut(0).yMm(), 1e-6);
+  }
+
   /** With the cuts held in order no part of the middle piece's band is left to its neighbours. */
   @Test
   void theMiddlePieceIsDrawnBetweenTheCuts() {

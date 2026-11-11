@@ -844,6 +844,15 @@ final class StitchDialog extends JDialog {
     for (int i = 0; i < ys.length; i++) {
       cutWords.append(i == 0 ? "" : " ").append("Seam %d: %s.".formatted(i + 1, s.cut(i).note()));
     }
+    if (!s.cutsInOrder()) {
+      // nothing the window does should leave them so, and no picture is saved of it: said here
+      // so that the preview is not taken for the stitch
+      String crossed =
+          "The cuts of two neighbouring seams cross, so a piece is left out of this preview: drag"
+              + " the seam lines so that they follow each other down the leg.";
+      cutWords.insert(0, crossed + " ");
+      state.setText(crossed);
+    }
     preview.setToolTipText(
         "<html><body style='width:360px'>" + html(cutWords.toString()) + "</body></html>");
     preview.setImage(

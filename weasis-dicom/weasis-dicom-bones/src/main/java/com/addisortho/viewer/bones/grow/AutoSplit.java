@@ -1089,6 +1089,8 @@ public final class AutoSplit {
      * overlapped the piece went to whichever came later in the list (review of 11 Nov 2026).
      */
     private final class Reach {
+      private static final int MAX_ASKED = 32;
+
       private final int[] label;
       private final long[] voxels;
       private final int[] target;
@@ -1112,21 +1114,41 @@ public final class AutoSplit {
             nearestMm2[m] = g[i];
           }
         }
-        // Every voxel of a piece that lies at its least distance is asked which large piece is
+        // The voxels of a piece that lie at its least distance are each asked which large piece is
         // that near, so two bones equally near different ends of a long fragment are both seen
-        // and the tie is settled by rule (Astra, 11 Nov 2026).
+        // and the tie is settled by rule (Astra, 11 Nov 2026). A fragment lying flat against a
+        // bone has hundreds of such voxels that all give the same answer: at most MAX_ASKED are
+        // asked, taken evenly from first to last, and the search can be cancelled.
         target = new int[count + 1];
         Arrays.fill(target, -1);
         double reach2 = o.attachMm() * o.attachMm();
+        int[] atLeast = new int[count + 1];
         for (int i = 0; i < g.length; i++) {
           int m = label[i];
-          if (m > 0 && !large(m) && g[i] <= reach2 && g[i] <= nearestMm2[m] * (1 + 1e-6) + 1e-6) {
+          if (m > 0 && !large(m) && g[i] <= reach2 && atLeastDistance(g[i], nearestMm2[m])) {
+            atLeast[m]++;
+          }
+        }
+        int[] seen = new int[count + 1];
+        for (int i = 0; i < g.length; i++) {
+          int m = label[i];
+          if (m > 0 && !large(m) && g[i] <= reach2 && atLeastDistance(g[i], nearestMm2[m])) {
+            int every = Math.max(1, atLeast[m] / MAX_ASKED);
+            int k = seen[m]++;
+            if (k % every != 0 && k != atLeast[m] - 1) {
+              continue;
+            }
+            RegionGrow.checkCancelled(caller);
             int to = nearestTo(i, Math.sqrt(g[i]), m);
             if (to > 0 && (target[m] < 0 || better(to, target[m]))) {
               target[m] = to;
             }
           }
         }
+      }
+
+      private static boolean atLeastDistance(double mm2, double leastMm2) {
+        return mm2 <= leastMm2 * (1 + 1e-6) + 1e-6;
       }
 
       private boolean large(int m) {

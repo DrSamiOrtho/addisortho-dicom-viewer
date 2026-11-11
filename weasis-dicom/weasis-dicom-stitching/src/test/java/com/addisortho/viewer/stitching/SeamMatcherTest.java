@@ -174,6 +174,25 @@ class SeamMatcherTest {
     assertNotNull(why);
     assertTrue(why.contains("neither group fixes a rotation"), why);
 
+    // six level points on one leg, five on the other 2 mm lower and 400 mm away: a turn of 0.29
+    // deg, under the limit, and one side too small to judge alone; the larger side's seam still
+    // says where the other's points should be, and they are 2 mm off
+    List<Rigid.Pair> oneSided = new ArrayList<>();
+    for (int i = 0; i < 6; i++) {
+      oneSided.add(new Rigid.Pair(100, 100 + 4 * i, 100, 380 + 4 * i));
+    }
+    for (int i = 0; i < 5; i++) {
+      oneSided.add(new Rigid.Pair(500, 100 + 4 * i, 500, 382 + 4 * i));
+    }
+    Rigid small = Rigid.fit(oneSided);
+    assertTrue(Math.abs(small.degrees()) < SeamMatcher.MAX_LEG_DISAGREE_DEG, small.toString());
+    MatchImage wide =
+        Phantom.leg(600, 400, 21)
+            .matchImage(new Phantom.Cut(Rigid.IDENTITY, 600, 356, 0.5, 1, 0), 0.01, 30);
+    String moved = SeamMatcher.halvesDisagree(wide, SeamMatcher.Band.WHOLE, small, oneSided);
+    assertNotNull(moved);
+    assertTrue(moved.contains("lie 2.0 mm from where"), moved);
+
     // the same two small groups under a level seam: nothing rests on them
     List<Rigid.Pair> level = new ArrayList<>(group(Rigid.shift(0, 280), 100, 20, 4, 5));
     level.addAll(group(Rigid.shift(0, 280.3), 300, 20, 4, 5));

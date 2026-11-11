@@ -40,10 +40,14 @@ class PresetGroupTest {
         -100 + 600 * 0.4 / 0.875,
         PresetGroup.opacityCrossing(List.of(ramp), 0.4).orElseThrow(),
         1e-3);
-    // points in any order, and the lowest crossing of several groups
+    // points in any order
     PresetGroup shuffled = group(point(300, 0.85f), point(120, 0f), point(200, 0.4f));
-    assertEquals(
-        174.2857, PresetGroup.opacityCrossing(List.of(shuffled, ramp), 0.4).orElseThrow(), 1e-3);
+    assertEquals(200, PresetGroup.opacityCrossing(List.of(shuffled), 0.4).orElseThrow(), 1e-3);
+    // two groups are one line, as the colour map draws them: from the last point of one to the
+    // first of the next (Astra, 11 Nov 2026)
+    PresetGroup clear = group(point(0, 0f), point(100, 0f));
+    PresetGroup solid = group(point(200, 1f), point(300, 1f));
+    assertEquals(140, PresetGroup.opacityCrossing(List.of(clear, solid), 0.4).orElseThrow(), 1e-3);
     // already that opaque at its first point
     assertEquals(
         50, PresetGroup.opacityCrossing(List.of(group(point(50, 0.9f))), 0.4).orElseThrow(), 1e-9);
