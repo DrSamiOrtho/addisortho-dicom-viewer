@@ -773,7 +773,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
               "Found automatically; not reviewed")); // NON-NLS
     }
     session.selected().clear();
-    apply(ct, session, bones);
+    if (!apply(ct, session, bones)) {
+      return; // refused and said why: not followed by a message of success
+    }
     selectedView()
         .filter(v -> v.getVolTexture().getVolume() == ct.volume())
         .ifPresent(v -> v.setSegType(displayType()));
@@ -1120,7 +1122,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
     session.selected().clear();
     session.selected().add(bone.id());
-    apply(ct, session, after);
+    if (!apply(ct, session, after)) {
+      return; // refused and said why: not followed by a message of success
+    }
     double mm3 = (grown.count() - bone.mask().count()) * ct.grid().voxelVolumeMm3();
     status(String.format(Messages.getString("BoneGrowTool.painted"), mm3, bone.label()));
   }
@@ -1144,7 +1148,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
     session.selected().clear();
     session.selected().add(bone.id());
-    apply(ct, session, session.replaced(bone.id(), bone.withMask(left), null));
+    if (!apply(ct, session, session.replaced(bone.id(), bone.withMask(left), null))) {
+      return; // refused and said why: not followed by a message of success
+    }
     double mm3 = (bone.mask().count() - left.count()) * ct.grid().voxelVolumeMm3();
     status(String.format(Messages.getString("BoneGrowTool.rubbed"), mm3, bone.label()));
   }
@@ -1184,7 +1190,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         }
       }
     }
-    apply(ct.get(), session, after);
+    if (!apply(ct.get(), session, after)) {
+      return; // refused and said why: not followed by a message of success
+    }
     if (result.size() == 1) {
       status(
           String.format(
@@ -1356,7 +1364,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
             mask,
             result.seed(),
             BoneGrowWorker.description(done.request().options(), result));
-    apply(ct, session, session.with(bone));
+    if (!apply(ct, session, session.with(bone))) {
+      return; // refused and said why: not followed by a message of success
+    }
     double cm3 = bone.volumeCm3(ct.grid().voxelVolumeMm3());
     StringBuilder text =
         new StringBuilder(String.format(Messages.getString("BoneGrowTool.done"), name, cm3));
@@ -1391,7 +1401,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     double cm3 = split.cut().count() * voxelMm3 / 1000.0;
     if (done.kind() == SplitWorker.Kind.ERASE) {
       Bone kept = session.bone(bone.id()).get().withMask(split.kept());
-      apply(ct.get(), session, session.replaced(bone.id(), kept, null));
+      if (!apply(ct.get(), session, session.replaced(bone.id(), kept, null))) {
+        return; // refused and said why: not followed by a message of success
+      }
       status(String.format(Messages.getString("BoneGrowTool.erased"), cm3, bone.label()));
       return;
     }
@@ -1446,7 +1458,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         String.format("%.2f", cm3), // NON-NLS
         neighbour.label(),
         String.format("%.2f", keptCm3)); // NON-NLS
-    apply(ct.get(), session, after);
+    if (!apply(ct.get(), session, after)) {
+      return; // refused and said why: not followed by a message of success
+    }
     session.selected().clear();
     session.selected().add(fragmentId);
     // One separation per press of Separate: the next click selects again.
@@ -1496,7 +1510,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   private static void hideSelected(CtSource ct, GrowSession session, List<Bone> selected) {
     List<Integer> ids = selected.stream().map(Bone::id).toList();
-    apply(ct, session, hidden(session, b -> ids.contains(b.id()) || b.hidden()));
+    if (!apply(ct, session, hidden(session, b -> ids.contains(b.id()) || b.hidden()))) {
+      return; // refused and said why: not followed by a message of success
+    }
     session.selected().clear();
     styleViews(session);
     refreshLists();
@@ -1537,7 +1553,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
     session.selected().clear();
     session.selected().add(first.id());
-    apply(ct, session, after);
+    if (!apply(ct, session, after)) {
+      return; // refused and said why: not followed by a message of success
+    }
     status(
         String.format(Messages.getString("BoneGrowTool.joined"), selected.size(), joined.label()));
   }
@@ -1550,7 +1568,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   private static void deleteSelected(CtSource ct, GrowSession session, List<Bone> selected) {
     List<Integer> ids = selected.stream().map(Bone::id).toList();
-    apply(ct, session, session.bones().stream().filter(b -> !ids.contains(b.id())).toList());
+    if (!apply(ct, session, session.bones().stream().filter(b -> !ids.contains(b.id())).toList())) {
+      return; // refused and said why: not followed by a message of success
+    }
     status(
         String.format(
             Messages.getString("BoneGrowTool.deleted"),
@@ -1562,13 +1582,17 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   /**
    * Makes {@code after} the bones of the session as one undoable step of the 3D view, then shows
    * and, when their segments changed, writes them.
+   *
+   * @return false when the step was refused, with the reason shown: the caller must not then
+   *     report success (review of 11 Nov 2026: a search that finished while another CT's 3D view
+   *     was selected was thrown away under "Found N bones")
    */
-  private static void apply(CtSource ct, GrowSession session, List<Bone> after) {
+  private static boolean apply(CtSource ct, GrowSession session, List<Bone> after) {
     Optional<View3d> view = selectedView();
     if (view.isEmpty() || view.get().getVolTexture().getVolume() != ct.volume()) {
       // Without the 3D view of this CT the step could not be undone.
       warn(Messages.getString("BoneGrowTool.noCt"));
-      return;
+      return false;
     }
     List<Bone> before = session.bones();
     session.set(after);
@@ -1591,6 +1615,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
               }
             });
     bonesChanged(ct, session);
+    return true;
   }
 
   private static void bonesChanged(CtSource ct, GrowSession session) {

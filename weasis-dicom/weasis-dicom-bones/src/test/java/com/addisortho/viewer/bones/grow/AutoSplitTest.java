@@ -8,6 +8,7 @@
  */
 package com.addisortho.viewer.bones.grow;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -70,11 +71,122 @@ class AutoSplitTest {
     assertEquals(1, r.fragments());
   }
 
+  /** An L-shaped bone, 20 mm thick, its arms 10 mm wide along x and along y from (5, 5). */
+  private static boolean inL(int x, int y, int z) {
+    return z >= 5 && z <= 24 && x >= 5 && y >= 5 && x <= 60 && y <= 60 && (x <= 14 || y <= 14);
+  }
+
+  private static Phantom lWith(int x0, int y0, int size) {
+    return new Phantom(
+        70,
+        70,
+        30,
+        (x, y, z) ->
+            inL(x, y, z)
+                    || (x >= x0
+                        && x < x0 + size
+                        && y >= y0
+                        && y < y0 + size
+                        && z >= 12
+                        && z < 12 + size)
+                ? 700
+                : 0);
+  }
+
+  /**
+   * A loose piece is a fragment of a bone by its distance to the bone, not to the box around the
+   * bone (review of 11 Nov 2026): inside the bend of an L-shaped bone, 30 mm from either arm, a
+   * piece lies inside the bone's bounding box and was joined to it; a speck there was joined too
+   * instead of dropped.
+   */
+  @Test
+  void aLoosePieceInsideABonesBoxButFarFromTheBoneIsNotItsFragment() {
+    Result far = split(lWith(45, 45, 6));
+    assertEquals(2, far.pieces().size(), "216 mm3, 30 mm from the bone: a bone of its own");
+    assertEquals(0, far.fragments());
+
+    Result speck = split(lWith(45, 45, 2));
+    assertEquals(1, speck.pieces().size());
+    assertEquals(0, speck.fragments());
+    assertEquals(1, speck.specks(), "8 mm3, 30 mm from the bone: dropped");
+
+    Result near = split(lWith(19, 30, 6));
+    assertEquals(1, near.pieces().size(), "the same piece 4 mm beside an arm is its fragment");
+    assertEquals(1, near.fragments());
+  }
+
+  /** Between two bones a fragment goes to the nearer one, whichever is listed first. */
+  @Test
+  void aFragmentGoesToTheNearerOfTwoBones() {
+    Phantom two =
+        new Phantom(
+            80,
+            40,
+            40,
+            (x, y, z) -> {
+              boolean left = z >= 4 && z <= 35 && Phantom.inDisc(x, y, 12, 20, 8);
+              boolean right = z >= 4 && z <= 35 && Phantom.inDisc(x, y, 60, 20, 9);
+              // a 4 mm cube 4 mm from the left bone and 23 mm from the right one
+              boolean chip = x >= 25 && x <= 28 && y >= 18 && y <= 21 && z >= 18 && z <= 21;
+              return left || right || chip ? 700 : 0;
+            });
+    Result r = split(two);
+    assertEquals(2, r.pieces().size());
+    assertEquals(1, r.fragments());
+    // the right bone is the larger, so it is listed first; the chip is the left one's
+    assertEquals(0, r.pieces().get(0).fragments());
+    assertEquals(1, r.pieces().get(1).fragments());
+    assertTrue(r.pieces().get(1).mask().contains(26, 19, 19));
+  }
+
   @Test
   void aCoarseGridStillSplitsTheJoint() {
     Result r = split(Phantom.twoBones(), AutoSplit.Options.of(1, 1, 1).withMaxWorkVoxels(10_000));
     assertTrue(r.factor() > 1);
     assertEquals(2, r.pieces().size());
+  }
+
+  /**
+   * Thick slices: two bones along z with one empty 3 mm slice between them, on a grid that must be
+   * coarsened. The plane is halved and the slices are kept, so the joint stays open; with one
+   * factor for all three axes the empty slice shared a coarse voxel with bone and the two bones
+   * came out as one (review of 11 Nov 2026).
+   */
+  @Test
+  void aCoarseGridKeepsThickSlicesAndTheJointBetweenThem() {
+    Phantom joint =
+        new Phantom(
+            60,
+            60,
+            24,
+            (x, y, z) -> z >= 2 && z <= 21 && z != 11 && Phantom.inDisc(x, y, 30, 30, 20) ? 700 : 0);
+    Result r = split(joint, AutoSplit.Options.of(1, 1, 3).withMaxWorkVoxels(20_000));
+    assertTrue(r.factor() > 1);
+    assertEquals(2, r.pieces().size());
+  }
+
+  @Test
+  void eachAxisIsCoarsenedByItsOwnFactorTheFinestFirst() {
+    // isotropic: all three alike, as one factor did
+    assertArrayEquals(
+        new int[] {2, 2, 2},
+        AutoSplit.factors(400, 400, 400, AutoSplit.Options.of(0.5, 0.5, 0.5)));
+    assertArrayEquals(
+        new int[] {1, 1, 1},
+        AutoSplit.factors(200, 200, 200, AutoSplit.Options.of(0.5, 0.5, 0.5)));
+    // 1 mm pixels and 3 mm slices: the plane is halved, the slices stay
+    assertArrayEquals(
+        new int[] {2, 2, 1}, AutoSplit.factors(512, 512, 226, AutoSplit.Options.of(1, 1, 3)));
+    // 0.4 mm pixels and 1 mm slices, a large block: the plane first, then the slices
+    int[] f = AutoSplit.factors(900, 900, 600, AutoSplit.Options.of(0.4, 0.4, 1));
+    assertTrue(f[0] == f[1] && f[0] >= f[2] && f[2] >= 1, java.util.Arrays.toString(f));
+    assertTrue(
+        (900 / f[0] + 1L) * (900 / f[1] + 1) * (600 / f[2] + 1) <= 16_000_000L * 2,
+        java.util.Arrays.toString(f));
+    // a grid no factor can fit still ends
+    assertArrayEquals(
+        new int[] {4, 4, 4},
+        AutoSplit.factors(4000, 4000, 4000, AutoSplit.Options.of(0.5, 0.5, 0.5)));
   }
 
   /**

@@ -39,12 +39,13 @@ import java.util.stream.IntStream;
  *       touching at a point splits, the femoral neck or a narrow metaphysis does not.
  *   <li>Every voxel of the bone threshold goes to the piece that reaches it first.
  *   <li>Pieces under {@link Options#fragmentMm3()} are fragments: each joins the large piece it
- *       touches most, or the nearest within {@link Options#attachMm()}, so a comminuted fracture
+ *       touches most, or the nearest within {@link Options#attachMm()} bone to bone, so a comminuted fracture
  *       gives one bone with its fragments and not dozens of entries. Specks are dropped.
  * </ol>
  *
- * <p>A large CT is worked on a grid coarser by a whole factor, to bound memory; each voxel then
- * takes the piece of its coarse voxel. Run off the event dispatch thread; interrupting the thread
+ * <p>A large CT is worked on a coarser grid, to bound memory; each voxel then takes the piece of
+ * its coarse voxel. Each axis is coarsened by its own whole factor, the finest spacing first, so a
+ * scan with thick slices keeps the slices it has. Run off the event dispatch thread; interrupting the thread
  * cancels it.
  */
 public final class AutoSplit {
@@ -191,7 +192,8 @@ public final class AutoSplit {
    * @param pieces the bones, largest first
    * @param fragments fragments joined to a bone
    * @param specks loose specks dropped
-   * @param factor coarsening of the grid worked on, 1 for the CT's own
+   * @param factor coarsening of the grid worked on, 1 for the CT's own; the largest of the three
+   *     axes' factors
    */
   public record Result(List<Piece> pieces, int fragments, int specks, int factor, long millis) {}
 
@@ -590,6 +592,36 @@ public final class AutoSplit {
     return (System.nanoTime() - start) / 1_000_000;
   }
 
+  /**
+   * How much each axis is coarsened so that the grid fits {@link Options#maxWorkVoxels()}: one
+   * step at a time on the axes whose coarse voxel is smallest in mm, up to 4 each. An isotropic
+   * CT is coarsened alike on all three, as before; a CT with 3 mm slices and 1 mm pixels is
+   * halved in the plane only. One factor for all three (until 11 Nov 2026) made the slices 6 mm
+   * there, and a joint one slice wide between two bones closed (review of 11 Nov 2026).
+   */
+  static int[] factors(int sx, int sy, int sz, Options o) {
+    int[] f = {1, 1, 1};
+    int[] size = {sx, sy, sz};
+    double[] mm = {o.mmX(), o.mmY(), o.mmZ()};
+    while (Work.coarse(sx, f[0]) * (long) Work.coarse(sy, f[1]) * Work.coarse(sz, f[2]) > o.maxWorkVoxels()) {
+      double least = Double.POSITIVE_INFINITY;
+      for (int a = 0; a < 3; a++) {
+        if (f[a] < 4 && size[a] > 1) {
+          least = Math.min(least, mm[a] * f[a]);
+        }
+      }
+      if (least == Double.POSITIVE_INFINITY) {
+        break;
+      }
+      for (int a = 0; a < 3; a++) {
+        if (f[a] < 4 && size[a] > 1 && mm[a] * f[a] <= least * 1.02) {
+          f[a]++;
+        }
+      }
+    }
+    return f;
+  }
+
   /** One split, on the block holding the bone. */
   private static final class Work {
     private final BitVolume solid;
@@ -598,7 +630,10 @@ public final class AutoSplit {
     private final VoxelBox block;
     private final Options o;
     private final Thread caller;
-    private final int f;
+    // the coarsening of each axis
+    private final int fx;
+    private final int fy;
+    private final int fz;
     private final int wx;
     private final int wy;
     private final int wz;
@@ -620,18 +655,13 @@ public final class AutoSplit {
       this.block = block;
       this.o = o;
       this.caller = caller;
-      int factor = 1;
-      while (factor < 4
-          && coarse(solid.sizeX(), factor)
-                  * (long) coarse(solid.sizeY(), factor)
-                  * coarse(solid.sizeZ(), factor)
-              > o.maxWorkVoxels()) {
-        factor++;
-      }
-      this.f = factor;
-      this.wx = coarse(solid.sizeX(), f);
-      this.wy = coarse(solid.sizeY(), f);
-      this.wz = coarse(solid.sizeZ(), f);
+      int[] f = factors(solid.sizeX(), solid.sizeY(), solid.sizeZ(), o);
+      this.fx = f[0];
+      this.fy = f[1];
+      this.fz = f[2];
+      this.wx = coarse(solid.sizeX(), fx);
+      this.wy = coarse(solid.sizeY(), fy);
+      this.wz = coarse(solid.sizeZ(), fz);
       this.fineMm3 = o.mmX() * o.mmY() * o.mmZ();
     }
 
@@ -671,35 +701,37 @@ public final class AutoSplit {
                     int present = 0;
                     boolean any = false;
                     boolean joint = false;
-                    for (int dz = 0; dz < f; dz++) {
-                      int fz = z * f + dz;
-                      if (fz >= solid.sizeZ()) {
+                    for (int dz = 0; dz < fz; dz++) {
+                      int pz = z * fz + dz;
+                      if (pz >= solid.sizeZ()) {
                         continue;
                       }
-                      for (int dy = 0; dy < f; dy++) {
-                        int fy = y * f + dy;
-                        if (fy >= solid.sizeY()) {
+                      for (int dy = 0; dy < fy; dy++) {
+                        int py = y * fy + dy;
+                        if (py >= solid.sizeY()) {
                           continue;
                         }
-                        for (int dx = 0; dx < f; dx++) {
-                          int fx = x * f + dx;
-                          if (fx >= solid.sizeX()) {
+                        for (int dx = 0; dx < fx; dx++) {
+                          int px = x * fx + dx;
+                          if (px >= solid.sizeX()) {
                             continue;
                           }
                           present++;
-                          any |= solid.get(fx, fy, fz);
-                          if (dense.get(fx, fy, fz)) {
+                          any |= solid.get(px, py, pz);
+                          if (dense.get(px, py, pz)) {
                             denseCount++;
                           }
-                          joint |= joints != null && joints.get(fx, fy, fz);
+                          joint |= joints != null && joints.get(px, py, pz);
                         }
                       }
                     }
                     int i = index(x, y, z);
                     solidW[i] = any;
-                    // A coarse voxel is dense when most of it is: a joint space stays open. A
-                    // joint line is thinner than a coarse voxel and would close: it opens the
-                    // whole of each coarse voxel it crosses.
+                    // A coarse voxel is dense when at least half of it is, so a cortex one voxel
+                    // thick stays bone. (More than half was tried on 11 Nov 2026: it opens a
+                    // joint one voxel wide, but on a pelvis it cut thin bone into a sixth more
+                    // pieces than the CT's own grid gives.) A joint line is thinner than a coarse
+                    // voxel and would close: it opens the whole of each coarse voxel it crosses.
                     g[i] = present > 0 && !joint && 2 * denseCount >= present ? INF : 0;
                   }
                 }
@@ -713,9 +745,9 @@ public final class AutoSplit {
 
     /** Squared Euclidean distance in mm², in place: 0 stays 0, {@link #INF} gets its distance. */
     private void distanceTransform(float[] g) {
-      double ux = o.mmX() * f;
-      double uy = o.mmY() * f;
-      double uz = o.mmZ() * f;
+      double ux = o.mmX() * fx;
+      double uy = o.mmY() * fy;
+      double uz = o.mmZ() * fz;
       squaredDistance(g, wx, wy, wz, ux, uy, uz, caller);
       // The edge of the block counts as outside the bone: no voxel is farther than that.
       clampToEdges(g, ux, uy, uz);
@@ -773,7 +805,7 @@ public final class AutoSplit {
       Nodes nodes = new Nodes();
       int[] roots = new int[6];
       int[] kept = new int[6];
-      double coarseMm3 = fineMm3 * f * f * f;
+      double coarseMm3 = fineMm3 * fx * fy * fz;
       for (int n = 0; n < order.length; n++) {
         if ((n & 0xFFFF) == 0) {
           RegionGrow.checkCancelled(caller);
@@ -947,7 +979,7 @@ public final class AutoSplit {
         for (int y = 0; y < solid.sizeY(); y++) {
           for (int x = 0; x < solid.sizeX(); x++) {
             if (solid.get(x, y, z)) {
-              int l = label[index(x / f, y / f, z / f)];
+              int l = label[index(x / fx, y / fy, z / fz)];
               voxels[l]++;
               extent[l] = grow(extent[l], x, y, z);
             }
@@ -955,6 +987,7 @@ public final class AutoSplit {
         }
       }
       Map<Long, Integer> contacts = contacts(label);
+      Reach reach = null;
       int[] home = new int[count + 1];
       int fragments = 0;
       int specks = 0;
@@ -970,7 +1003,10 @@ public final class AutoSplit {
         } else {
           int to = mostTouched(l, contacts, voxels);
           if (to < 0) {
-            to = nearestLarge(l, extent, voxels);
+            if (reach == null) {
+              reach = new Reach(label, voxels, count);
+            }
+            to = reach.nearestLarge(l);
           }
           if (to > 0) {
             home[l] = to;
@@ -999,7 +1035,8 @@ public final class AutoSplit {
         pieces.add(new Piece(mask(label, home, l, e), anchor(l, e), joined));
       }
       pieces.sort(Comparator.comparingLong((Piece p) -> p.mask().count()).reversed());
-      return new Result(List.copyOf(pieces), fragments, specks, f, millis(start));
+      return new Result(
+          List.copyOf(pieces), fragments, specks, Math.max(fx, Math.max(fy, fz)), millis(start));
     }
 
     /** Touching faces between two pieces, by the pair (smaller label, larger label). */
@@ -1041,29 +1078,85 @@ public final class AutoSplit {
       return best;
     }
 
-    /** The large piece whose extent lies nearest the piece's centre, within the reach. */
-    private int nearestLarge(int l, int[][] extent, long[] voxels) {
-      int[] e = extent[l];
-      double cx = (e[0] + e[1]) / 2.0;
-      double cy = (e[2] + e[3]) / 2.0;
-      double cz = (e[4] + e[5]) / 2.0;
-      int best = -1;
-      double bestMm = o.attachMm();
-      for (int m = 1; m < extent.length; m++) {
-        if (m == l || extent[m] == null || voxels[m] * fineMm3 < o.fragmentMm3()) {
-          continue;
+    /**
+     * How far each piece lies from the nearest large piece, bone to bone: the distance in mm from
+     * its nearest voxel to the nearest voxel of a large piece, on the working grid. Until 11 Nov
+     * 2026 the distance was taken from the piece's centre to the large piece's bounding box, so
+     * anything inside that box was "at" the bone: a calcification or a speck anywhere in the
+     * hollow of a pelvis was joined to a pelvic bone and went into its surface, and where two
+     * boxes overlapped the piece went to whichever came later in the list (review of 11 Nov 2026).
+     */
+    private final class Reach {
+      private final int[] label;
+      private final long[] voxels;
+      private final double[] nearestMm2;
+      private final int[] nearestAt;
+      private final double ux = o.mmX() * fx;
+      private final double uy = o.mmY() * fy;
+      private final double uz = o.mmZ() * fz;
+
+      Reach(int[] label, long[] voxels, int count) {
+        this.label = label;
+        this.voxels = voxels;
+        float[] g = new float[label.length];
+        for (int i = 0; i < g.length; i++) {
+          g[i] = large(label[i]) ? 0 : INF;
         }
-        int[] b = extent[m];
-        double dx = Math.max(0, Math.max(b[0] - cx, cx - b[1])) * o.mmX();
-        double dy = Math.max(0, Math.max(b[2] - cy, cy - b[3])) * o.mmY();
-        double dz = Math.max(0, Math.max(b[4] - cz, cz - b[5])) * o.mmZ();
-        double mm = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (mm <= bestMm) {
-          best = m;
-          bestMm = mm;
+        squaredDistance(g, wx, wy, wz, ux, uy, uz, caller);
+        nearestMm2 = new double[count + 1];
+        Arrays.fill(nearestMm2, Double.POSITIVE_INFINITY);
+        nearestAt = new int[count + 1];
+        Arrays.fill(nearestAt, -1);
+        for (int i = 0; i < g.length; i++) {
+          int m = label[i];
+          if (m > 0 && g[i] < nearestMm2[m]) {
+            nearestMm2[m] = g[i];
+            nearestAt[m] = i;
+          }
         }
       }
-      return best;
+
+      private boolean large(int m) {
+        return m > 0 && voxels[m] * fineMm3 >= o.fragmentMm3();
+      }
+
+      /** The large piece nearest piece {@code l}, within the reach; -1 when there is none. */
+      int nearestLarge(int l) {
+        int i = nearestAt[l];
+        double mm = i < 0 ? Double.POSITIVE_INFINITY : Math.sqrt(nearestMm2[l]);
+        if (mm > o.attachMm()) {
+          return -1;
+        }
+        int x = i % wx;
+        int y = (i / wx) % wy;
+        int z = i / (wx * wy);
+        int rx = (int) Math.ceil(mm / ux) + 1;
+        int ry = (int) Math.ceil(mm / uy) + 1;
+        int rz = (int) Math.ceil(mm / uz) + 1;
+        int best = -1;
+        double bestMm2 = Double.POSITIVE_INFINITY;
+        for (int pz = Math.max(0, z - rz); pz <= Math.min(wz - 1, z + rz); pz++) {
+          for (int py = Math.max(0, y - ry); py <= Math.min(wy - 1, y + ry); py++) {
+            for (int px = Math.max(0, x - rx); px <= Math.min(wx - 1, x + rx); px++) {
+              int m = label[index(px, py, pz)];
+              if (m == l || !large(m)) {
+                continue;
+              }
+              double d2 = sq((px - x) * ux) + sq((py - y) * uy) + sq((pz - z) * uz);
+              // equally near: the larger bone, then the earlier one, so the answer never
+              // depends on the order of the search
+              boolean nearer = d2 < bestMm2 - 1e-6;
+              boolean same = Math.abs(d2 - bestMm2) <= 1e-6;
+              if (nearer
+                  || (same && (voxels[m] > voxels[best] || (voxels[m] == voxels[best] && m < best)))) {
+                best = m;
+                bestMm2 = d2;
+              }
+            }
+          }
+        }
+        return best;
+      }
     }
 
     private BoxMask mask(int[] label, int[] home, int l, int[] e) {
@@ -1072,7 +1165,7 @@ public final class AutoSplit {
         for (int y = e[2]; y <= e[3]; y++) {
           for (int x = e[0]; x <= e[1]; x++) {
             if (solid.get(x, y, z)) {
-              int m = label[index(x / f, y / f, z / f)];
+              int m = label[index(x / fx, y / fy, z / fz)];
               if (m > 0 && home[m] == l) {
                 bits.set(x - e[0], y - e[2], z - e[4]);
               }
@@ -1098,9 +1191,9 @@ public final class AutoSplit {
       int y;
       int z;
       if (peak != null) {
-        x = Math.min(solid.sizeX() - 1, (peak % wx) * f + f / 2);
-        y = Math.min(solid.sizeY() - 1, ((peak / wx) % wy) * f + f / 2);
-        z = Math.min(solid.sizeZ() - 1, (peak / (wx * wy)) * f + f / 2);
+        x = Math.min(solid.sizeX() - 1, (peak % wx) * fx + fx / 2);
+        y = Math.min(solid.sizeY() - 1, ((peak / wx) % wy) * fy + fy / 2);
+        z = Math.min(solid.sizeZ() - 1, (peak / (wx * wy)) * fz + fz / 2);
       } else {
         x = (e[0] + e[1]) / 2;
         y = (e[2] + e[3]) / 2;
