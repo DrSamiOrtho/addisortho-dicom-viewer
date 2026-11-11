@@ -94,8 +94,8 @@ record Seam(
    * matching points that agree, or a new automatic match can clear it. A "check" seam stays "check"
    * only for a small correction: moved more than {@link #MAX_HAND_MOVE_MM} at the overlap, or
    * turned more than {@link #MAX_HAND_TURN_DEG}, it is no longer the seam the match checked and
-   * fails (review of 11 Nov 2026: a seam dragged 35 mm and turned 8 deg stayed "check" and could
-   * be saved as measurable).
+   * fails (review of 11 Nov 2026: a seam dragged 35 mm and turned 8 deg stayed "check" and could be
+   * saved as measurable).
    *
    * @param refX a point of the lower piece, in its mm, where the move is measured: the middle of
    *     the overlap

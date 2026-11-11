@@ -107,8 +107,8 @@ final class Stitch {
    * Every seam's cut. A cut placed by hand stays inside its own overlap, and also between its
    * neighbours' cuts on the stitch frame, {@link #FEATHER_MM} clear of each: the compositor takes
    * piece i between cut i-1 and cut i, so two cuts out of order leave the piece between them out
-   * and average its neighbours there, which are lined up only through it (review of 11 Nov 2026:
-   * on three pieces that all overlap, seam 1's line dragged below seam 2's made the middle piece
+   * and average its neighbours there, which are lined up only through it (review of 11 Nov 2026: on
+   * three pieces that all overlap, seam 1's line dragged below seam 2's made the middle piece
    * vanish in that band). An automatic neighbour stays where it is and the hand cut stops short of
    * it; of two hand cuts the upper one stays.
    */
@@ -160,10 +160,7 @@ final class Stitch {
     Piece upper = pieces.get(i);
     double[] box =
         SeamMatcher.overlap(
-            upper.widthMm(),
-            upper.heightMm(),
-            seams.get(i).transform(),
-            pieces.get(i + 1).match());
+            upper.widthMm(), upper.heightMm(), seams.get(i).transform(), pieces.get(i + 1).match());
     return Math.max(box[1] + FEATHER_MM, Math.min(upper.heightMm() - FEATHER_MM, y));
   }
 

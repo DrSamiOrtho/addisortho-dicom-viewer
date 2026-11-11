@@ -1583,9 +1583,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
    * Makes {@code after} the bones of the session as one undoable step of the 3D view, then shows
    * and, when their segments changed, writes them.
    *
-   * @return false when the step was refused, with the reason shown: the caller must not then
-   *     report success (review of 11 Nov 2026: a search that finished while another CT's 3D view
-   *     was selected was thrown away under "Found N bones")
+   * @return false when the step was refused, with the reason shown: the caller must not then report
+   *     success (review of 11 Nov 2026: a search that finished while another CT's 3D view was
+   *     selected was thrown away under "Found N bones")
    */
   private static boolean apply(CtSource ct, GrowSession session, List<Bone> after) {
     Optional<View3d> view = selectedView();

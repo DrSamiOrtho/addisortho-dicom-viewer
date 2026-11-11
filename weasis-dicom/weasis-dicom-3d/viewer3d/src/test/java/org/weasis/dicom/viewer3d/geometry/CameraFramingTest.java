@@ -52,8 +52,8 @@ class CameraFramingTest {
   /**
    * The half height is the projection's own: a point that far above the pivot lies on the view's
    * top edge, so a pan of one half height moves the picture by half the view (review of 11 Nov
-   * 2026: the framing read the field of view as degrees, the projection as radians, and a pan
-   * moved the picture 74 % of the way the cursor went).
+   * 2026: the framing read the field of view as degrees, the projection as radians, and a pan moved
+   * the picture 74 % of the way the cursor went).
    */
   @Test
   void theHalfHeightIsTheProjectionsOwn() {

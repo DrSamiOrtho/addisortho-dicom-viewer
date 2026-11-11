@@ -487,8 +487,8 @@ final class SeamMatcher {
    * A film that truly turned shows the same rotation in each half. A half is asked only when its
    * points fix its rotation as well as a whole seam must ({@link #MAX_ROTATION_SIGMA_DEG}), and it
    * disagrees only beyond {@link #MAX_LEG_DISAGREE_DEG} and three times its own uncertainty, so a
-   * single leg that straddles the middle of a wide film is not judged by a handful of points on
-   * one side.
+   * single leg that straddles the middle of a wide film is not judged by a handful of points on one
+   * side.
    *
    * @return the reason the seam fails, or null
    */
@@ -500,8 +500,7 @@ final class SeamMatcher {
     String worst = null;
     double worstDeg = MAX_LEG_DISAGREE_DEG;
     for (boolean leftHalf : new boolean[] {true, false}) {
-      List<Rigid.Pair> part =
-          inliers.stream().filter(q -> (q.tx() < mid) == leftHalf).toList();
+      List<Rigid.Pair> part = inliers.stream().filter(q -> (q.tx() < mid) == leftHalf).toList();
       if (part.size() < MIN_INLIERS) {
         continue;
       }
@@ -673,9 +672,9 @@ final class SeamMatcher {
   /**
    * The whole-width seam refused for both legs. One that had passed on its own still carries its
    * fitted rotation and residual: it is left at the average shift of its matched points instead,
-   * with no figures, as {@link #judge} leaves any refused fit (review of 11 Nov 2026: with the
-   * legs 3 mm apart the refused seam was saved turned -0.77 deg, the fault stitch 0.4 removed from
-   * a single band).
+   * with no figures, as {@link #judge} leaves any refused fit (review of 11 Nov 2026: with the legs
+   * 3 mm apart the refused seam was saved turned -0.77 deg, the fault stitch 0.4 removed from a
+   * single band).
    */
   private static Seam refused(Seam whole, String reason) {
     if (whole.status() == Seam.Status.FAILED) {

@@ -459,7 +459,11 @@ public final class BoneIsolation {
       long[] m = metal.sliceWords(z);
       System.arraycopy(m, 0, rim.sliceWords(z), 0, m.length);
     }
-    dilate(rim, scratch, METAL_HALO_VOXELS, new Box(0, metal.sizeX() - 1, 0, metal.sizeY() - 1, 0, sz - 1));
+    dilate(
+        rim,
+        scratch,
+        METAL_HALO_VOXELS,
+        new Box(0, metal.sizeX() - 1, 0, metal.sizeY() - 1, 0, sz - 1));
     for (int z = 0; z < sz; z++) {
       long[] r = rim.sliceWords(z);
       long[] d = dense.sliceWords(z);

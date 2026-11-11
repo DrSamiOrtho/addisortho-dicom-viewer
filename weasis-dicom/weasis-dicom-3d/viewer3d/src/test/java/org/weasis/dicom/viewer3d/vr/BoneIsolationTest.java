@@ -233,8 +233,8 @@ class BoneIsolationTest {
   }
 
   /**
-   * A real pin has a rim: partial volume and the upload smoothing leave a voxel or two between
-   * bone and metal round it, all the way out through the cast into the air. Read as bone, that rim
+   * A real pin has a rim: partial volume and the upload smoothing leave a voxel or two between bone
+   * and metal round it, all the way out through the cast into the air. Read as bone, that rim
    * joined the bone to the plaster and to the outside air, and the bone was cut away with the cast
    * (review of 11 Nov 2026: with four pins in a tibia the view lost the tibia). The rim goes with
    * the metal.

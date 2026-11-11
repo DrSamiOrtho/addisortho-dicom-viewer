@@ -159,7 +159,8 @@ class AutoSplitTest {
             60,
             60,
             24,
-            (x, y, z) -> z >= 2 && z <= 21 && z != 11 && Phantom.inDisc(x, y, 30, 30, 20) ? 700 : 0);
+            (x, y, z) ->
+                z >= 2 && z <= 21 && z != 11 && Phantom.inDisc(x, y, 30, 30, 20) ? 700 : 0);
     Result r = split(joint, AutoSplit.Options.of(1, 1, 3).withMaxWorkVoxels(20_000));
     assertTrue(r.factor() > 1);
     assertEquals(2, r.pieces().size());
@@ -169,11 +170,9 @@ class AutoSplitTest {
   void eachAxisIsCoarsenedByItsOwnFactorTheFinestFirst() {
     // isotropic: all three alike, as one factor did
     assertArrayEquals(
-        new int[] {2, 2, 2},
-        AutoSplit.factors(400, 400, 400, AutoSplit.Options.of(0.5, 0.5, 0.5)));
+        new int[] {2, 2, 2}, AutoSplit.factors(400, 400, 400, AutoSplit.Options.of(0.5, 0.5, 0.5)));
     assertArrayEquals(
-        new int[] {1, 1, 1},
-        AutoSplit.factors(200, 200, 200, AutoSplit.Options.of(0.5, 0.5, 0.5)));
+        new int[] {1, 1, 1}, AutoSplit.factors(200, 200, 200, AutoSplit.Options.of(0.5, 0.5, 0.5)));
     // 1 mm pixels and 3 mm slices: the plane is halved, the slices stay
     assertArrayEquals(
         new int[] {2, 2, 1}, AutoSplit.factors(512, 512, 226, AutoSplit.Options.of(1, 1, 3)));

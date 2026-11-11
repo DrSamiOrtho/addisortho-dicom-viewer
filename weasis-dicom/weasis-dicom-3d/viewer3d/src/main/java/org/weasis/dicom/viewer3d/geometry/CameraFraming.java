@@ -34,10 +34,10 @@ public final class CameraFraming {
   /**
    * Tangent of half the vertical field of view, as the projection has it. {@link Camera} hands its
    * field-of-view number (45) to JOML's {@code setPerspective}, which reads radians: the picture
-   * has tan(22.5 rad) = 0.558, a field of view of about 58 degrees, and has had since upstream.
-   * The picture stays as it is; the framing follows it. Until 11 Nov 2026 the framing took the
-   * number as degrees (0.414), so a pan moved the picture 74 % of the way the cursor went and Fit
-   * left the bone at 69 % of the view's height instead of 93 % (review of 11 Nov 2026).
+   * has tan(22.5 rad) = 0.558, a field of view of about 58 degrees, and has had since upstream. The
+   * picture stays as it is; the framing follows it. Until 11 Nov 2026 the framing took the number
+   * as degrees (0.414), so a pan moved the picture 74 % of the way the cursor went and Fit left the
+   * bone at 69 % of the view's height instead of 93 % (review of 11 Nov 2026).
    *
    * @param fov the camera's field-of-view number, as given to the projection
    */

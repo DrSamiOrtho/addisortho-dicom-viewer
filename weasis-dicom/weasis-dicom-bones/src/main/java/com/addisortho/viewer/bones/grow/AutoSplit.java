@@ -39,14 +39,15 @@ import java.util.stream.IntStream;
  *       touching at a point splits, the femoral neck or a narrow metaphysis does not.
  *   <li>Every voxel of the bone threshold goes to the piece that reaches it first.
  *   <li>Pieces under {@link Options#fragmentMm3()} are fragments: each joins the large piece it
- *       touches most, or the nearest within {@link Options#attachMm()} bone to bone, so a comminuted fracture
- *       gives one bone with its fragments and not dozens of entries. Specks are dropped.
+ *       touches most, or the nearest within {@link Options#attachMm()} bone to bone, so a
+ *       comminuted fracture gives one bone with its fragments and not dozens of entries. Specks are
+ *       dropped.
  * </ol>
  *
  * <p>A large CT is worked on a coarser grid, to bound memory; each voxel then takes the piece of
  * its coarse voxel. Each axis is coarsened by its own whole factor, the finest spacing first, so a
- * scan with thick slices keeps the slices it has. Run off the event dispatch thread; interrupting the thread
- * cancels it.
+ * scan with thick slices keeps the slices it has. Run off the event dispatch thread; interrupting
+ * the thread cancels it.
  */
 public final class AutoSplit {
 
@@ -593,17 +594,18 @@ public final class AutoSplit {
   }
 
   /**
-   * How much each axis is coarsened so that the grid fits {@link Options#maxWorkVoxels()}: one
-   * step at a time on the axes whose coarse voxel is smallest in mm, up to 4 each. An isotropic
-   * CT is coarsened alike on all three, as before; a CT with 3 mm slices and 1 mm pixels is
-   * halved in the plane only. One factor for all three (until 11 Nov 2026) made the slices 6 mm
-   * there, and a joint one slice wide between two bones closed (review of 11 Nov 2026).
+   * How much each axis is coarsened so that the grid fits {@link Options#maxWorkVoxels()}: one step
+   * at a time on the axes whose coarse voxel is smallest in mm, up to 4 each. An isotropic CT is
+   * coarsened alike on all three, as before; a CT with 3 mm slices and 1 mm pixels is halved in the
+   * plane only. One factor for all three (until 11 Nov 2026) made the slices 6 mm there, and a
+   * joint one slice wide between two bones closed (review of 11 Nov 2026).
    */
   static int[] factors(int sx, int sy, int sz, Options o) {
     int[] f = {1, 1, 1};
     int[] size = {sx, sy, sz};
     double[] mm = {o.mmX(), o.mmY(), o.mmZ()};
-    while (Work.coarse(sx, f[0]) * (long) Work.coarse(sy, f[1]) * Work.coarse(sz, f[2]) > o.maxWorkVoxels()) {
+    while (Work.coarse(sx, f[0]) * (long) Work.coarse(sy, f[1]) * Work.coarse(sz, f[2])
+        > o.maxWorkVoxels()) {
       double least = Double.POSITIVE_INFINITY;
       for (int a = 0; a < 3; a++) {
         if (f[a] < 4 && size[a] > 1) {
@@ -1082,9 +1084,9 @@ public final class AutoSplit {
      * How far each piece lies from the nearest large piece, bone to bone: the distance in mm from
      * its nearest voxel to the nearest voxel of a large piece, on the working grid. Until 11 Nov
      * 2026 the distance was taken from the piece's centre to the large piece's bounding box, so
-     * anything inside that box was "at" the bone: a calcification or a speck anywhere in the
-     * hollow of a pelvis was joined to a pelvic bone and went into its surface, and where two
-     * boxes overlapped the piece went to whichever came later in the list (review of 11 Nov 2026).
+     * anything inside that box was "at" the bone: a calcification or a speck anywhere in the hollow
+     * of a pelvis was joined to a pelvic bone and went into its surface, and where two boxes
+     * overlapped the piece went to whichever came later in the list (review of 11 Nov 2026).
      */
     private final class Reach {
       private final int[] label;
@@ -1148,7 +1150,8 @@ public final class AutoSplit {
               boolean nearer = d2 < bestMm2 - 1e-6;
               boolean same = Math.abs(d2 - bestMm2) <= 1e-6;
               if (nearer
-                  || (same && (voxels[m] > voxels[best] || (voxels[m] == voxels[best] && m < best)))) {
+                  || (same
+                      && (voxels[m] > voxels[best] || (voxels[m] == voxels[best] && m < best)))) {
                 best = m;
                 bestMm2 = d2;
               }
