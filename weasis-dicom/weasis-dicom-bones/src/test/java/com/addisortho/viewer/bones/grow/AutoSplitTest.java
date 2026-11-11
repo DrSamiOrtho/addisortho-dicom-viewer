@@ -77,6 +77,107 @@ class AutoSplitTest {
     assertEquals(2, r.pieces().size());
   }
 
+  /**
+   * Two bones along z pressed together, as two phalanges at a joint too narrow for the scanner:
+   * discs of radius 8 around (20, 20), 700 HU, z 4 to 18 and z 20 to 35, with the joint line at z
+   * 19 reading {@code lineHu} over the discs of radius {@code lineRadius}, bone beyond it.
+   */
+  private static Phantom pressedTogether(double lineHu, double lineRadius) {
+    return new Phantom(
+        40,
+        40,
+        40,
+        (x, y, z) -> {
+          if (z < 4 || z > 35 || !Phantom.inDisc(x, y, 20, 20, 8)) {
+            return 0;
+          }
+          return z == 19 && Phantom.inDisc(x, y, 20, 20, lineRadius) ? lineHu : 700;
+        });
+  }
+
+  private static long voxels(Result r) {
+    return r.pieces().stream().mapToLong(piece -> piece.mask().count()).sum();
+  }
+
+  @Test
+  void bonesPressedTogetherSplitAtTheirJointLine() {
+    Phantom joint = pressedTogether(400, 8);
+    // The line is above the dense threshold: without looking for it the two bones are one.
+    Result closed = split(joint, AutoSplit.Options.of(1, 1, 1).withJointHu(0));
+    assertEquals(1, closed.pieces().size());
+    Result r = split(joint);
+    assertEquals(2, r.pieces().size());
+    // The line's voxels go to one bone or the other: none is lost.
+    assertEquals(voxels(closed), voxels(r));
+    // The border runs along the line at z 19. The voxels of the line go either way, and the
+    // watershed gives a flat face that both bones reach to the deeper one: one voxel more.
+    int z1 = r.pieces().stream().mapToInt(piece -> piece.mask().box().z1()).min().orElseThrow();
+    int z0 = r.pieces().stream().mapToInt(piece -> piece.mask().box().z0()).max().orElseThrow();
+    assertEquals(z1 + 1, z0, "the two bones meet on one plane");
+    assertTrue(z1 >= 17 && z1 <= 20, "the lower bone ends at the line, not at " + z1);
+  }
+
+  @Test
+  void aCoarseGridStillSplitsAtTheJointLine() {
+    Result r =
+        split(pressedTogether(400, 8), AutoSplit.Options.of(1, 1, 1).withMaxWorkVoxels(2_000));
+    assertTrue(r.factor() > 1);
+    assertEquals(2, r.pieces().size());
+  }
+
+  @Test
+  void aLineTooFaintIsNoJoint() {
+    // 150 HU under the bone on each side: a streak of softer bone, not a joint.
+    assertEquals(1, split(pressedTogether(550, 8)).pieces().size());
+  }
+
+  @Test
+  void aDarkSheetShutInsideABoneIsNoJoint() {
+    // The same line, but ending 4 mm inside the cortex all round: it does not come out.
+    assertEquals(1, split(pressedTogether(400, 4)).pieces().size());
+  }
+
+  @Test
+  void aNarrowMarrowCanalDoesNotSplitTheBone() {
+    // A shaft along z with a canal three voxels across that reads above the dense threshold, and
+    // open at both ends: a valley all round, not a sheet.
+    Phantom shaft =
+        new Phantom(
+            40,
+            40,
+            40,
+            (x, y, z) -> {
+              if (z < 2 || z > 37 || !Phantom.inDisc(x, y, 20, 20, 6)) {
+                return 0;
+              }
+              return Phantom.inDisc(x, y, 20, 20, 1.5) ? 350 : 1200;
+            });
+    Result r = split(shaft);
+    assertEquals(1, r.pieces().size());
+    assertEquals(voxels(split(shaft, AutoSplit.Options.of(1, 1, 1).withJointHu(0))), voxels(r));
+  }
+
+  @Test
+  void aWeakSpotInACortexIsNoJoint() {
+    // A hollow shaft, cortex of 900 HU two voxels thick around marrow of 50 HU, with a ring of
+    // 400 HU at z 19 and 20: a valley along the cortex and a ridge across it.
+    Phantom shaft =
+        new Phantom(
+            40,
+            40,
+            40,
+            (x, y, z) -> {
+              if (z < 2 || z > 37 || !Phantom.inDisc(x, y, 20, 20, 9)) {
+                return 0;
+              }
+              if (Phantom.inDisc(x, y, 20, 20, 7)) {
+                return 50;
+              }
+              return z == 19 || z == 20 ? 400 : 900;
+            });
+    assertEquals(1, split(shaft).pieces().size());
+  }
+
   @Test
   void noBoneGivesNoPiece() {
     Phantom empty = new Phantom(10, 10, 10, (_, _, _) -> 0);

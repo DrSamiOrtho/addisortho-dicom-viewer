@@ -332,7 +332,17 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
     Find the bones (or Show the bones, once found) finds every bone at once (`grow/AutoSplit`, run by `FindWorker`): bone at 200 HU closed and marrow-filled, dense bone at 300 HU, a Euclidean distance
     transform in mm, and a watershed that keeps two parts apart only where the neck is under 0.45 of the thinner part's
     depth, at least 1 mm shallower, with 0.2 cm³ above it; pieces under 1 cm³ join the bone they touch most or lie
-    within 10 mm of. A CT over 16 M voxels in the crop is worked on a 2x (or coarser) grid. The 3D view then shows
+    within 10 mm of. A CT over 16 M voxels in the crop is worked on a 2x (or coarser) grid. Since 11 Nov 2026 the
+    joint lines of small joints are opened first (`AutoSplit.openJointLines`): a carpal, tarsal or finger joint is
+    narrower than the scanner resolves and reads above 300 HU, only darker than the plate on each side, so the dense
+    read held the two bones as one. A voxel under 900 HU is a joint line when bone of 600 HU or more, and 250 HU
+    brighter than it, lies within 1.6 mm on both sides along one direction and along none square to it (a sheet; a
+    marrow canal is a valley all round), it is no ridge (a weak spot in a cortex), five neighbours share its
+    direction, and its group of touching voxels comes out of the bone (the marrow gaps shut inside do not). Those
+    voxels leave the dense read; on a coarse grid each coarse voxel a line crosses is opened. No voxel is lost: the
+    line goes to one bone or the other. Not looked for when the block holding the bone is over 64 M voxels. Checked
+    on four real CTs by an offline harness only (see `review-3d-bones-2026-11-11/NOTES.md`), not validated.
+    The 3D view then shows
     Bones in colour (`SegmentationTool.Type.BONES`: the CT itself, only inside visible segments, tinted with the
     segment colour, `segTint` in `vrFunctions.glsl`). A click on a bone in 3D, on an MPR or plain 2D slice (`SeedPicker.fromSliceClick`: the slice's own
     geometry, as the cross-hair) or in the list selects it

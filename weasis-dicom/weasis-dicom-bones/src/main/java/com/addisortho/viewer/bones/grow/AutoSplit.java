@@ -25,7 +25,12 @@ import java.util.stream.IntStream;
  *   <li>The bone is read twice: at the bone threshold (200 HU), closed by one voxel and with the
  *       marrow filled, which is the bone each piece will hold; and at the dense threshold (300 HU),
  *       marrow filled, where the joint spaces are open because the subchondral plates are dense and
- *       the cartilage is not.
+ *       the cartilage is not. A small joint (a finger, the carpus, the tarsus) is narrower than the
+ *       scanner resolves: its line reads above the dense threshold, only darker than the plate on
+ *       each side. Such voxels, a valley of {@link Options#jointHu()} or more between brighter bone
+ *       on both sides within {@link Options#jointReachMm()}, are taken out of the dense read before
+ *       the marrow is filled, so the fill puts back the ones a cortex encloses (a narrow marrow
+ *       canal) and leaves the joint line open.
  *   <li>The distance of each dense voxel to the nearest non-bone voxel, in mm (a Euclidean distance
  *       transform, exact on the anisotropic grid).
  *   <li>A watershed on that distance: the voxels are taken deepest first and pieces meet where the
@@ -65,6 +70,12 @@ public final class AutoSplit {
    * @param attachMm farthest a loose fragment may lie from its bone
    * @param speckMm3 a loose piece below this, near no bone, is dropped
    * @param maxWorkVoxels largest grid worked on; a larger CT is worked on a coarser grid
+   * @param jointHu how much darker than the bone on both sides a dense voxel must be to count as a
+   *     joint line; 0 leaves the dense read as it is
+   * @param jointReachMm how far on each side the brighter bone is looked for
+   * @param jointMaxHu a voxel this bright or brighter is never a joint line
+   * @param maxJointVoxels largest block holding the bone for which the joint lines are looked for:
+   *     two bytes each while they are
    */
   public record Options(
       double boneHu,
@@ -78,7 +89,11 @@ public final class AutoSplit {
       double fragmentMm3,
       double attachMm,
       double speckMm3,
-      long maxWorkVoxels) {
+      long maxWorkVoxels,
+      double jointHu,
+      double jointReachMm,
+      double jointMaxHu,
+      long maxJointVoxels) {
 
     public static Options of(double mmX, double mmY, double mmZ) {
       return new Options(
@@ -93,7 +108,11 @@ public final class AutoSplit {
           1000,
           10,
           30,
-          16_000_000L);
+          16_000_000L,
+          250,
+          1.6,
+          900,
+          64_000_000L);
     }
 
     public Options withMaxWorkVoxels(long voxels) {
@@ -109,7 +128,53 @@ public final class AutoSplit {
           fragmentMm3,
           attachMm,
           speckMm3,
-          voxels);
+          voxels,
+          jointHu,
+          jointReachMm,
+          jointMaxHu,
+          maxJointVoxels);
+    }
+
+    /** The same with another valley depth for the joint lines; 0 looks for none. */
+    public Options withJointHu(double hu) {
+      return new Options(
+          boneHu,
+          denseHu,
+          mmX,
+          mmY,
+          mmZ,
+          minBoneMm3,
+          minDepthMm,
+          neckRatio,
+          fragmentMm3,
+          attachMm,
+          speckMm3,
+          maxWorkVoxels,
+          hu,
+          jointReachMm,
+          jointMaxHu,
+          maxJointVoxels);
+    }
+
+    /** The same with another size under which a piece is a fragment of its neighbour. */
+    public Options withFragmentMm3(double mm3) {
+      return new Options(
+          boneHu,
+          denseHu,
+          mmX,
+          mmY,
+          mmZ,
+          minBoneMm3,
+          minDepthMm,
+          neckRatio,
+          mm3,
+          attachMm,
+          speckMm3,
+          maxWorkVoxels,
+          jointHu,
+          jointReachMm,
+          jointMaxHu,
+          maxJointVoxels);
     }
   }
 
@@ -173,12 +238,12 @@ public final class AutoSplit {
             });
     BitVolume solid =
         RegionGrow.fillHoles(RegionGrow.close(atBone, 1, GrowProgress.NONE, caller), caller);
-    BitVolume dense = RegionGrow.fillHoles(atDense, caller);
-    dense.and(solid);
     VoxelBox tight = solid.bounds();
     if (tight == null) {
       return new Result(List.of(), 0, 0, 1, millis(start));
     }
+    BitVolume dense = RegionGrow.fillHoles(atDense, caller);
+    dense.and(solid);
     solid = solid.crop(tight);
     dense = dense.crop(tight);
     VoxelBox block =
@@ -189,7 +254,336 @@ public final class AutoSplit {
             box.y0() + tight.y1(),
             box.z0() + tight.z0(),
             box.z0() + tight.z1());
-    return new Work(solid, dense, block, o, caller).run(start);
+    BitVolume joints = null;
+    if (o.jointHu() > 0 && tight.voxels() <= o.maxJointVoxels()) {
+      joints = openJointLines(dense, solid, block, hu, shown, o, caller);
+    }
+    return new Work(solid, dense, joints, block, o, caller).run(start);
+  }
+
+  /** The 13 directions of a voxel's 26 neighbours, one of each opposite pair. */
+  private static final int[][] HALF_NEIGHBOURS = {
+    {1, 0, 0},
+    {0, 1, 0},
+    {0, 0, 1},
+    {1, 1, 0},
+    {1, -1, 0},
+    {1, 0, 1},
+    {1, 0, -1},
+    {0, 1, 1},
+    {0, 1, -1},
+    {1, 1, 1},
+    {1, 1, -1},
+    {1, -1, 1},
+    {1, -1, -1}
+  };
+
+  /** A value no CT holds, for the voxels outside the block or not shown. */
+  private static final short NO_VALUE = Short.MIN_VALUE;
+
+  /**
+   * Clears from the dense bone the voxels of the joint lines. A voxel may be one when it is darker
+   * by {@link Options#jointHu()} or more than a voxel within {@link Options#jointReachMm()} on each
+   * of two opposite sides, and along no direction brighter than both sides: that is a weak spot in
+   * a cortex, a valley along the cortex and a ridge across it. Such voxels also fill the narrow
+   * marrow canal of a small bone and the gaps between its trabeculae, shut inside the bone, while a
+   * joint line comes out at its rim. So the voxels are taken together over the whole bone, each
+   * group of touching ones (by a face, an edge or a corner), and only a group that comes out of the
+   * bone is cleared from the dense bone.
+   *
+   * @param dense the dense bone with its marrow filled, on the block holding the bone
+   * @param solid the whole bone, on the same block
+   * @param block that block, on the CT grid
+   * @return the voxels cleared, on the same block
+   */
+  private static BitVolume openJointLines(
+      BitVolume dense,
+      BitVolume solid,
+      VoxelBox block,
+      Supplier<HuSource> hu,
+      Shown shown,
+      Options o,
+      Thread caller) {
+    int tx = block.sizeX();
+    int ty = block.sizeY();
+    int tz = block.sizeZ();
+    short[] value = new short[tx * ty * tz];
+    IntStream.range(0, tz)
+        .parallel()
+        .forEach(
+            k -> {
+              RegionGrow.checkCancelled(caller);
+              HuSource ct = hu.get();
+              int gz = block.z0() + k;
+              int i = k * tx * ty;
+              for (int y = 0; y < ty; y++) {
+                int gy = block.y0() + y;
+                for (int x = 0; x < tx; x++, i++) {
+                  int gx = block.x0() + x;
+                  double v = shown.at(gx, gy, gz) ? ct.huAt(gx, gy, gz) : Double.NaN;
+                  value[i] =
+                      Double.isNaN(v)
+                          ? NO_VALUE
+                          : (short) Math.clamp(Math.round(v), NO_VALUE + 1, Short.MAX_VALUE);
+                }
+              }
+            });
+    int[] steps = new int[HALF_NEIGHBOURS.length];
+    for (int d = 0; d < steps.length; d++) {
+      int[] n = HALF_NEIGHBOURS[d];
+      double mm = Math.sqrt(sq(n[0] * o.mmX()) + sq(n[1] * o.mmY()) + sq(n[2] * o.mmZ()));
+      steps[d] = Math.max(1, (int) Math.round(o.jointReachMm() / mm));
+    }
+    // For each direction, the directions square to it, as bits.
+    int[] square = new int[HALF_NEIGHBOURS.length];
+    for (int d = 0; d < square.length; d++) {
+      for (int e = 0; e < square.length; e++) {
+        if (Math.abs(cosine(HALF_NEIGHBOURS[d], HALF_NEIGHBOURS[e], o)) <= JOINT_SQUARE) {
+          square[d] |= 1 << e;
+        }
+      }
+    }
+    int depth = (int) Math.ceil(o.jointHu());
+    int ridge = (int) Math.ceil(o.jointHu() * JOINT_RIDGE);
+    int cap = (int) Math.ceil(o.jointMaxHu());
+    // The valley voxels of each direction on their own, so a sheet can be told from a speck.
+    BitVolume[] across = new BitVolume[HALF_NEIGHBOURS.length];
+    for (int d = 0; d < across.length; d++) {
+      across[d] = new BitVolume(tx, ty, tz);
+    }
+    // One slice per task: a slice's bits share no word with another slice's.
+    IntStream.range(0, tz)
+        .parallel()
+        .forEach(
+            z -> {
+              RegionGrow.checkCancelled(caller);
+              for (int y = 0; y < ty; y++) {
+                for (int x = 0; x < tx; x++) {
+                  if (!solid.get(x, y, z)) {
+                    continue;
+                  }
+                  int v = value[(z * ty + y) * tx + x];
+                  if (v >= cap || v == NO_VALUE) {
+                    continue;
+                  }
+                  int level = Math.max(v + depth, JOINT_PLATE_HU);
+                  int along = 0;
+                  for (int d = 0; d < steps.length; d++) {
+                    int[] n = HALF_NEIGHBOURS[d];
+                    if (reaches(value, tx, ty, tz, x, y, z, n[0], n[1], n[2], steps[d], level, true)
+                        && reaches(
+                            value, tx, ty, tz, x, y, z, -n[0], -n[1], -n[2], steps[d], level,
+                            true)) {
+                      along |= 1 << d;
+                    }
+                  }
+                  if (along == 0 || isRidge(value, tx, ty, tz, x, y, z, v - ridge, steps)) {
+                    continue;
+                  }
+                  // A sheet is a valley across it and none along it; a canal is one all round.
+                  for (int d = 0; d < steps.length; d++) {
+                    if ((along & 1 << d) != 0 && (along & square[d]) == 0) {
+                      across[d].set(x, y, z);
+                    }
+                  }
+                }
+              }
+            });
+    BitVolume valley = new BitVolume(tx, ty, tz);
+    IntStream.range(0, tz)
+        .parallel()
+        .forEach(
+            z -> {
+              RegionGrow.checkCancelled(caller);
+              for (BitVolume a : across) {
+                if (a.countSlice(z) == 0) {
+                  continue;
+                }
+                for (int y = 0; y < ty; y++) {
+                  for (int x = 0; x < tx; x++) {
+                    if (a.get(x, y, z)
+                        && !valley.get(x, y, z)
+                        && neighbours(a, x, y, z) >= JOINT_SHEET) {
+                      valley.set(x, y, z);
+                    }
+                  }
+                }
+              }
+            });
+    // Each group of touching valley voxels, cleared from the dense bone when it comes out of it.
+    BitVolume joints = new BitVolume(tx, ty, tz);
+    int[] group = new int[1 << 12];
+    for (int z0 = 0; z0 < tz; z0++) {
+      RegionGrow.checkCancelled(caller);
+      if (valley.countSlice(z0) == 0) {
+        continue;
+      }
+      for (int y0 = 0; y0 < ty; y0++) {
+        for (int x0 = 0; x0 < tx; x0++) {
+          if (!valley.get(x0, y0, z0)) {
+            continue;
+          }
+          int size = 0;
+          boolean open = false;
+          valley.clear(x0, y0, z0);
+          group[size++] = (z0 * ty + y0) * tx + x0;
+          for (int next = 0; next < size; next++) {
+            int i = group[next];
+            int x = i % tx;
+            int y = (i / tx) % ty;
+            int z = i / (tx * ty);
+            // The edge of the block is not the outside: a bone cut by the first slice or by the
+            // field of view shows its marrow canal there.
+            open =
+                open
+                    || (x > 0 && !solid.get(x - 1, y, z))
+                    || (x < tx - 1 && !solid.get(x + 1, y, z))
+                    || (y > 0 && !solid.get(x, y - 1, z))
+                    || (y < ty - 1 && !solid.get(x, y + 1, z))
+                    || (z > 0 && !solid.get(x, y, z - 1))
+                    || (z < tz - 1 && !solid.get(x, y, z + 1));
+            for (int dz = -1; dz <= 1; dz++) {
+              int pz = z + dz;
+              if (pz < 0 || pz >= tz) {
+                continue;
+              }
+              for (int dy = -1; dy <= 1; dy++) {
+                int py = y + dy;
+                if (py < 0 || py >= ty) {
+                  continue;
+                }
+                for (int dx = -1; dx <= 1; dx++) {
+                  int px = x + dx;
+                  if (px >= 0 && px < tx && valley.get(px, py, pz)) {
+                    valley.clear(px, py, pz);
+                    if (size == group.length) {
+                      group = Arrays.copyOf(group, 2 * size);
+                    }
+                    group[size++] = (pz * ty + py) * tx + px;
+                  }
+                }
+              }
+            }
+          }
+          if (open) {
+            for (int n = 0; n < size; n++) {
+              int i = group[n];
+              int x = i % tx;
+              int y = (i / tx) % ty;
+              int z = i / (tx * ty);
+              if (dense.get(x, y, z)) {
+                dense.clear(x, y, z);
+                joints.set(x, y, z);
+              }
+            }
+          }
+        }
+      }
+    }
+    return joints;
+  }
+
+  /** How bright against both sides, as a part of the valley depth, makes a voxel a ridge. */
+  private static final double JOINT_RIDGE = 0.6;
+
+  /**
+   * The bone on each side of a joint line is at least this bright, in HU: a subchondral plate. The
+   * trabeculae on each side of a marrow gap seldom are.
+   */
+  private static final int JOINT_PLATE_HU = 600;
+
+  /** Two directions are square to each other up to this cosine of their angle. */
+  private static final double JOINT_SQUARE = 0.25;
+
+  /**
+   * Fewest of a voxel's 26 neighbours that are a valley along the same direction: a joint line is a
+   * sheet, the gap between two trabeculae a speck or a thread.
+   */
+  private static final int JOINT_SHEET = 5;
+
+  private static double sq(double v) {
+    return v * v;
+  }
+
+  /** Cosine of the angle between two voxel steps, in mm. */
+  private static double cosine(int[] a, int[] b, Options o) {
+    double ax = a[0] * o.mmX();
+    double ay = a[1] * o.mmY();
+    double az = a[2] * o.mmZ();
+    double bx = b[0] * o.mmX();
+    double by = b[1] * o.mmY();
+    double bz = b[2] * o.mmZ();
+    return (ax * bx + ay * by + az * bz)
+        / Math.sqrt((ax * ax + ay * ay + az * az) * (bx * bx + by * by + bz * bz));
+  }
+
+  /** Whether, along one direction, a voxel at {@code level} or below lies on each side. */
+  private static boolean isRidge(
+      short[] value, int tx, int ty, int tz, int x, int y, int z, int level, int[] steps) {
+    for (int d = 0; d < steps.length; d++) {
+      int[] n = HALF_NEIGHBOURS[d];
+      if (reaches(value, tx, ty, tz, x, y, z, n[0], n[1], n[2], steps[d], level, false)
+          && reaches(value, tx, ty, tz, x, y, z, -n[0], -n[1], -n[2], steps[d], level, false)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** How many of the 26 neighbours of a voxel are set. */
+  private static int neighbours(BitVolume bits, int x, int y, int z) {
+    int count = 0;
+    for (int dz = -1; dz <= 1; dz++) {
+      int pz = z + dz;
+      if (pz < 0 || pz >= bits.sizeZ()) {
+        continue;
+      }
+      for (int dy = -1; dy <= 1; dy++) {
+        int py = y + dy;
+        if (py < 0 || py >= bits.sizeY()) {
+          continue;
+        }
+        for (int dx = -1; dx <= 1; dx++) {
+          int px = x + dx;
+          if ((dx != 0 || dy != 0 || dz != 0)
+              && px >= 0
+              && px < bits.sizeX()
+              && bits.get(px, py, pz)) {
+            count++;
+          }
+        }
+      }
+    }
+    return count;
+  }
+
+  private static boolean reaches(
+      short[] value,
+      int tx,
+      int ty,
+      int tz,
+      int x,
+      int y,
+      int z,
+      int dx,
+      int dy,
+      int dz,
+      int steps,
+      int level,
+      boolean above) {
+    for (int s = 1; s <= steps; s++) {
+      int px = x + s * dx;
+      int py = y + s * dy;
+      int pz = z + s * dz;
+      if (px < 0 || py < 0 || pz < 0 || px >= tx || py >= ty || pz >= tz) {
+        return !above;
+      }
+      int v = value[(pz * ty + py) * tx + px];
+      if (above ? v >= level : v <= level) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static long millis(long start) {
@@ -200,6 +594,7 @@ public final class AutoSplit {
   private static final class Work {
     private final BitVolume solid;
     private final BitVolume dense;
+    private final BitVolume joints;
     private final VoxelBox block;
     private final Options o;
     private final Thread caller;
@@ -209,9 +604,19 @@ public final class AutoSplit {
     private final int wz;
     private final double fineMm3;
 
-    Work(BitVolume solid, BitVolume dense, VoxelBox block, Options o, Thread caller) {
+    /**
+     * @param joints the voxels of the joint lines, already cleared from {@code dense}, or null
+     */
+    Work(
+        BitVolume solid,
+        BitVolume dense,
+        BitVolume joints,
+        VoxelBox block,
+        Options o,
+        Thread caller) {
       this.solid = solid;
       this.dense = dense;
+      this.joints = joints;
       this.block = block;
       this.o = o;
       this.caller = caller;
@@ -265,6 +670,7 @@ public final class AutoSplit {
                     int denseCount = 0;
                     int present = 0;
                     boolean any = false;
+                    boolean joint = false;
                     for (int dz = 0; dz < f; dz++) {
                       int fz = z * f + dz;
                       if (fz >= solid.sizeZ()) {
@@ -285,13 +691,16 @@ public final class AutoSplit {
                           if (dense.get(fx, fy, fz)) {
                             denseCount++;
                           }
+                          joint |= joints != null && joints.get(fx, fy, fz);
                         }
                       }
                     }
                     int i = index(x, y, z);
                     solidW[i] = any;
-                    // A coarse voxel is dense when most of it is: a joint space stays open.
-                    g[i] = present > 0 && 2 * denseCount >= present ? INF : 0;
+                    // A coarse voxel is dense when most of it is: a joint space stays open. A
+                    // joint line is thinner than a coarse voxel and would close: it opens the
+                    // whole of each coarse voxel it crosses.
+                    g[i] = present > 0 && !joint && 2 * denseCount >= present ? INF : 0;
                   }
                 }
               });
