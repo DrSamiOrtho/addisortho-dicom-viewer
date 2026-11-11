@@ -175,6 +175,33 @@ class AutoSplitTest {
     }
   }
 
+  /**
+   * A flat fragment lying 5 mm off the face of a block, so that every one of its 400 voxels on that
+   * side is equally near the block, and a larger bone 5 mm from one single corner of it: the one
+   * voxel that sees the larger bone decides, however many others there are (Astra, 11 Nov 2026:
+   * asking only some of the nearest voxels could miss it).
+   */
+  @Test
+  void oneVoxelOfAFlatFragmentCanSeeTheLargerBone() {
+    Phantom scene =
+        new Phantom(
+            80,
+            60,
+            60,
+            (x, y, z) -> {
+              boolean block = x >= 4 && x <= 13 && y >= 10 && y <= 40 && z >= 10 && z <= 40;
+              boolean sheet = x >= 18 && x <= 19 && y >= 15 && y <= 34 && z >= 15 && z <= 34;
+              // larger than the block, its nearest voxel 5 mm beyond the sheet's last corner
+              boolean large = x >= 24 && x <= 70 && y >= 34 && y <= 55 && z >= 34 && z <= 55;
+              return block || sheet || large ? 700 : 0;
+            });
+    Result r = split(scene);
+    assertEquals(2, r.pieces().size());
+    assertEquals(1, r.fragments());
+    assertEquals(1, r.pieces().get(0).fragments(), "the larger bone has the fragment");
+    assertTrue(r.pieces().get(0).mask().contains(18, 20, 20));
+  }
+
   @Test
   void aCoarseGridStillSplitsTheJoint() {
     Result r = split(Phantom.twoBones(), AutoSplit.Options.of(1, 1, 1).withMaxWorkVoxels(10_000));
