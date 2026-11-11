@@ -163,8 +163,9 @@ class SeamMatcherTest {
    */
   @Test
   void twoSmallGroupsOfPointsCannotVouchForARotation() {
-    MatchImage upper = Phantom.leg(427, 400, 21).matchImage(
-        new Phantom.Cut(Rigid.IDENTITY, 427, 356, 0.5, 1, 0), 0.01, 30);
+    MatchImage upper =
+        Phantom.leg(427, 400, 21)
+            .matchImage(new Phantom.Cut(Rigid.IDENTITY, 427, 356, 0.5, 1, 0), 0.01, 30);
     List<Rigid.Pair> pairs = new ArrayList<>(group(Rigid.shift(0, 280), 100, 20, 4, 5));
     pairs.addAll(group(Rigid.shift(0, 284), 300, 20, 4, 5));
     Rigid fit = Rigid.fit(pairs);
@@ -176,8 +177,7 @@ class SeamMatcherTest {
     // the same two small groups under a level seam: nothing rests on them
     List<Rigid.Pair> level = new ArrayList<>(group(Rigid.shift(0, 280), 100, 20, 4, 5));
     level.addAll(group(Rigid.shift(0, 280.3), 300, 20, 4, 5));
-    assertNull(
-        SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, Rigid.fit(level), level));
+    assertNull(SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, Rigid.fit(level), level));
 
     // one leg, one group of points, however it lies about the middle: not parted, not judged
     List<Rigid.Pair> one = new ArrayList<>();
@@ -208,8 +208,7 @@ class SeamMatcherTest {
       for (int i = 0; i < 30; i++) {
         double fx = leg[0] + (i % 6) * 12;
         double fy = 10 + (i / 6) * 12;
-        apart.add(
-            new Rigid.Pair(fx, fy, fx + (i % 3 - 1) * 0.1, fy + leg[1] + (i % 2) * 0.1));
+        apart.add(new Rigid.Pair(fx, fy, fx + (i % 3 - 1) * 0.1, fy + leg[1] + (i % 2) * 0.1));
       }
     }
     assertNotNull(

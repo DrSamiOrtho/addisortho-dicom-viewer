@@ -149,8 +149,7 @@ final class Stitch {
           found[i] =
               new Cut.Row(
                   found[i].yMm(),
-                  "no room for the hand position between the neighbouring cuts: "
-                      + found[i].note(),
+                  "no room for the hand position between the neighbouring cuts: " + found[i].note(),
                   found[i].clean());
         } else if (at < lo) {
           // down the piece is down the frame: a film turns a few degrees at most

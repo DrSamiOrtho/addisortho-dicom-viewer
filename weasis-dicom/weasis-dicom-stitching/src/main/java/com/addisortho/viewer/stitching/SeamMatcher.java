@@ -481,8 +481,8 @@ final class SeamMatcher {
   static final double SIDE_GAP_MM = 40;
 
   /**
-   * On a band that spans both halves of the image: do the matched points on the two sides share
-   * one seam? Two legs that moved differently between the exposures (parallax) each keep their own
+   * On a band that spans both halves of the image: do the matched points on the two sides share one
+   * seam? Two legs that moved differently between the exposures (parallax) each keep their own
    * seam, and one rigid fit of both turns that difference into a tilt that passes every other gate:
    * on a phantom with the right leg 3 mm higher in the lower piece the whole width passed at -0.77
    * deg, and at 4 mm at -1.05 deg, where each leg alone is level (review of 11 Nov 2026; case
@@ -497,9 +497,9 @@ final class SeamMatcher {
    * also put the middle between them within {@link #MAX_LEG_DISAGREE_MM} of each other. And when
    * two separate groups are both too small or too narrow to fix a rotation, a rotation beyond
    * {@link #MAX_LEG_DISAGREE_DEG} rests on the difference between the groups alone, which is
-   * exactly what parallax between two legs looks like: five points on each leg 4 mm apart fit a
-   * 1.1 deg turn with 0.1 mm residual (Astra, 11 Nov 2026). That fails too; missing evidence is
-   * not agreement. A single leg, one group, is not parted by a handful of points on one side.
+   * exactly what parallax between two legs looks like: five points on each leg 4 mm apart fit a 1.1
+   * deg turn with 0.1 mm residual (Astra, 11 Nov 2026). That fails too; missing evidence is not
+   * agreement. A single leg, one group, is not parted by a handful of points on one side.
    *
    * @return the reason the seam fails, or null
    */
