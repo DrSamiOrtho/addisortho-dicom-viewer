@@ -605,8 +605,13 @@ final class SeamMatcher {
     // a failure of any of these fails the seam (Kimi, second review: a passing whole-width seam
     // must not stand in for a leg that failed, and two halves must not erase a whole-width failure)
     if (left.status() == Seam.Status.FAILED || right.status() == Seam.Status.FAILED) {
-      return refused(
+      // Not confirmed for both legs, but nothing here says the whole-width fit is wrong: it passed
+      // its own gates, the two halves' rotations among them, so it stays where it is. On the real
+      // case of 7 Nov 2026 the knee-to-ankle seam is refused this way (the right half alone fails
+      // its hold-out) and its whole-width fit is the machine's own within 0.04 deg and 0.4 mm.
+      return withReason(
           whole,
+          Seam.Status.FAILED,
           "the legs could not be matched one at a time to check that they agree: %s leg failed;"
                   .formatted(left.status() == Seam.Status.FAILED ? "the left" : "the right")
               + " choose one target leg and match on its half of the image"
@@ -670,11 +675,12 @@ final class SeamMatcher {
   }
 
   /**
-   * The whole-width seam refused for both legs. One that had passed on its own still carries its
-   * fitted rotation and residual: it is left at the average shift of its matched points instead,
-   * with no figures, as {@link #judge} leaves any refused fit (review of 11 Nov 2026: with the legs
-   * 3 mm apart the refused seam was saved turned -0.77 deg, the fault stitch 0.4 removed from a
-   * single band).
+   * The whole-width seam refused because the two legs, matched one at a time, disagree, or because
+   * the whole width itself failed. One that had passed on its own still carries its fitted rotation
+   * and residual, and the legs' disagreement is the evidence against that rotation: it is left at
+   * the average shift of its matched points instead, with no figures, as {@link #judge} leaves any
+   * refused fit (review of 11 Nov 2026: with the legs 3 mm apart the refused seam was saved turned
+   * -0.77 deg, the fault stitch 0.4 removed from a single band).
    */
   private static Seam refused(Seam whole, String reason) {
     if (whole.status() == Seam.Status.FAILED) {
