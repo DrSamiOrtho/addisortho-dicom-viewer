@@ -232,6 +232,49 @@ class BoneIsolationTest {
         () -> assertFalse(kept.get(CX + 40, CY, 20), "the pin in the air"));
   }
 
+  /**
+   * A real pin has a rim: partial volume and the upload smoothing leave a voxel or two between
+   * bone and metal round it, all the way out through the cast into the air. Read as bone, that rim
+   * joined the bone to the plaster and to the outside air, and the bone was cut away with the cast
+   * (review of 11 Nov 2026: with four pins in a tibia the view lost the tibia). The rim goes with
+   * the metal.
+   */
+  @Test
+  void aFixatorPinWithABlurredRimDoesNotTakeTheBoneAway() {
+    Forearm pinned = new Forearm(true, 4, 35, false, false, true, false);
+    BoneExtent.SliceSource rimmed =
+        z -> {
+          float[] s = pinned.slices().slice(z);
+          for (int y = 38; y <= 42; y++) {
+            for (int x = CX; x < W; x++) {
+              int i = y * W + x;
+              if (z >= 18 && z <= 22 && s[i] < 1400) {
+                s[i] = 1400; // one voxel round the 3 by 3 rod, between bone and metal
+              }
+            }
+          }
+          return s;
+        };
+    Result r =
+        BoneIsolation.find(SPACE, rimmed, 0, MM1, 300, () -> false, new WorkingMemory(64L << 20))
+            .orElseThrow();
+    VoxelBits kept = r.region();
+    assertAll(
+        () -> assertEquals(1, r.bonePieces(), "the rim does not join the bone to the cast"),
+        () -> assertTrue(kept.get(CX - 5, CY, 20), "the far cortex"),
+        () -> assertTrue(kept.get(CX, CY + 5, 10), "the cortex away from the pin"),
+        () -> assertTrue(kept.get(CX + 6, CY, 20), "the pin at the bone's surface"),
+        () -> assertTrue(kept.get(CX + 3, CY, 20), "the pin inside the bone"),
+        () -> assertEquals(2, r.externalPieces(), "the cast and the table still go"),
+        () -> assertFalse(kept.get(CX, CY + 20, 20), "the plaster away from the pin"),
+        () -> assertFalse(kept.get(CX - 20, CY, 20), "the plaster on the far side"),
+        () -> assertFalse(kept.get(CX, 81, 20), "the table"),
+        () -> assertFalse(kept.get(CX + 12, CY + 8, 20), "soft tissue"));
+    // Known and left so: inside its rim the pin's metal no longer touches the air face to face,
+    // so the pin counts as an implant on the bone and is shown whole, not cut at the skin.
+    assertEquals(1, r.implants());
+  }
+
   @Test
   void aBoneCutByTheFirstAndLastSliceStays() {
     Result r = new Forearm(true, 0, D - 1, false, false, false, false).isolate();
@@ -480,7 +523,9 @@ class BoneIsolationTest {
     assertAll(
         () -> assertEquals(1, r.bonePieces()),
         () -> assertEquals(0, r.joinedPieces()),
-        () -> assertEquals(1, r.droppedPieces(), "the marker's shell"),
+        // the shell is the metal's rim and takes no part; only its 8 corner voxels, three steps
+        // from the core, are left as specks to drop
+        () -> assertEquals(8, r.droppedPieces(), "the corners of the marker's shell"),
         () -> assertEquals(0, r.implants(), "the marker's core"),
         () -> assertFalse(kept.get(40, 57, 19), "the core"),
         () -> assertFalse(kept.get(35, 56, 17), "the shell"),

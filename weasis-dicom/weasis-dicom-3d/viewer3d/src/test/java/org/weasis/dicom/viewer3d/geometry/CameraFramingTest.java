@@ -43,9 +43,29 @@ class CameraFramingTest {
   }
 
   private static Vector2d ndc(Matrix4d view, Vector3d world) {
-    Matrix4d proj = new Matrix4d().setPerspective(Math.toRadians(FOV), ASPECT, 0.1, 100);
+    // as Camera builds its projection: the field-of-view number goes to JOML as it is
+    Matrix4d proj = new Matrix4d().setPerspective(FOV, ASPECT, 0.1, 100);
     Vector4d c = proj.mul(view, new Matrix4d()).transform(new Vector4d(world, 1));
     return new Vector2d(c.x / c.w, c.y / c.w);
+  }
+
+  /**
+   * The half height is the projection's own: a point that far above the pivot lies on the view's
+   * top edge, so a pan of one half height moves the picture by half the view (review of 11 Nov
+   * 2026: the framing read the field of view as degrees, the projection as radians, and a pan
+   * moved the picture 74 % of the way the cursor went).
+   */
+  @Test
+  void theHalfHeightIsTheProjectionsOwn() {
+    double zoom = 1.7;
+    double distance = CameraFraming.CAMERA_DISTANCE_AT_ZOOM_ONE / zoom;
+    double hh = CameraFraming.viewHalfHeight(distance, FOV);
+    Matrix4d view = view(new Quaterniond(), new Vector3d(), new Vector2d(), zoom);
+    assertEquals(1.0, ndc(view, new Vector3d(0, hh, 0)).y, 1e-9);
+    assertEquals(1.0, ndc(view, new Vector3d(hh * ASPECT, 0, 0)).x, 1e-9);
+    // and a pan of 0.5 puts the pivot half way to the edge
+    Matrix4d panned = view(new Quaterniond(), new Vector3d(), new Vector2d(0, 0.5), zoom);
+    assertEquals(0.5, ndc(panned, new Vector3d()).y, 1e-9);
   }
 
   @Test
@@ -74,8 +94,11 @@ class CameraFramingTest {
         assertTrue(Math.abs(n.x) <= 1.0 + 1e-9 && Math.abs(n.y) <= 1.0 + 1e-9, "corner " + n);
         extent = Math.max(extent, Math.max(Math.abs(n.x), Math.abs(n.y)));
       }
-      // The fit is tight: a corner reaches the edge up to the margin.
-      assertTrue(extent > 1.0 / CameraFraming.FIT_MARGIN - 0.02, "fit is loose: " + extent);
+      // The fit is tight: a corner reaches the edge up to the margin, unless the box is so small
+      // that the zoom stops at its limit.
+      if (zoom < Camera.SCALE_MAX) {
+        assertTrue(extent > 1.0 / CameraFraming.FIT_MARGIN - 0.02, "fit is loose: " + extent);
+      }
     }
   }
 
