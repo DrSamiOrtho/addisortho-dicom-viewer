@@ -868,6 +868,8 @@ public class View3d extends VolumeCanvas
                 isSegMode()
                     ? (volumePreset.getColorMin() + volumePreset.getColorMax()) / 2f
                     : renderingLayer.getWindowCenter()));
+    program.allocateUniform(
+        gl, "isoLevel", (g, loc) -> g.glUniform1f(loc, volumePreset.getIsoLevel())); // NON-NLS
 
     if (!useComputeShader) {
       // The FBO shader uses voxelUniforms410.glsl which has no default for ditherRay

@@ -280,11 +280,37 @@ class VolumeSmootherTest {
   }
 
   @Test
-  void sigmaAcrossSlicesFollowsTheSpacingWithAFloor() {
+  void sigmaAcrossSlicesKeepsTheSamePhysicalWidth() {
     assertAll(
-        () -> assertEquals(0.6, VolumeSmoother.sigmaZ(0.6, 0.84, 1.25), 1e-9),
+        () -> assertEquals(0.4032, VolumeSmoother.sigmaZ(0.6, 0.84, 1.25), 1e-9),
+        () -> assertEquals(0.2, VolumeSmoother.sigmaZ(0.6, 1.0, 3.0), 1e-9),
         () -> assertEquals(1.6, VolumeSmoother.sigmaZ(0.8, 1.0, 0.5), 1e-9),
         () -> assertEquals(0.8, VolumeSmoother.sigmaZ(0.8, 1.0, 1.0), 1e-9),
         () -> assertEquals(0.0, VolumeSmoother.sigmaZ(0.0, 1.0, 1.0), 1e-9));
+  }
+
+  @Test
+  void thickSlicePlateKeepsItsContrastWithoutBleedingIntoNeighbours() {
+    int w = 9;
+    int h = 9;
+    short[][] plate = filled(w, h, 7, SHIFT);
+    java.util.Arrays.fill(plate[3], (short) (SHIFT + 1000));
+    double sigma = VolumeSmoother.SIGMA_XY;
+    short[][] out = smooth(plate, w, h, sigma, VolumeSmoother.sigmaZ(sigma, 1.0, 3.0));
+    int center = 4 * w + 4;
+    assertTrue((out[3][center] & 0xFFFF) - SHIFT >= 990, "retain thin plate contrast");
+    assertTrue((out[2][center] & 0xFFFF) - SHIFT <= 10, "no halo before plate");
+    assertTrue((out[4][center] & 0xFFFF) - SHIFT <= 10, "no halo after plate");
+  }
+
+  @Test
+  void thickSliceGapStaysOpenBetweenDenseSurfaces() {
+    int w = 9;
+    int h = 9;
+    short[][] gap = filled(w, h, 7, SHIFT + 1000);
+    java.util.Arrays.fill(gap[3], (short) SHIFT);
+    double sigma = VolumeSmoother.SIGMA_XY;
+    short[][] out = smooth(gap, w, h, sigma, VolumeSmoother.sigmaZ(sigma, 1.0, 3.0));
+    assertTrue((out[3][4 * w + 4] & 0xFFFF) - SHIFT <= 10, "retain the low-density gap");
   }
 }

@@ -28,9 +28,6 @@ public final class VolumeSmoother {
   /** Default in-plane sigma, in voxels. */
   public static final double SIGMA_XY = 0.6;
 
-  /** Smallest sigma across slices, in slices, so the steps between slices are always softened. */
-  public static final double MIN_SIGMA_Z = 0.6;
-
   private static final int PARALLEL_MIN_PIXELS = 64 * 64;
 
   private final int width;
@@ -59,15 +56,16 @@ public final class VolumeSmoother {
   }
 
   /**
-   * Sigma across slices for a given in-plane sigma, from the voxel spacing: the same physical
-   * width, but never below {@link #MIN_SIGMA_Z}.
+   * Sigma across slices for a given in-plane sigma, keeping the same physical width. A minimum in
+   * slice units would blur thick-slice scans over a much larger physical distance, reducing the
+   * contrast of thin structures and filling narrow gaps. Trilinear texture sampling still
+   * interpolates between slices; the pre-filter need not blur them to hide their spacing.
    */
   public static double sigmaZ(double sigmaXY, double spacingXY, double spacingZ) {
     if (sigmaXY <= 0) {
       return 0;
     }
-    double physical = spacingZ > 0 ? sigmaXY * spacingXY / spacingZ : sigmaXY;
-    return Math.max(physical, MIN_SIGMA_Z);
+    return spacingXY > 0 && spacingZ > 0 ? sigmaXY * spacingXY / spacingZ : sigmaXY;
   }
 
   /** Normalised Gaussian weights over [-r, r] with r = ceil(3 sigma); {1} when sigma is 0. */

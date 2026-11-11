@@ -613,6 +613,16 @@ public class Preset extends TextureData {
     return colorMax;
   }
 
+  /**
+   * Level of the {@link RenderingType#ISO2} surface as a fraction of the colour range: the lowest
+   * point of this preset with an opacity above zero. The surface then lies where the composite
+   * rendering starts to show, and the window/level tool moves both the same way.
+   */
+  public float getIsoLevel() {
+    int onset = PresetGroup.opacityOnset(groups).orElse(colorMin);
+    return Math.clamp((onset - colorMin) / (float) getWidth(), 0f, 1f);
+  }
+
   public static Preset getDefaultPreset(Modality modality) {
     Preset defPreset = null;
     for (Preset p : basicPresets) {

@@ -30,6 +30,8 @@ uniform float outputLevelMin;
 uniform float outputLevelMax;
 uniform float windowWidth;
 uniform float windowCenter;
+// Isosurface level in the normalised window range, see Preset.getIsoLevel().
+uniform float isoLevel = 0.0;
 
 // Rendering parameters
 uniform bool shading;

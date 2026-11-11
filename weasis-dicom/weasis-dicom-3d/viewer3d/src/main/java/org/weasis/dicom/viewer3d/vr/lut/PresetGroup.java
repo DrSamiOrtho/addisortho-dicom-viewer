@@ -11,6 +11,8 @@ package org.weasis.dicom.viewer3d.vr.lut;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Arrays;
+import java.util.List;
+import java.util.OptionalInt;
 
 public class PresetGroup {
   @JsonProperty("name")
@@ -42,6 +44,15 @@ public class PresetGroup {
 
   public void setPoints(PresetPoint[] points) {
     this.points = points;
+  }
+
+  /** The lowest intensity of {@code groups} whose opacity is above zero: where a preset shows. */
+  public static OptionalInt opacityOnset(List<PresetGroup> groups) {
+    return groups.stream()
+        .flatMap(g -> Arrays.stream(g.getPoints()))
+        .filter(p -> p.getOpacity() > 0f)
+        .mapToInt(PresetPoint::getIntensity)
+        .min();
   }
 
   public PresetGroup copy() {

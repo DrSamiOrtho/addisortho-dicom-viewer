@@ -136,12 +136,11 @@ public class DicomVolTextureFactory {
     DicomVolTexture texture =
         new DicomVolTexture(
             new Vector3i(width, height, depth), volume, imageDataPixFormat, changeSupport);
-    boolean onBone =
-        localPersistence.getBooleanProperty(
-            RenderingLayer.P_OPEN_CT_ON_BONE, RenderingLayer.DEFAULT_OPEN_CT_ON_BONE);
+    // Opening on bone chooses the preset and crop, not whether the user wants smoothing.
+    // Honour the Smooth choice saved by View3DContainer for subsequent CT volumes.
     texture.setSmoothing(
         texture.getModality() == Modality.CT
-            && (onBone || localPersistence.getBooleanProperty(RenderingLayer.P_SMOOTH_CT, true)));
+            && localPersistence.getBooleanProperty(RenderingLayer.P_SMOOTH_CT, true));
     return texture;
   }
 
