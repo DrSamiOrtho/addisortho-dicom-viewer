@@ -52,8 +52,10 @@ class SeamRecipeTest {
     Rigid first = Rigid.shift(0.4, 0).after(matched.transform());
     Rigid last = Rigid.shift(0, -0.3).after(first);
 
-    // the window adjusts the seam at every nudge; the decision keeps only where it ended
-    Seam nudgedTwice = matched.adjusted(first).adjusted(last);
+    // the window judges every nudge against the seam as the match left it; the decision keeps
+    // only where it ended
+    double[] ref = SeamRecipe.reference(upper, lower, matched.transform(), List.of());
+    Seam nudgedTwice = matched.adjusted(last, ref[0], ref[1]);
     Seam made = match.moved(first).moved(last).compute(upper, lower);
 
     assertEquals(nudgedTwice, made);
@@ -63,6 +65,42 @@ class SeamRecipeTest {
     assertTrue(Double.isNaN(made.rmsMm()), "the residual of the old position is not carried over");
     assertTrue(Double.isNaN(made.rotationSigmaDeg()));
     assertTrue(made.pairs().isEmpty());
+  }
+
+  /**
+   * A "check" seam stays "check" only for a small hand correction (review of 11 Nov 2026: a seam
+   * dragged 35 mm and turned 8 deg stayed "check" and could be saved as measurable). Many small
+   * nudges are one large move: the decision keeps where the seam ended, and it is judged against
+   * where the match put it.
+   */
+  @Test
+  void aCheckSeamMovedFarByHandFails() {
+    SeamRecipe match = SeamRecipe.match(SeamMatcher.Band.WHOLE);
+    Seam matched = match.compute(upper, lower);
+    assertEquals(Seam.Status.CHECK, matched.status(), () -> matched.reasons().toString());
+
+    Seam small = match.moved(Rigid.shift(1.5, -1).after(matched.transform())).compute(upper, lower);
+    assertEquals(Seam.Status.CHECK, small.status(), () -> small.reasons().toString());
+
+    Seam far = match.moved(Rigid.shift(35, -60).after(matched.transform())).compute(upper, lower);
+    assertEquals(Seam.Status.FAILED, far.status());
+    assertTrue(far.reasons().get(0).contains("no longer the seam the match checked"));
+
+    Rigid turned =
+        new Rigid(
+            matched.transform().theta() + Math.toRadians(1),
+            matched.transform().tx(),
+            matched.transform().ty());
+    assertEquals(Seam.Status.FAILED, match.moved(turned).compute(upper, lower).status());
+
+    // thirty nudges of 0.1 mm: 3 mm in all, though each alone is small
+    SeamRecipe nudged = match;
+    Rigid at = matched.transform();
+    for (int i = 0; i < 30; i++) {
+      at = Rigid.shift(0.1, 0).after(at);
+      nudged = nudged.moved(at);
+    }
+    assertEquals(Seam.Status.FAILED, nudged.compute(upper, lower).status());
   }
 
   @Test

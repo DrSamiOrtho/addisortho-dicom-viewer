@@ -60,6 +60,22 @@ final class StitchFixture {
         43);
   }
 
+  /**
+   * Three pieces of one leg taken close together, so that all three overlap between 210 and 300 mm
+   * (the geometry of the knee-to-ankle films of 7 Nov 2026): the two seams' cuts can be dragged
+   * past each other.
+   */
+  static StitchFixture allOverlapping() {
+    return new StitchFixture(
+        Phantom.leg(300, 900, 21),
+        List.of(
+            new Phantom.Cut(new Rigid(0, 50, 0), W, H, 0.3, 1, 0),
+            new Phantom.Cut(new Rigid(Math.toRadians(0.4), 54, 120), W, H, 0.3, 1.2, 0.1),
+            new Phantom.Cut(new Rigid(Math.toRadians(-0.3), 47, 210), W, H, 0.3, 0.9, -0.1)),
+        0.01,
+        30);
+  }
+
   private StitchFixture(Phantom leg, List<Phantom.Cut> cuts, double noise, int seed) {
     for (int i = 0; i < cuts.size(); i++) {
       Phantom.Cut c = cuts.get(i);

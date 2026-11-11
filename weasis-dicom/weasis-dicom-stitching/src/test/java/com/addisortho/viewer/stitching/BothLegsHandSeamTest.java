@@ -80,9 +80,15 @@ class BothLegsHandSeamTest {
         seam.reasons().get(0).contains("parallax")
             || seam.reasons().get(0).contains("one at a time"),
         seam.reasons().get(0));
-    // the gap this closes: on the whole width alone, the same film refines to "check"
+    // until 11 Nov 2026 the same film refined to "check" on the whole width alone, turned -0.78
+    // deg; each half's own points are level, so the whole width is now refused as well and stays
+    // where it was put
     Seam plain = SeamMatcher.refine(upper, disagreeing, SeamMatcher.Band.WHOLE, byHand);
-    assertEquals(Seam.Status.CHECK, plain.status(), String.join("; ", plain.reasons()));
+    assertEquals(Seam.Status.FAILED, plain.status(), String.join("; ", plain.reasons()));
+    assertEquals(byHand, plain.transform());
+    assertTrue(
+        plain.reasons().stream().anyMatch(r -> r.contains("do not share one seam")),
+        plain.reasons().toString());
   }
 
   @Test

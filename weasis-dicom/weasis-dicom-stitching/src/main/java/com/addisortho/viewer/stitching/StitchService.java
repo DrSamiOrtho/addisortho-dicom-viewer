@@ -86,7 +86,69 @@ final class StitchService {
         out.add(new Candidate(p, notes(p), fileName(image.getMediaReader().getUri())));
       }
     }
+    List<String> odd = orientationNotes(out.stream().map(c -> c.piece().header).toList());
+    for (int i = 0; i < out.size(); i++) {
+      if (odd.get(i) != null) {
+        Candidate c = out.get(i);
+        List<String> notes = new ArrayList<>(c.notes());
+        notes.add(0, odd.get(i));
+        out.set(i, new Candidate(c.piece(), notes, c.fileName()));
+      }
+    }
     return new Study(model, out, excluded);
+  }
+
+  /**
+   * For each image, a warning when its patient orientation or view position is not the one most of
+   * the others carry, else null: a piece stored mirrored or upside down, or a PA film among AP
+   * ones, was lined up and saved without a word (review of 11 Nov 2026; design section 3 promises
+   * the flag). A warning only: the study may hold other films than the long-leg pieces.
+   */
+  static List<String> orientationNotes(List<Attributes> headers) {
+    List<String> out = new ArrayList<>();
+    String usualWay = usual(headers, Tag.PatientOrientation);
+    String usualView = usual(headers, Tag.ViewPosition);
+    for (Attributes h : headers) {
+      String way = joined(h, Tag.PatientOrientation);
+      String view = joined(h, Tag.ViewPosition);
+      List<String> odd = new ArrayList<>();
+      if (!way.isEmpty() && usualWay != null && !way.equals(usualWay)) {
+        odd.add(
+            "patient orientation %s where most of the others have %s: this image may be stored"
+                    .formatted(way, usualWay)
+                + " mirrored or upside down");
+      }
+      if (!view.isEmpty() && usualView != null && !view.equals(usualView)) {
+        odd.add("view position %s where most of the others have %s".formatted(view, usualView));
+      }
+      out.add(odd.isEmpty() ? null : String.join("; ", odd) + ": check it before lining up");
+    }
+    return out;
+  }
+
+  // the value most of the images carry, when at least two carry one; ties go to the first seen
+  private static String usual(List<Attributes> headers, int tag) {
+    java.util.Map<String, Integer> count = new java.util.LinkedHashMap<>();
+    for (Attributes h : headers) {
+      String v = joined(h, tag);
+      if (!v.isEmpty()) {
+        count.merge(v, 1, Integer::sum);
+      }
+    }
+    String best = null;
+    int total = 0;
+    for (var e : count.entrySet()) {
+      total += e.getValue();
+      if (best == null || e.getValue() > count.get(best)) {
+        best = e.getKey();
+      }
+    }
+    return total >= 2 ? best : null;
+  }
+
+  private static String joined(Attributes h, int tag) {
+    String[] v = h.getStrings(tag);
+    return v == null ? "" : String.join("\\", v).trim().toUpperCase(Locale.ROOT);
   }
 
   /**

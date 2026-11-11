@@ -135,12 +135,18 @@ final class SeamMatcher {
       fines.add(fine(upper, lower, band, Rigid.shift(c.dx, c.dy)));
     }
     Fine chosen = fines.get(0);
+    // the rough peak the chosen fine match started from: a failed seam is left at this one, not at
+    // the best rough peak when the fine match rejected that for another position (review of 11 Nov
+    // 2026)
+    Coarse chosenRough = coarse;
     // a candidate that lands on the same seam as the best rough peak is the same answer, not a
     // better one; only a different position with more agreeing points replaces it
-    for (Fine f : fines) {
+    for (int i = 0; i < fines.size(); i++) {
+      Fine f = fines.get(i);
       if (f.inliers.size() > chosen.inliers.size()
           && (chosen.inliers.size() < 2 || differs(chosen.fit, f.fit, upper, lower) > RIVAL_MM)) {
         chosen = f;
+        chosenRough = peaks.get(i);
       }
     }
     int rivalPoints = 0;
@@ -192,7 +198,7 @@ final class SeamMatcher {
         lower,
         band,
         chosen,
-        levelShift(upper, lower, band, coarse),
+        levelShift(upper, lower, band, chosenRough),
         coarse.uniqueness,
         fail,
         check,
@@ -409,6 +415,10 @@ final class SeamMatcher {
               quarterHeld,
               worstHeld));
     }
+    String halves = halvesDisagree(upper, band, fit, inliers);
+    if (halves != null) {
+      fail.add(halves);
+    }
     if (Math.abs(scale - 1) > SCALE_TOLERANCE) {
       check.add(
           String.format(
@@ -465,6 +475,57 @@ final class SeamMatcher {
         holdout,
         inliers,
         reasons);
+  }
+
+  /**
+   * On a band that spans both halves of the image: do the matched points of one half, fitted on
+   * their own, need a different rotation from the fit of them all? Two legs that moved differently
+   * between the exposures (parallax) each keep their own seam, and one rigid fit of both turns that
+   * difference into a tilt that passes every other gate: on a phantom with the right leg 3 mm
+   * higher in the lower piece the whole width passed at -0.77 deg, and at 4 mm at -1.05 deg, where
+   * each leg alone is level (review of 11 Nov 2026; case LL-001 showed the same on its knee seam).
+   * A film that truly turned shows the same rotation in each half. A half is asked only when its
+   * points fix its rotation as well as a whole seam must ({@link #MAX_ROTATION_SIGMA_DEG}), and it
+   * disagrees only beyond {@link #MAX_LEG_DISAGREE_DEG} and three times its own uncertainty, so a
+   * single leg that straddles the middle of a wide film is not judged by a handful of points on
+   * one side.
+   *
+   * @return the reason the seam fails, or null
+   */
+  static String halvesDisagree(MatchImage upper, Band band, Rigid fit, List<Rigid.Pair> inliers) {
+    if (band.from() >= 0.5 || band.to() <= 0.5) {
+      return null;
+    }
+    double mid = upper.widthMm() / 2;
+    String worst = null;
+    double worstDeg = MAX_LEG_DISAGREE_DEG;
+    for (boolean leftHalf : new boolean[] {true, false}) {
+      List<Rigid.Pair> part =
+          inliers.stream().filter(q -> (q.tx() < mid) == leftHalf).toList();
+      if (part.size() < MIN_INLIERS) {
+        continue;
+      }
+      Rigid own = Rigid.fit(part);
+      double sigma = Rigid.uncertainty(own, part)[0];
+      double deg = Math.abs(own.degrees() - fit.degrees());
+      if (sigma <= MAX_ROTATION_SIGMA_DEG && deg > Math.max(worstDeg, 3 * sigma)) {
+        worstDeg = deg;
+        worst =
+            String.format(
+                Locale.ROOT,
+                "the %d matched points on the %s half of the image, fitted on their own, turn"
+                    + " %.2f deg where the fit of all %d points turns %.2f deg: the two sides do"
+                    + " not share one seam (two legs that moved differently between the"
+                    + " exposures, parallax). Choose one target leg and match on its half of the"
+                    + " image",
+                part.size(),
+                leftHalf ? "left" : "right",
+                own.degrees(),
+                inliers.size(),
+                fit.degrees());
+      }
+    }
+    return worst;
   }
 
   /**
@@ -545,9 +606,8 @@ final class SeamMatcher {
     // a failure of any of these fails the seam (Kimi, second review: a passing whole-width seam
     // must not stand in for a leg that failed, and two halves must not erase a whole-width failure)
     if (left.status() == Seam.Status.FAILED || right.status() == Seam.Status.FAILED) {
-      return withReason(
+      return refused(
           whole,
-          Seam.Status.FAILED,
           "the legs could not be matched one at a time to check that they agree: %s leg failed;"
                   .formatted(left.status() == Seam.Status.FAILED ? "the left" : "the right")
               + " choose one target leg and match on its half of the image"
@@ -567,9 +627,8 @@ final class SeamMatcher {
             mm,
             deg);
     if (mm > MAX_LEG_DISAGREE_MM || deg > MAX_LEG_DISAGREE_DEG) {
-      return withReason(
+      return refused(
           whole,
-          Seam.Status.FAILED,
           words
               + ": parallax or movement between the exposures. Choose one target leg and match"
               + " on its half of the image");
@@ -577,9 +636,8 @@ final class SeamMatcher {
     if (whole.status() == Seam.Status.CHECK) {
       return withReason(whole, Seam.Status.CHECK, words + ", within the limits");
     }
-    return withReason(
+    return refused(
         whole,
-        Seam.Status.FAILED,
         words
             + ", within the limits, but the match on the whole width failed; choose one target"
             + " leg and match on its half of the image"
@@ -610,6 +668,49 @@ final class SeamMatcher {
     return seam.status() == Seam.Status.CHECK
         ? withReason(seam, Seam.Status.CHECK, "the point pairs lie on both legs")
         : seam;
+  }
+
+  /**
+   * The whole-width seam refused for both legs. One that had passed on its own still carries its
+   * fitted rotation and residual: it is left at the average shift of its matched points instead,
+   * with no figures, as {@link #judge} leaves any refused fit (review of 11 Nov 2026: with the
+   * legs 3 mm apart the refused seam was saved turned -0.77 deg, the fault stitch 0.4 removed from
+   * a single band).
+   */
+  private static Seam refused(Seam whole, String reason) {
+    if (whole.status() == Seam.Status.FAILED) {
+      return withReason(whole, Seam.Status.FAILED, reason);
+    }
+    Rigid placed =
+        whole.pairs().isEmpty()
+            ? Rigid.shift(whole.transform().tx(), whole.transform().ty())
+            : meanShift(whole.pairs());
+    List<String> reasons = new ArrayList<>();
+    reasons.add(reason);
+    reasons.add(
+        String.format(
+            Locale.ROOT,
+            "placed at the average shift of the matched points (shift %.1f, %.1f mm, rotation"
+                + " 0.00 deg) without the refused fit (%d points, rotation %.2f deg, residual"
+                + " %.2f mm): a match the gates refuse keeps no fitted rotation",
+            placed.tx(),
+            placed.ty(),
+            whole.pairs().size(),
+            whole.transform().degrees(),
+            whole.rmsMm()));
+    reasons.addAll(whole.reasons());
+    return new Seam(
+        placed,
+        whole.method(),
+        Seam.Status.FAILED,
+        Double.NaN,
+        Double.NaN,
+        Double.NaN,
+        Double.NaN,
+        whole.uniqueness(),
+        whole.holdoutMm(),
+        whole.pairs(),
+        reasons);
   }
 
   private static Seam withReason(Seam s, Seam.Status status, String reason) {

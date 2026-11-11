@@ -114,6 +114,26 @@ record SeamRecipe(
           case REFINE_BOTH_LEGS -> SeamMatcher.refineBothLegs(upper, lower, start);
           case POINTS_BOTH_LEGS -> SeamMatcher.manualBothLegs(points, upper.widthMm());
         };
-    return movedTo == null ? matched : matched.adjusted(movedTo);
+    if (movedTo == null) {
+      return matched;
+    }
+    double[] ref = reference(upper, lower, matched.transform(), points);
+    return matched.adjusted(movedTo, ref[0], ref[1]);
+  }
+
+  /**
+   * Where a hand move of a seam is measured, in the lower piece's mm: the middle of the overlap as
+   * the match left it; without the pieces (a seam from picked points alone), the middle of the
+   * points.
+   */
+  static double[] reference(
+      MatchImage upper, MatchImage lower, Rigid matched, List<Rigid.Pair> points) {
+    if (upper != null && lower != null) {
+      double[] box = SeamMatcher.overlap(upper.widthMm(), upper.heightMm(), matched, lower);
+      return matched.inverse().apply((box[0] + box[2]) / 2, (box[1] + box[3]) / 2);
+    }
+    double x = points.stream().mapToDouble(Rigid.Pair::fx).average().orElse(0);
+    double y = points.stream().mapToDouble(Rigid.Pair::fy).average().orElse(0);
+    return new double[] {x, y};
   }
 }

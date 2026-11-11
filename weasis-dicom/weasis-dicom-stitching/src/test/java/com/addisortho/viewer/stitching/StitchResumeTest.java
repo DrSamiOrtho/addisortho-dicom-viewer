@@ -190,7 +190,13 @@ class StitchResumeTest {
     Rigid put = Rigid.shift(1.5, -0.7).after(stitch.seams.get(1).transform());
     List<SeamRecipe> decisions =
         List.of(recipes.get(0), SeamRecipe.match(SeamMatcher.Band.WHOLE).moved(put));
-    Seam result = stitch.seams.get(1).adjusted(put);
+    double[] ref =
+        SeamRecipe.reference(
+            stitch.pieces.get(1).match(),
+            stitch.pieces.get(2).match(),
+            stitch.seams.get(1).transform(),
+            List.of());
+    Seam result = stitch.seams.get(1).adjusted(put, ref[0], ref[1]);
     Stitch moved =
         new Stitch(stitch.pieces, List.of(stitch.seams.get(0), result), StitchFixture.CHOICES);
     StitchProject p =

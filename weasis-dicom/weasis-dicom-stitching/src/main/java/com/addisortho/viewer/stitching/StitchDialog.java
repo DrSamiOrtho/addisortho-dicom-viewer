@@ -182,6 +182,11 @@ final class StitchDialog extends JDialog {
   // the versions saved for this study, oldest first; filled in the background
   private List<StitchProjects.Listed> versions = List.of();
   private SwingWorker<?, ?> running;
+  // A save is stopped through its progress callback, never by cancelling the worker: cancelling
+  // made the window report a cancel at once while the save went on and finished, so the picture
+  // and a version were kept unsaid and the next Save wrote both again (review of 11 Nov 2026).
+  private boolean saving;
+  private volatile boolean stopSave;
   // background work still executing (a cancelled worker is "done" before its loop has stopped)
   private final AtomicInteger active = new AtomicInteger();
   // jobs started whose result has not been taken into the window yet. A worker is "done" a moment
@@ -544,7 +549,11 @@ final class StitchDialog extends JDialog {
     cancel.addActionListener(
         e -> {
           if (running != null) {
-            running.cancel(false);
+            if (saving) {
+              stopSave = true; // honoured while pixels are written; after that the save stands
+            } else {
+              running.cancel(false);
+            }
           }
         });
     seamTable.getSelectionModel().addListSelectionListener(e -> refresh());
@@ -763,11 +772,19 @@ final class StitchDialog extends JDialog {
 
   private void inspectSelected() {
     int i = seamTable.getSelectedRow();
-    if (i < 0 || i >= seams.size()) {
+    // not while a job runs: a double click on a row reached here although the Inspect button is
+    // off, and the seam window then gave back a seam of the stitch the job was replacing (review
+    // of 11 Nov 2026)
+    if (busy() || i < 0 || i >= seams.size()) {
       return;
     }
+    int opened = generation;
+    List<Seam> openedOn = seams;
     SeamEditor editor = seamWindow(i);
     editor.setVisible(true);
+    if (opened != generation || openedOn != seams || busy()) {
+      return; // the pieces or the seams changed under the open window: its seam is of the old ones
+    }
     editor.result().ifPresent(made -> useSeam(i, made));
   }
 
@@ -893,7 +910,7 @@ final class StitchDialog extends JDialog {
                   from,
                   (done, total) -> {
                     setProgress(100 * done / Math.max(1, total));
-                    return !isCancelled();
+                    return !stopSave;
                   });
             } finally {
               active.decrementAndGet();
@@ -904,6 +921,7 @@ final class StitchDialog extends JDialog {
           @Override
           protected void done() {
             unfinished--;
+            saving = false;
             progress.setValue(0);
             try {
               StitchService.Saved result = get();
@@ -944,7 +962,11 @@ final class StitchDialog extends JDialog {
             } catch (CancellationException e) {
               state.setText(" ");
             } catch (Exception e) {
-              saveFailed(e);
+              if (e.getCause() instanceof CancellationException) {
+                state.setText(" "); // stopped while the pixels were written: nothing was kept
+              } else {
+                saveFailed(e);
+              }
             }
             refresh();
           }
@@ -957,6 +979,8 @@ final class StitchDialog extends JDialog {
         });
     state.setText(Messages.getString("StitchDialog.saving"));
     unfinished++;
+    stopSave = false;
+    saving = true;
     running.execute();
     refresh();
   }

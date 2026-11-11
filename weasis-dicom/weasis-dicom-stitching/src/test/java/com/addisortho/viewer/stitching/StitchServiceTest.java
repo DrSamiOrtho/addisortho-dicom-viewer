@@ -49,4 +49,29 @@ class StitchServiceTest {
     ours.setString(Tag.SecondaryCaptureDeviceSoftwareVersions, VR.LO, StitchWriter.SOFTWARE);
     assertNotNull(StitchService.refusal(ours));
   }
+
+  /** A piece stored mirrored, or a PA film among AP ones, is said before it is lined up. */
+  @Test
+  void aPieceTurnedAgainstTheOthersIsSaid() {
+    Attributes a = xray("DX");
+    a.setString(Tag.PatientOrientation, VR.CS, "L", "F");
+    a.setString(Tag.ViewPosition, VR.CS, "AP");
+    Attributes b = new Attributes(a);
+    Attributes mirrored = new Attributes(a);
+    mirrored.setString(Tag.PatientOrientation, VR.CS, "R", "F");
+    Attributes pa = new Attributes(a);
+    pa.setString(Tag.ViewPosition, VR.CS, "PA");
+    Attributes silent = xray("DX");
+
+    var notes = StitchService.orientationNotes(java.util.List.of(a, b, mirrored, pa, silent));
+
+    assertNull(notes.get(0));
+    assertNull(notes.get(1));
+    assertNotNull(notes.get(2));
+    org.junit.jupiter.api.Assertions.assertTrue(notes.get(2).contains("mirrored"), notes.get(2));
+    org.junit.jupiter.api.Assertions.assertTrue(notes.get(3).contains("PA"), notes.get(3));
+    assertNull(notes.get(4), "an image that says nothing is not accused");
+    // one image alone has no others to differ from
+    assertNull(StitchService.orientationNotes(java.util.List.of(mirrored)).get(0));
+  }
 }

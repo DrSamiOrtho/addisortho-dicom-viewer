@@ -224,6 +224,52 @@ class StitchProjectsTest {
     assertEquals(Kind.LINEAGE, refusal(projects, version(first.projectId(), torn, 5)));
   }
 
+  /**
+   * A file the disk will not give up is one unreadable version: the others are still listed and a
+   * first version can still be saved in the study (review of 11 Nov 2026: one such file hid them
+   * all and refused every first save).
+   */
+  @Test
+  void aVersionTheDiskWillNotReadDoesNotHideTheOthers() throws IOException {
+    FolderProjectStore folder = store();
+    String locked = UUID.randomUUID().toString();
+    ProjectStore store =
+        new ProjectStore() {
+          @Override
+          public void put(String study, String id, byte[] document) throws IOException {
+            folder.put(study, id, document);
+          }
+
+          @Override
+          public byte[] get(String study, String id) throws IOException {
+            if (id.equals(locked)) {
+              throw new IOException("/a/path/with/a/name: permission denied");
+            }
+            return folder.get(study, id);
+          }
+
+          @Override
+          public List<String> list(String study) throws IOException {
+            return folder.list(study);
+          }
+        };
+    StitchProjects projects = new StitchProjects(store);
+    StitchProject first = version(null, null, 1);
+    projects.save(first);
+    folder.put(StitchFixture.STUDY, locked, StitchProjectIO.write(version(null, null, 2)));
+
+    List<StitchProjects.Listed> listed = projects.list(StitchFixture.STUDY);
+
+    assertEquals(2, listed.size());
+    assertEquals(first.versionId(), listed.get(0).versionId());
+    assertNull(listed.get(1).project());
+    assertEquals(locked, listed.get(1).versionId());
+    assertTrue(!listed.get(1).problem().contains("/a/path"), "no path in what the user is told");
+    // and another stitch of the study can still be saved for the first time
+    projects.save(version(null, null, 3));
+    assertEquals(3, projects.list(StitchFixture.STUDY).size());
+  }
+
   @Test
   void aVersionKeptUnderAnotherStudyOrNameIsRefused() throws IOException {
     FolderProjectStore store = store();

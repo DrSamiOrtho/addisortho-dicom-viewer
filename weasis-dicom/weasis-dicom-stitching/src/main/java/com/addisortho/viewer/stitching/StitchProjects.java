@@ -130,6 +130,11 @@ final class StitchProjects {
         readable.add(new Listed(id, load(studyInstanceUid, id), null));
       } catch (StitchProjectException e) {
         unreadable.add(new Listed(id, null, e.getMessage()));
+      } catch (IOException e) {
+        // one file the disk will not give up (too large, no permission) is one unreadable version,
+        // not the end of the list: before, it hid every other version of the study and refused
+        // every first save in it (review of 11 Nov 2026). Its message can hold a path: not shown.
+        unreadable.add(new Listed(id, null, "This saved stitch could not be read from the disk."));
       }
     }
     readable.sort(

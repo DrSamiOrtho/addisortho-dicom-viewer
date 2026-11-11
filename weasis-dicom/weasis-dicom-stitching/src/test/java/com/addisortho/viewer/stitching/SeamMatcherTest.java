@@ -114,6 +114,75 @@ class SeamMatcherTest {
     assertTrue(seam.reasons().get(0).contains("parallax"), seam.reasons().get(0));
   }
 
+  /**
+   * One target leg, but the band left on the whole width of a film of both legs: the legs sit 3 or
+   * 4 mm apart in the second film (parallax). One rigid fit of both turns that into a tilt of 0.8
+   * to 1 deg that passes the residual and hold-out gates; each half's own points are level, so the
+   * seam is refused and keeps no tilt (review of 11 Nov 2026).
+   */
+  @Test
+  void aWholeWidthSeamOnTwoLegsThatDisagreeIsRefused() {
+    double w = 427;
+    double h = 356;
+    Phantom legs = Phantom.twoLegs(w, 900, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lowerLeft = new Phantom.Cut(Rigid.shift(2, 280), w, h, 0.139, 1, 0);
+    for (double apart : new double[] {3, 4}) {
+      var lowerRight = new Phantom.Cut(Rigid.shift(2, 280 - apart), w, h, 0.139, 1, 0);
+      Seam seam =
+          SeamMatcher.match(
+              legs.matchImage(upper, 0.02, 45),
+              legs.splicedMatchImage(lowerLeft, lowerRight, 0.02, 46),
+              SeamMatcher.Band.WHOLE);
+      assertEquals(Seam.Status.FAILED, seam.status(), apart + " mm: " + seam.summary());
+      assertEquals(0, seam.transform().theta(), 0.0, seam.summary());
+      assertTrue(
+          seam.reasons().stream().anyMatch(r -> r.contains("do not share one seam")),
+          seam.reasons().toString());
+    }
+  }
+
+  /** The same films with the legs moved alike: a film that truly turned is not refused for it. */
+  @Test
+  void aWholeWidthSeamOnTwoLegsThatTurnedTogetherPasses() {
+    double w = 427;
+    double h = 356;
+    Phantom legs = Phantom.twoLegs(w, 900, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lower = new Phantom.Cut(new Rigid(Math.toRadians(0.8), 2, 280), w, h, 0.139, 1.2, 0);
+    Seam seam =
+        SeamMatcher.match(
+            legs.matchImage(upper, 0.02, 43),
+            legs.matchImage(lower, 0.02, 44),
+            SeamMatcher.Band.WHOLE);
+    assertEquals(Seam.Status.CHECK, seam.status(), String.join("; ", seam.reasons()));
+    assertRecovers(Phantom.truth(upper, lower), seam, w / 2, 320);
+  }
+
+  /**
+   * Target leg Both refusing a whole-width seam that had passed on its own: the refused seam keeps
+   * no fitted rotation and no residual figures (review of 11 Nov 2026).
+   */
+  @Test
+  void bothLegsRefusedKeepNoTilt() {
+    double w = 427;
+    double h = 356;
+    Phantom legs = Phantom.twoLegs(w, 900, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lowerLeft = new Phantom.Cut(Rigid.shift(2, 280), w, h, 0.139, 1, 0);
+    for (double apart : new double[] {2, 3}) {
+      var lowerRight = new Phantom.Cut(Rigid.shift(2, 280 - apart), w, h, 0.139, 1, 0);
+      Seam seam =
+          SeamMatcher.matchBothLegs(
+              legs.matchImage(upper, 0.02, 45),
+              legs.splicedMatchImage(lowerLeft, lowerRight, 0.02, 46));
+      assertEquals(Seam.Status.FAILED, seam.status(), apart + " mm: " + seam.summary());
+      assertEquals(0, seam.transform().theta(), 0.0, apart + " mm: " + seam.summary());
+      assertTrue(Double.isNaN(seam.rmsMm()), seam.summary());
+      assertTrue(Double.isNaN(seam.rotationSigmaDeg()), seam.summary());
+    }
+  }
+
   /** The same leg with the overlap on bare shaft, no texture there: still refused. */
   @Test
   void refusesASingleLegShaftOverlap() {
@@ -371,11 +440,17 @@ class SeamMatcherTest {
             0.1,
             List.of(),
             List.of("automatic match, not reviewed"));
-    Seam moved = auto.adjusted(Rigid.shift(0.1, 300));
+    Seam moved = auto.adjusted(Rigid.shift(0.1, 300), 100, 20);
     assertEquals(Seam.Method.SEMI_AUTOMATIC, moved.method());
     assertEquals(Seam.Status.CHECK, moved.status());
     Seam failed = Seam.failed(Rigid.shift(0, 300), Seam.Method.AUTOMATIC, List.of("no overlap"));
-    assertEquals(Seam.Status.FAILED, failed.adjusted(Rigid.shift(0, 301)).status());
+    assertEquals(Seam.Status.FAILED, failed.adjusted(Rigid.shift(0, 301), 100, 20).status());
+    // a turn is measured where the overlap is, not at the piece's corner
+    Seam turned = auto.adjusted(new Rigid(Math.toRadians(0.2), 0, 300), 100, 20);
+    assertEquals(Seam.Status.CHECK, turned.status(), turned.reasons().toString());
+    assertEquals(
+        Seam.Status.FAILED, auto.adjusted(new Rigid(Math.toRadians(0.5), 0, 300), 0, 0).status());
+    assertEquals(Seam.Status.FAILED, auto.adjusted(Rigid.shift(2.5, 300), 100, 20).status());
   }
 
   /**

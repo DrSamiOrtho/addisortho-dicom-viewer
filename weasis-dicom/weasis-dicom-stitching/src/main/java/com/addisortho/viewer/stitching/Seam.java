@@ -82,27 +82,56 @@ record Seam(
         reasons);
   }
 
+  /** A hand move this far from the matched position is a small correction; further is not. */
+  static final double MAX_HAND_MOVE_MM = 2.0;
+
+  static final double MAX_HAND_TURN_DEG = 0.3;
+
   /**
-   * The same seam moved by hand (drag, nudge or rotation): now semi-automatic unless it was manual.
-   * A failed seam stays failed (design section 5.4: manual adjustment never clears a warning by
-   * itself); only the automatic match refined from the hand-set position, matching points that
-   * agree, or a new automatic match can clear it.
+   * This seam, as a match left it, moved by hand (drag, nudge or rotation): now semi-automatic
+   * unless it was manual. A failed seam stays failed (design section 5.4: manual adjustment never
+   * clears a warning by itself); only the automatic match refined from the hand-set position,
+   * matching points that agree, or a new automatic match can clear it. A "check" seam stays "check"
+   * only for a small correction: moved more than {@link #MAX_HAND_MOVE_MM} at the overlap, or
+   * turned more than {@link #MAX_HAND_TURN_DEG}, it is no longer the seam the match checked and
+   * fails (review of 11 Nov 2026: a seam dragged 35 mm and turned 8 deg stayed "check" and could
+   * be saved as measurable).
+   *
+   * @param refX a point of the lower piece, in its mm, where the move is measured: the middle of
+   *     the overlap
    */
-  Seam adjusted(Rigid moved) {
+  Seam adjusted(Rigid moved, double refX, double refY) {
     Method m = method == Method.MANUAL ? Method.MANUAL : Method.SEMI_AUTOMATIC;
+    double[] was = transform.apply(refX, refY);
+    double[] now = moved.apply(refX, refY);
+    double mm = Math.hypot(now[0] - was[0], now[1] - was[1]);
+    double deg = Math.abs(moved.degrees() - transform.degrees());
+    boolean far = mm > MAX_HAND_MOVE_MM + 1e-9 || deg > MAX_HAND_TURN_DEG + 1e-9;
+    Status moveStatus = status == Status.FAILED || far ? Status.FAILED : Status.CHECK;
     List<String> why =
         List.of(
             status == Status.FAILED
                 ? "moved by hand after a failed match; the seam stays failed until Refine"
                     + " automatically from here confirms it, or matching points that agree set it"
                     + " (Fit to the points)"
-                : "moved by hand: the residual is no longer measured; press Refine automatically"
-                    + " from here to measure it, or inspect the overlap",
+                : far
+                    ? String.format(
+                        Locale.ROOT,
+                        "moved by hand %.1f mm and turned %.2f deg from where the match put it"
+                            + " (a small correction is at most %.0f mm and %.1f deg): this is no"
+                            + " longer the seam the match checked. Press Refine automatically from"
+                            + " here to check it, or set it by matching points (Fit to the points)",
+                        mm,
+                        deg,
+                        MAX_HAND_MOVE_MM,
+                        MAX_HAND_TURN_DEG)
+                    : "moved by hand: the residual is no longer measured; press Refine"
+                        + " automatically from here to measure it, or inspect the overlap",
             "%s seam, not reviewed".formatted(m.word));
     return new Seam(
         moved,
         m,
-        status,
+        moveStatus,
         Double.NaN,
         Double.NaN,
         Double.NaN,
