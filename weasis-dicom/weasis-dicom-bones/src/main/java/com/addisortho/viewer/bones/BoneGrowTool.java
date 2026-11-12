@@ -1246,7 +1246,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       return;
     }
     VoxelBox crop = CROP.isSelected() ? ct.cropBox(view).orElse(null) : null;
-    start(new BoneGrowWorker(ct, new Request(voxel, crop, options(ct)), session.masksExcept(-1)));
+    start(
+        new BoneGrowWorker(
+            ct, new Request(voxel, crop, options(ct)), session.masksExcept(-1), session.bones()));
   }
 
   private static void startErase(GrowSession session, int[] voxel) {
@@ -1342,6 +1344,13 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
+  // The colour the worker found for a new bone; worked out here only if the bones changed since.
+  private static Color colour(
+      int id, BoxMask mask, List<Color> taken, List<Bone> looked, GrowSession session) {
+    Color c = BoneColors.pick(id, taken, looked, session.bones());
+    return c != null ? c : session.colorOf(id, mask);
+  }
+
   private static void grown(BoneGrowWorker done, Result result) {
     CtSource ct = done.ct();
     GrowSession session = session(ct);
@@ -1362,7 +1371,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         new Bone(
             id,
             name,
-            session.colorOf(id, mask),
+            colour(id, mask, done.takenColours(), done.others(), session),
             mask,
             result.seed(),
             BoneGrowWorker.description(done.request().options(), result));
@@ -1433,9 +1442,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
           new Bone(
               fragmentId,
               fragmentName,
-              done.takenColours() == null
-                  ? session.colorOf(fragmentId, split.cut())
-                  : BoneColors.pick(fragmentId, done.takenColours()),
+              colour(fragmentId, split.cut(), done.takenColours(), done.others(), session),
               split.cut(),
               done.voxel(),
               "Separated from " + bone.label() + "; not reviewed"); // NON-NLS

@@ -18,6 +18,7 @@ import com.addisortho.viewer.bones.grow.RegionGrow.Result;
 import com.addisortho.viewer.bones.grow.RegionGrow.SeedException;
 import com.addisortho.viewer.bones.grow.VoxelBox;
 import com.addisortho.viewer.bones.seg.CtGrid;
+import java.awt.Color;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -44,16 +45,30 @@ final class BoneGrowWorker extends SwingWorker<Result, Void> {
   private final CtSource ct;
   private final Request request;
   private final List<BoxMask> walls;
+  private final List<Bone> others;
+  private volatile List<Color> takenColours;
   private final AtomicReference<String> stage = new AtomicReference<>();
   private final AtomicInteger percent = new AtomicInteger();
 
   /**
    * @param walls the bones already selected
+   * @param others the bones as they are now, to find the colours beside the new bone
    */
-  BoneGrowWorker(CtSource ct, Request request, List<BoxMask> walls) {
+  BoneGrowWorker(CtSource ct, Request request, List<BoxMask> walls, List<Bone> others) {
     this.ct = ct;
     this.request = request;
     this.walls = List.copyOf(walls);
+    this.others = List.copyOf(others);
+  }
+
+  /** The bones this worker looked at for {@link #takenColours()}. */
+  List<Bone> others() {
+    return others;
+  }
+
+  /** The colours of the bones beside what was grown, found on the worker thread. */
+  List<Color> takenColours() {
+    return takenColours;
   }
 
   CtSource ct() {
@@ -94,6 +109,7 @@ final class BoneGrowWorker extends SwingWorker<Result, Void> {
               request.crop(),
               options,
               this::stageProgress);
+      takenColours = BoneColors.taken(BoxMask.of(result), others);
       advance(100);
       return result;
     } catch (SeedException e) {

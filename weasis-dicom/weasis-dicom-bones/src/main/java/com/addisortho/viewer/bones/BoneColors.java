@@ -13,6 +13,7 @@ import com.addisortho.viewer.bones.grow.VoxelBox;
 import java.awt.Color;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 
 /**
  * The colours of the bones. Two bones that touch never get the same colour while the palette has
@@ -85,6 +86,23 @@ final class BoneColors {
     return firstFree(id - 1, taken);
   }
 
+  /**
+   * The colour a worker's answer gives a new bone, when the bones are still the very ones the
+   * worker looked at; else null, and the caller works it out afresh. While a worker ran, an undo
+   * may have changed a neighbour or its colour (Astra's reread, 12 Nov 2026).
+   */
+  static Color pick(int id, List<Color> taken, List<Bone> looked, List<Bone> now) {
+    if (taken == null || looked.size() != now.size()) {
+      return null;
+    }
+    for (int i = 0; i < now.size(); i++) {
+      if (looked.get(i) != now.get(i)) {
+        return null;
+      }
+    }
+    return pick(id, taken);
+  }
+
   // the palette from {@code start} on, round once; when every colour is taken, the one at start
   private static Color firstFree(int start, List<Color> taken) {
     for (int k = 0; k < PALETTE.length; k++) {
@@ -116,6 +134,9 @@ final class BoneColors {
     int z0 = Math.max(ab.z0(), bb.z0() - reach);
     int z1 = Math.min(ab.z1(), bb.z1() + reach);
     for (int z = z0; z <= z1; z++) {
+      if (Thread.currentThread().isInterrupted()) {
+        throw new CancellationException(); // a worker told to stop
+      }
       if (!a.hasVoxelsInSlice(z)) {
         continue;
       }

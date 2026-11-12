@@ -11,6 +11,7 @@ package com.addisortho.viewer.bones;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.addisortho.viewer.bones.grow.BitVolume;
@@ -99,6 +100,21 @@ class BoneColorsTest {
     assertEquals(BoneColors.PALETTE[0], apart.get(0));
     assertEquals(BoneColors.PALETTE[1], apart.get(1));
     assertEquals(BoneColors.PALETTE[2], apart.get(2));
+  }
+
+  /** A worker's colour is used only while the bones are the very ones it looked at. */
+  @Test
+  void aColourFoundForOtherBonesIsNotUsed() {
+    Bone first =
+        new Bone(1, "one", BoneColors.PALETTE[1], block(0, 9, 0, 9), new int[] {0, 0, 0}, null);
+    List<Bone> looked = List.of(first);
+    List<Color> taken = BoneColors.taken(block(10, 19, 0, 9), looked);
+    assertEquals(List.of(BoneColors.PALETTE[1]), taken);
+    assertNotEquals(BoneColors.PALETTE[1], BoneColors.pick(2, taken, looked, List.of(first)));
+    Bone recoloured = new Bone(1, "one", BoneColors.PALETTE[2], first.mask(), first.anchor(), null);
+    assertNull(BoneColors.pick(2, taken, looked, List.of(recoloured)));
+    assertNull(BoneColors.pick(2, taken, looked, List.of()));
+    assertNull(BoneColors.pick(2, null, looked, looked));
   }
 
   @Test

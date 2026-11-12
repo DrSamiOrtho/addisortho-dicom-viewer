@@ -119,6 +119,11 @@ final class SplitWorker extends SwingWorker<Split, Void> {
     return voxel;
   }
 
+  /** The bones this worker looked at for {@link #takenColours()}. */
+  List<Bone> others() {
+    return others;
+  }
+
   /**
    * For a fragment cut off one bone: the colours of the bones beside it, found on the worker
    * thread; null otherwise.

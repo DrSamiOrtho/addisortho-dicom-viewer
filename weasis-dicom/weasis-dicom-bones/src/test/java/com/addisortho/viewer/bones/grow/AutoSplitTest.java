@@ -817,13 +817,98 @@ class AutoSplitTest {
     assertEquals(1, AutoSplit.jointShare(lower, upper, AutoSplit.Options.of(1, 1, 1), ct)[0]);
   }
 
+  /**
+   * An anchor the redraw took out of its bone moves to the nearest voxel inside the bone's main
+   * part, not onto a small island left beside it (Astra, 12 Nov 2026).
+   */
   @Test
-  void anAnchorThatLeftItsBoneMovesToTheNearestVoxelOfIt() {
+  void anAnchorThatLeftItsBoneMovesIntoItsMainPart() {
     BoxMask bone = block(3, 15);
     int[] inside = {15, 15, 6};
     assertSame(inside, AutoSplit.anchorIn(bone, inside));
-    assertArrayEquals(new int[] {15, 15, 15}, AutoSplit.anchorIn(bone, new int[] {15, 15, 19}));
-    assertArrayEquals(new int[] {5, 24, 3}, AutoSplit.anchorIn(bone, new int[] {2, 27, 0}));
+    assertArrayEquals(new int[] {15, 15, 14}, AutoSplit.anchorIn(bone, new int[] {15, 15, 19}));
+    assertArrayEquals(new int[] {6, 23, 4}, AutoSplit.anchorIn(bone, new int[] {2, 27, 0}));
+
+    // the same block with an island of eight voxels at z 18 and 19, next to where the anchor was
+    BitVolume bits = new BitVolume(30, 30, 30);
+    for (int z = 3; z <= 19; z++) {
+      for (int y = 5; y <= 24; y++) {
+        for (int x = 5; x <= 24; x++) {
+          if (z <= 15 || (z >= 18 && x >= 14 && x <= 15 && y >= 14 && y <= 15)) {
+            bits.set(x, y, z);
+          }
+        }
+      }
+    }
+    BoxMask withIsland = BoxMask.trimmed(VoxelBox.of(30, 30, 30), bits);
+    assertArrayEquals(
+        new int[] {15, 15, 14}, AutoSplit.anchorIn(withIsland, new int[] {15, 15, 20}));
+  }
+
+  /**
+   * Of the way from a mark to cortex only the cortex voxel starts the flood at once. The dark
+   * voxels of the way are its side's but wait at their own brightness: started at once, a way
+   * running beside the other bone's cortex took the voxels next to it (Astra's reread, 12 Nov
+   * 2026).
+   */
+  @Test
+  void onlyTheCortexEndOfAWayStartsAtOnce() {
+    float[] g = new float[10];
+    g[2] = 6.5f; // cortex
+    g[3] = 1.5f;
+    g[4] = 1.5f; // the mark, which the flood has given its side and queued already
+    byte[] side = new byte[10];
+    side[4] = 1;
+    int top = 160;
+    IntQueue[] buckets = new IntQueue[top + 1];
+
+    AutoSplit.take(new int[] {2, 3, 4}, (byte) 1, g, side, buckets, top);
+
+    assertArrayEquals(new byte[] {0, 0, 1, 1, 1, 0, 0, 0, 0, 0}, side);
+    assertEquals(2, buckets[top].poll());
+    assertTrue(buckets[top].isEmpty(), "nothing else at once");
+    assertEquals(3, buckets[30].poll(), "the dark voxel of the way at its own brightness");
+    assertTrue(buckets[30].isEmpty(), "the mark is not queued twice");
+  }
+
+  /** A block is refused before anything is allocated when it cannot fit. */
+  @Test
+  void aBlockTooLargeForTheMemoryIsRefused() {
+    assertEquals(1000, AutoSplit.cells(10, 10, 10, 9));
+    assertThrows(
+        AutoSplit.TooLargeException.class, () -> AutoSplit.cells(1 << 20, 1 << 20, 1 << 20, 1));
+    assertThrows(
+        AutoSplit.TooLargeException.class,
+        () -> AutoSplit.cells(1000, 1000, 1000, Integer.MAX_VALUE));
+  }
+
+  /**
+   * A Separate that would leave a bone almost nothing is refused and the bones stay as they are. A
+   * small bone lying as a sheet on a large one, all of it but a dim stalk within the band: the
+   * band's answer gives the sheet to the large bone, and the clicks' answer has no joint line to
+   * show for itself (an elbow CT, 12 Nov 2026: a piece of 3.5 cm3 was left 15 mm3).
+   */
+  @Test
+  void aSeparateThatWouldGutABoneIsRefused() {
+    Phantom ct =
+        new Phantom(
+            30,
+            30,
+            30,
+            (x, y, z) -> {
+              boolean wide = x >= 5 && x <= 24 && y >= 5 && y <= 24;
+              if (wide && z >= 3 && z <= 17) {
+                return 1000;
+              }
+              return x >= 14 && x <= 15 && y >= 14 && y <= 15 && z >= 18 && z <= 24 ? 300 : 0;
+            });
+    BoxMask large = where(ct, (x, y, z) -> z <= 15 ? ct.huAt(x, y, z) : 0);
+    BoxMask small = where(ct, (x, y, z) -> z >= 16 ? ct.huAt(x, y, z) : 0);
+    assertThrows(
+        BoneSplit.SplitException.class,
+        () ->
+            AutoSplit.splitBorder(
+                large, small, new int[] {15, 15, 6}, new int[] {14, 14, 22}, 1, 1, 1, ct, 3));
   }
 
   /**
@@ -864,6 +949,40 @@ class AutoSplitTest {
     Result f = assertTimeoutPreemptively(Duration.ofSeconds(20), () -> split(fine, tiny));
     assertEquals(1, f.pieces().size());
     assertEquals(1, f.fragments());
+
+    // and rows and slices as fine: the chip is 4 columns from the bone
+    Phantom across =
+        new Phantom(
+            40,
+            40,
+            20,
+            (x, y, z) -> {
+              boolean bone = x >= 4 && x <= 14 && y >= 5 && y <= 35 && z >= 4 && z <= 15;
+              boolean chip = x >= 18 && x <= 20 && y >= 10 && y <= 30 && z >= 8 && z <= 11;
+              return bone || chip ? 700 : 0;
+            });
+    AutoSplit.Options p = AutoSplit.Options.of(1, 1e-7, 1e-7);
+    AutoSplit.Options rows =
+        new AutoSplit.Options(
+            p.boneHu(),
+            p.denseHu(),
+            p.mmX(),
+            p.mmY(),
+            p.mmZ(),
+            1,
+            p.minDepthMm(),
+            p.neckRatio(),
+            1e-11,
+            p.attachMm(),
+            1e-13,
+            p.maxWorkVoxels(),
+            0,
+            p.jointReachMm(),
+            p.jointMaxHu(),
+            p.maxJointVoxels());
+    Result r = assertTimeoutPreemptively(Duration.ofSeconds(20), () -> split(across, rows));
+    assertEquals(1, r.pieces().size());
+    assertEquals(1, r.fragments());
   }
 
   /**

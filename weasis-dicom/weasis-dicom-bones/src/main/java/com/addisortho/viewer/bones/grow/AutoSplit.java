@@ -1178,18 +1178,20 @@ public final class AutoSplit {
         int y = (i / wx) % wy;
         int z = i / (wx * wy);
         double tol = 1e-4 * Math.max(1, mm2);
-        int ry = (int) Math.floor(Math.sqrt(mm2 + tol) / uy);
-        int rz = (int) Math.floor(Math.sqrt(mm2 + tol) / uz);
+        // Rows and slices as the columns below: only offsets inside the image, however fine the
+        // spacing (Astra, 12 Nov 2026).
+        int ry = (int) Math.min(wy, Math.floor(Math.sqrt(mm2 + tol) / uy));
+        int rz = (int) Math.min(wz, Math.floor(Math.sqrt(mm2 + tol) / uz));
         int best = -1;
         double bestMm2 = Double.POSITIVE_INFINITY;
         long looked = 0;
-        for (int dz = -rz; dz <= rz; dz++) {
+        for (int dz = Math.max(-rz, -z); dz <= Math.min(rz, wz - 1 - z); dz++) {
           RegionGrow.checkCancelled(caller);
           int pz = z + dz;
           if (pz < 0 || pz >= wz) {
             continue;
           }
-          for (int dy = -ry; dy <= ry; dy++) {
+          for (int dy = Math.max(-ry, -y); dy <= Math.min(ry, wy - 1 - y); dy++) {
             int py = y + dy;
             double rest = mm2 - sq(dy * uy) - sq(dz * uz);
             if (py < 0 || py >= wy || rest < -tol) {
@@ -1386,10 +1388,11 @@ public final class AutoSplit {
    * {@code bandMm} from the other and only the band along their contact is decided again, so
    * neither can lose its body to the other. In the second the clicks decide alone: each looks for
    * the cortex of its own bone (see {@link #climb}) and the two bones are flooded again from there,
-   * as one. The second is taken only when both clicks found cortex, each bone keeps at least {@link
-   * #WIDER_KEEPS} of itself, and either its border lies on a joint line where the first's does not
-   * ({@link #WIDER_SHARE}, {@link #WIDER_GAIN}, as for a wide move after a find) or the first
-   * leaves a bone less than that share of itself. Otherwise the first.
+   * as one. The second is taken only when both clicks found cortex and its border lies on a joint
+   * line where the first's does not ({@link #WIDER_SHARE}, {@link #WIDER_GAIN}, as for a wide move
+   * after a find). Otherwise the first. Either answer must leave each bone at least {@link
+   * #WIDER_KEEPS} of itself; when neither does, the split is refused and the bones stay as they
+   * are.
    *
    * <p>Until 12 Nov 2026 it was the band alone. On a foot CT the find had left a slice of the
    * cuboid, more than the band thick in places, with the fifth metatarsal: what the metatarsal
@@ -1430,20 +1433,10 @@ public final class AutoSplit {
       try {
         BoneSplit.Split s =
             flood(union, keep, cut, null, null, cutBone, mmX, mmY, mmZ, hu, climbed);
-        if (climbed[0]
-            && climbed[1]
-            && s.kept().count() >= WIDER_KEEPS * keepBone.count()
-            && s.cut().count() >= WIDER_KEEPS * cutBone.count()) {
-          // The band's own answer can leave a bone nearly nothing: a small bone wholly within
-          // the band of a brighter one has no body kept for it (an elbow CT, a piece of 3.5 cm3
-          // left 15 mm3). Then the clicks' answer, which leaves both standing, is the better one.
-          boolean bandGuts =
-              banded == null
-                  || banded.kept().count() < WIDER_KEEPS * keepBone.count()
-                  || banded.cut().count() < WIDER_KEEPS * cutBone.count();
+        if (climbed[0] && climbed[1] && bothStand(s, keepBone, cutBone)) {
           double byClicks = jointShare(s.kept(), s.cut(), o, hu)[0];
           double byBand = banded == null ? 0 : jointShare(banded.kept(), banded.cut(), o, hu)[0];
-          if (bandGuts || (byClicks >= WIDER_SHARE && byClicks >= byBand + WIDER_GAIN)) {
+          if (byClicks >= WIDER_SHARE && byClicks >= byBand + WIDER_GAIN) {
             return s;
           }
         }
@@ -1451,10 +1444,21 @@ public final class AutoSplit {
         // the clicks alone leave one side empty: the band's answer
       }
     }
-    if (banded == null) {
-      throw refused;
+    if (banded != null && bothStand(banded, keepBone, cutBone)) {
+      return banded;
     }
-    return banded;
+    // Neither answer may be used: the bones stay as they are. A small bone wholly within the band
+    // of a brighter one has no body kept for it and can be left a few voxels (an elbow CT, a piece
+    // of 3.5 cm3 left 15 mm3); the clicks' answer is no better without a joint line to show for it
+    // (Astra, 12 Nov 2026).
+    throw refused != null
+        ? refused
+        : new BoneSplit.SplitException(BoneSplit.SplitException.Reason.NOT_SEPARABLE);
+  }
+
+  private static boolean bothStand(BoneSplit.Split s, BoxMask keepBone, BoxMask cutBone) {
+    return s.kept().count() >= WIDER_KEEPS * keepBone.count()
+        && s.cut().count() >= WIDER_KEEPS * cutBone.count();
   }
 
   /**
@@ -1585,6 +1589,12 @@ public final class AutoSplit {
                 && drawn[0].count() >= NARROW_KEEPS * masks.get(i).count()
                 && drawn[1].count() >= NARROW_KEEPS * masks.get(j).count()) {
               best = drawn;
+            } else {
+              // Refused: the wider bands are measured against the border as it stays, not against
+              // a redraw that was thrown away (Astra, 12 Nov 2026).
+              double[] asIs = jointShare(masks.get(i), masks.get(j), o, ct);
+              share = o.jointHu() > 0 ? asIs[0] : 1;
+              faces = asIs[1];
             }
             bestShare = share;
             bestFaces = faces;
@@ -1630,9 +1640,9 @@ public final class AutoSplit {
    */
   private static BoxMask[] redrawn(
       BoxMask wholeA, BoxMask wholeB, VoxelBox touch, double band, Options o, HuSource ct) {
-    int padX = (int) Math.ceil((band + 2) / o.mmX());
-    int padY = (int) Math.ceil((band + 2) / o.mmY());
-    int padZ = (int) Math.ceil((band + 2) / o.mmZ());
+    int padX = pad(band + 2, o.mmX());
+    int padY = pad(band + 2, o.mmY());
+    int padZ = pad(band + 2, o.mmZ());
     VoxelBox crop =
         new VoxelBox(
             touch.x0() - padX,
@@ -1651,8 +1661,14 @@ public final class AutoSplit {
     }
     // Far from the whole of the other bone, not only from its part in the block: where the two
     // come near each other again just outside it, a voxel is not far (Astra, 12 Nov 2026).
-    BoxMask coreA = farFrom(a, wholeB, band, o.mmX(), o.mmY(), o.mmZ());
-    BoxMask coreB = farFrom(b, wholeA, band, o.mmX(), o.mmY(), o.mmZ());
+    BoxMask coreA;
+    BoxMask coreB;
+    try {
+      coreA = farFrom(a, wholeB, band, o.mmX(), o.mmY(), o.mmZ());
+      coreB = farFrom(b, wholeA, band, o.mmX(), o.mmY(), o.mmZ());
+    } catch (TooLargeException e) {
+      return null;
+    }
     if (coreA == null || coreB == null) {
       return null;
     }
@@ -1671,9 +1687,14 @@ public final class AutoSplit {
               ct,
               null);
       return new BoxMask[] {rejoined(wholeA, a, s.kept()), rejoined(wholeB, b, s.cut())};
-    } catch (BoneSplit.SplitException e) {
+    } catch (BoneSplit.SplitException | TooLargeException e) {
       return null;
     }
+  }
+
+  /** {@code mm} in voxels, rounded up, and never so many that sums of them overflow. */
+  private static int pad(double mm, double spacing) {
+    return (int) Math.min(1 << 16, Math.ceil(mm / spacing));
   }
 
   /**
@@ -1786,29 +1807,50 @@ public final class AutoSplit {
     return best;
   }
 
-  /** {@code anchor} when the mask still holds it, else the voxel of the mask nearest to it. */
+  /**
+   * {@code anchor} when the mask still holds it. Else the voxel nearest to it in the largest
+   * connected part of the mask, one with bone on all six sides if there is any: not a voxel of a
+   * small island the redraw left beside the bone, which Erase piece would then keep in place of the
+   * bone (Astra's reread, 12 Nov 2026).
+   */
   static int[] anchorIn(BoxMask mask, int[] anchor) {
     if (anchor == null || mask.contains(anchor[0], anchor[1], anchor[2])) {
       return anchor;
     }
     VoxelBox box = mask.box();
+    BitVolume main = largestPart(mask.bits());
     int[] best = anchor;
     long bestD = Long.MAX_VALUE;
+    boolean bestInside = false;
     for (int z = 0; z < box.sizeZ(); z++) {
       long dz = box.z0() + z - anchor[2];
-      if (dz * dz >= bestD || !mask.hasVoxelsInSlice(box.z0() + z)) {
-        continue;
-      }
       for (int y = 0; y < box.sizeY(); y++) {
         long dy = box.y0() + y - anchor[1];
-        if (dz * dz + dy * dy >= bestD) {
-          continue;
-        }
         for (int x = 0; x < box.sizeX(); x++) {
+          if (!main.get(x, y, z)) {
+            continue;
+          }
           long dx = box.x0() + x - anchor[0];
           long d = dx * dx + dy * dy + dz * dz;
-          if (d < bestD && mask.bits().get(x, y, z)) {
+          if (bestInside && d >= bestD) {
+            continue;
+          }
+          boolean inside =
+              x > 0
+                  && y > 0
+                  && z > 0
+                  && x < box.sizeX() - 1
+                  && y < box.sizeY() - 1
+                  && z < box.sizeZ() - 1
+                  && main.get(x - 1, y, z)
+                  && main.get(x + 1, y, z)
+                  && main.get(x, y - 1, z)
+                  && main.get(x, y + 1, z)
+                  && main.get(x, y, z - 1)
+                  && main.get(x, y, z + 1);
+          if ((inside && !bestInside) || (inside == bestInside && d < bestD)) {
             bestD = d;
+            bestInside = inside;
             best = new int[] {box.x0() + x, box.y0() + y, box.z0() + z};
           }
         }
@@ -1816,6 +1858,62 @@ public final class AutoSplit {
     }
     return best;
   }
+
+  /** The largest part of {@code bits} that hangs together face to face. */
+  private static BitVolume largestPart(BitVolume bits) {
+    int nx = bits.sizeX();
+    int ny = bits.sizeY();
+    int nz = bits.sizeZ();
+    BitVolume seen = new BitVolume(nx, ny, nz);
+    BitVolume best = null;
+    long bestCount = 0;
+    long left = bits.count();
+    for (int z = 0; z < nz && left > bestCount; z++) {
+      for (int y = 0; y < ny; y++) {
+        for (int x = 0; x < nx; x++) {
+          if (!bits.get(x, y, z) || seen.get(x, y, z)) {
+            continue;
+          }
+          BitVolume part = new BitVolume(nx, ny, nz);
+          java.util.ArrayDeque<int[]> open = new java.util.ArrayDeque<>();
+          open.add(new int[] {x, y, z});
+          seen.set(x, y, z);
+          long count = 0;
+          while (!open.isEmpty()) {
+            int[] v = open.poll();
+            part.set(v[0], v[1], v[2]);
+            count++;
+            for (int[] f : FACES) {
+              int px = v[0] + f[0];
+              int py = v[1] + f[1];
+              int pz = v[2] + f[2];
+              if (px >= 0
+                  && py >= 0
+                  && pz >= 0
+                  && px < nx
+                  && py < ny
+                  && pz < nz
+                  && bits.get(px, py, pz)
+                  && !seen.get(px, py, pz)) {
+                seen.set(px, py, pz);
+                open.add(new int[] {px, py, pz});
+              }
+            }
+          }
+          left -= count;
+          if (count > bestCount) {
+            bestCount = count;
+            best = part;
+          }
+        }
+      }
+    }
+    return best == null ? bits : best;
+  }
+
+  private static final int[][] FACES = {
+    {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
+  };
 
   private static double value(HuSource ct, int x, int y, int z) {
     double v = ct.huAt(x, y, z);
@@ -1913,16 +2011,18 @@ public final class AutoSplit {
   /** The voxels of {@code a} farther than {@code mm} from every voxel of {@code b}, or null. */
   static BoxMask farFrom(BoxMask a, BoxMask b, double mm, double mmX, double mmY, double mmZ) {
     VoxelBox box = a.box();
-    int px = (int) Math.ceil(mm / mmX) + 1;
-    int py = (int) Math.ceil(mm / mmY) + 1;
-    int pz = (int) Math.ceil(mm / mmZ) + 1;
+    Thread caller = Thread.currentThread();
+    int px = pad(mm, mmX) + 1;
+    int py = pad(mm, mmY) + 1;
+    int pz = pad(mm, mmZ) + 1;
     int nx = box.sizeX() + 2 * px;
     int ny = box.sizeY() + 2 * py;
     int nz = box.sizeZ() + 2 * pz;
-    float[] g = new float[cells(nx, ny, nz)];
+    float[] g = new float[cells(nx, ny, nz, 5)]; // the field and the transform's working rows
     Arrays.fill(g, INF);
     VoxelBox bb = b.box();
     for (int z = 0; z < nz; z++) {
+      RegionGrow.checkCancelled(caller);
       int gz = box.z0() - pz + z;
       if (gz < bb.z0() || gz > bb.z1()) {
         continue;
@@ -1937,7 +2037,7 @@ public final class AutoSplit {
         }
       }
     }
-    squaredDistance(g, nx, ny, nz, mmX, mmY, mmZ, Thread.currentThread());
+    squaredDistance(g, nx, ny, nz, mmX, mmY, mmZ, caller);
     BitVolume far = new BitVolume(box.sizeX(), box.sizeY(), box.sizeZ());
     double limit = mm * mm;
     for (int z = 0; z < box.sizeZ(); z++) {
@@ -1982,7 +2082,8 @@ public final class AutoSplit {
     if (a == null || b == null) {
       throw new BoneSplit.SplitException(BoneSplit.SplitException.Reason.NOT_IN_BONE);
     }
-    float[] g = new float[cells(nx, ny, nz)];
+    // the brightness, the side of each voxel and the queue of the flood
+    float[] g = new float[cells(nx, ny, nz, 9)];
     for (int z = 0; z < box.sizeZ(); z++) {
       for (int y = 0; y < box.sizeY(); y++) {
         for (int x = 0; x < box.sizeX(); x++) {
@@ -2040,9 +2141,15 @@ public final class AutoSplit {
       // on cortex; then only the way there is given, not all that was looked at. Between two
       // bones a mark stays inside its own bone. Two ways that share a voxel (both marks in one
       // marrow space) are both dropped. A mark that finds no cortex starts as before, alone.
+      // Only the cortex at the end of a way starts at once; the dark voxels of the way are its
+      // side's but wait their turn, or a way running beside the other bone's cortex would take
+      // the voxels next to it before that bone's own front arrived (Astra's reread, 12 Nov 2026).
       //
       // What is left open: inside one mask nothing tells a mark which bone it is in, so where a
-      // bone has no cortex towards its neighbour a way can end on the neighbour's cortex.
+      // bone has no cortex towards its neighbour a way can end on the neighbour's cortex. Astra
+      // would switch the climb off inside one mask for that. It stays, because without it a click
+      // in marrow leaves its side nearly nothing, which is what a click on a slice is; the result
+      // is shown, and Undo takes it back.
       int[] step6 = {1, -1, nx, -nx, nx * ny, -nx * ny};
       int cap = Math.max(2000, (int) Math.min(Integer.MAX_VALUE, bone.count() / 20));
       java.util.function.IntPredicate inCut =
@@ -2062,8 +2169,8 @@ public final class AutoSplit {
         keepWay = null;
         cutWay = null;
       }
-      take(keepWay, (byte) 1, side, buckets, levels - 1);
-      take(cutWay, (byte) 2, side, buckets, levels - 1);
+      take(keepWay, (byte) 1, g, side, buckets, levels - 1);
+      take(cutWay, (byte) 2, g, side, buckets, levels - 1);
       if (climbed != null) {
         climbed[0] = keepWay != null;
         climbed[1] = cutWay != null;
@@ -2123,7 +2230,11 @@ public final class AutoSplit {
   private static float cortexLevel(float[] g, java.util.function.IntPredicate own) {
     int[] count = new int[level((float) ((BRIGHT_HU + 100) / 200)) + 2];
     long total = 0;
+    Thread caller = Thread.currentThread();
     for (int i = 0; i < g.length; i++) {
+      if ((i & 0xFFFFF) == 0) {
+        RegionGrow.checkCancelled(caller);
+      }
       if (g[i] > 0 && (own == null || own.test(i))) {
         count[Math.min(count.length - 1, level(g[i]))]++;
         total++;
@@ -2195,23 +2306,43 @@ public final class AutoSplit {
     return false;
   }
 
-  /** Gives the voxels of a way to {@code who}, to start the flood with its mark. */
-  private static void take(int[] way, byte who, byte[] side, IntQueue[] buckets, int top) {
+  /**
+   * Gives the voxels of a way to {@code who}. The cortex voxel at its end starts the flood at once,
+   * with the mark; the others are flooded from at their own brightness.
+   */
+  static void take(int[] way, byte who, float[] g, byte[] side, IntQueue[] buckets, int top) {
     if (way == null) {
       return;
     }
-    for (int i : way) {
+    for (int k = 0; k < way.length; k++) {
+      int i = way[k];
       if (side[i] == 0) {
         side[i] = who;
-        push(buckets, i, top);
+        push(buckets, i, k == 0 ? top : Math.min(top, level(g[i])));
       }
     }
   }
 
-  private static int cells(int nx, int ny, int nz) {
-    long n = (long) nx * ny * nz;
-    if (n > Integer.MAX_VALUE - 8) {
-      throw new IllegalArgumentException("block of " + n + " voxels is too large"); // NON-NLS
+  /** A block that does not fit the memory the viewer has: the work on it is not done. */
+  static final class TooLargeException extends IllegalStateException {
+    TooLargeException(String message) {
+      super(message);
+    }
+  }
+
+  /**
+   * The number of voxels of a block, when an array of them can be made and {@code bytesEach} bytes
+   * for each fit in half the memory the viewer may use. Otherwise the work is refused before
+   * anything is allocated: two long bones at 0.3 mm asked for well over a gigabyte (Astra, 12 Nov
+   * 2026).
+   */
+  static int cells(long nx, long ny, long nz, int bytesEach) {
+    double n = (double) nx * ny * nz;
+    if (n > Integer.MAX_VALUE - 8 || n * bytesEach > Runtime.getRuntime().maxMemory() / 2.0) {
+      throw new TooLargeException(
+          String.format(
+              "the block of %.0f million voxels is too large for the memory the viewer has", // NON-NLS
+              n / 1e6));
     }
     return (int) n;
   }
@@ -2225,7 +2356,9 @@ public final class AutoSplit {
    * around the bone stay 0.
    */
   private static void brightness(float[] g, VoxelBox box, int nx, int ny, int nz, HuSource hu) {
+    Thread caller = Thread.currentThread();
     for (int z = 1; z < nz - 1; z++) {
+      RegionGrow.checkCancelled(caller);
       int gz = box.z0() + z - 1;
       for (int y = 1; y < ny - 1; y++) {
         int gy = box.y0() + y - 1;
