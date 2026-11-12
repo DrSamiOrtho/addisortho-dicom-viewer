@@ -29,8 +29,13 @@ final class SplitWorker extends SwingWorker<Split, Void> {
     SPLIT
   }
 
-  /** How deep into each of two bones their border may move when it is drawn again. */
-  static final double BORDER_BAND_MM = 3;
+  /**
+   * How deep into each of two bones their border may move when it is drawn again between two
+   * clicks. It was 3 mm; where the find had put the border a centimetre from the joint (a slice of
+   * the cuboid left with the fifth metatarsal, 12 Nov 2026) no click could bring it back. Each bone
+   * still keeps for certain what lies further than this from the other.
+   */
+  static final double BORDER_BAND_MM = 12;
 
   private final Kind kind;
   private final Bone bone;

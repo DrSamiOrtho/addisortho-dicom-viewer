@@ -264,6 +264,151 @@ class AutoSplitTest {
     assertEquals(1, f.fragments());
   }
 
+  private static BoxMask where(Phantom p, Phantom.Shape in) {
+    BitVolume bits = new BitVolume(p.sizeX, p.sizeY, p.sizeZ);
+    for (int z = 0; z < p.sizeZ; z++) {
+      for (int y = 0; y < p.sizeY; y++) {
+        for (int x = 0; x < p.sizeX; x++) {
+          if (in.hu(x, y, z) > 0) {
+            bits.set(x, y, z);
+          }
+        }
+      }
+    }
+    return BoxMask.trimmed(VoxelBox.of(p.sizeX, p.sizeY, p.sizeZ), bits);
+  }
+
+  private static Result twoPieces(BoxMask lower, BoxMask upper) {
+    return new Result(
+        List.of(
+            new AutoSplit.Piece(upper, new int[] {20, 20, 30}, 0),
+            new AutoSplit.Piece(lower, new int[] {20, 20, 8}, 0)),
+        0,
+        0,
+        2,
+        0);
+  }
+
+  /**
+   * The border the find left four voxels off the joint is drawn again on the joint line (Sami, 12
+   * Nov 2026: on a foot CT a slice of the cuboid went with the fifth metatarsal). Two bones along z
+   * meet at a line of 300 HU at z 19; the pieces came apart between z 15 and 16. The narrowest band
+   * cannot reach the line, the next one can, and is taken because the border then lies on it.
+   */
+  @Test
+  void aBorderOffTheJointIsDrawnAgainOnTheJointLine() {
+    Phantom joint = pressedTogether(300, 8);
+    BoxMask lower = where(joint, (x, y, z) -> z <= 15 ? joint.huAt(x, y, z) : 0);
+    BoxMask upper = where(joint, (x, y, z) -> z >= 16 ? joint.huAt(x, y, z) : 0);
+    long voxels = lower.count() + upper.count();
+
+    Result r =
+        AutoSplit.refineBorders(
+            twoPieces(lower, upper), () -> joint, AutoSplit.Options.of(1, 1, 1));
+
+    assertEquals(2, r.pieces().size());
+    assertEquals(voxels, voxels(r), "no voxel added or lost");
+    BoxMask up = r.pieces().get(0).mask();
+    BoxMask low = r.pieces().get(1).mask();
+    assertTrue(
+        low.box().z1() >= 18 && low.box().z1() <= 19, "lower bone up to z " + low.box().z1());
+    assertTrue(up.box().z0() >= 19 && up.box().z0() <= 20, "upper bone from z " + up.box().z0());
+    for (int z = 4; z <= 35; z++) {
+      assertTrue(low.contains(20, 20, z) != up.contains(20, 20, z), "one bone at z " + z);
+    }
+  }
+
+  /**
+   * Where the CT shows no joint line the border moves no further than the narrowest band: a wider
+   * one is taken only onto a joint. One rod of bone cut in two between z 15 and 16.
+   */
+  @Test
+  void aBorderWithNoJointLineStaysWithinTheNarrowBand() {
+    Phantom rod =
+        new Phantom(
+            40,
+            40,
+            40,
+            (x, y, z) -> z >= 4 && z <= 35 && Phantom.inDisc(x, y, 20, 20, 8) ? 700 : 0);
+    BoxMask lower = where(rod, (x, y, z) -> z <= 15 ? rod.huAt(x, y, z) : 0);
+    BoxMask upper = where(rod, (x, y, z) -> z >= 16 ? rod.huAt(x, y, z) : 0);
+
+    Result r =
+        AutoSplit.refineBorders(twoPieces(lower, upper), () -> rod, AutoSplit.Options.of(1, 1, 1));
+
+    assertEquals(2, r.pieces().size(), "the two pieces are not joined");
+    assertEquals(lower.count() + upper.count(), voxels(r));
+    int top = r.pieces().get(1).mask().box().z1();
+    assertTrue(top >= 13 && top <= 18, "the lower piece ends at z " + top);
+  }
+
+  /**
+   * A wider band never swallows a small bone: a rod with a dark line at z 22, cut between z 15 and
+   * 16. Moving the border onto the line would leave the upper piece two of its eight slices, so it
+   * is refused and the border stays within the narrowest band (an elbow CT, 12 Nov 2026: a piece of
+   * 4 cm3 went almost whole to its neighbour).
+   */
+  @Test
+  void aWiderBandDoesNotSwallowASmallBone() {
+    Phantom rod =
+        new Phantom(
+            40,
+            40,
+            40,
+            (x, y, z) ->
+                z >= 4 && z <= 23 && Phantom.inDisc(x, y, 20, 20, 8) ? (z == 22 ? 300 : 700) : 0);
+    BoxMask lower = where(rod, (x, y, z) -> z <= 15 ? rod.huAt(x, y, z) : 0);
+    BoxMask upper = where(rod, (x, y, z) -> z >= 16 ? rod.huAt(x, y, z) : 0);
+
+    Result r =
+        AutoSplit.refineBorders(twoPieces(lower, upper), () -> rod, AutoSplit.Options.of(1, 1, 1));
+
+    assertEquals(2, r.pieces().size());
+    BoxMask small = r.pieces().get(1).mask();
+    assertTrue(small.count() >= 0.5 * upper.count(), "the small piece keeps its body");
+    assertTrue(
+        small.box().z0() <= 18, "its border stayed within the narrow band: z " + small.box().z0());
+  }
+
+  /**
+   * Two hollow bones along z, bright shells round dark marrow, pressed together at a line of 350 HU
+   * at z 19, as one mask. Clicks in the marrow of each, where a click on a slice lands, split them
+   * at the line (Sami, 12 Nov 2026: such clicks gave one side nearly everything, because everything
+   * beyond the marrow was reached later than from the other click).
+   */
+  @Test
+  void clicksInTheMarrowOfTwoBonesSplitThemAtTheJoint() throws BoneSplit.SplitException {
+    Phantom hollow =
+        new Phantom(
+            40,
+            40,
+            40,
+            (x, y, z) -> {
+              if (z < 4 || z > 35 || !Phantom.inDisc(x, y, 20, 20, 10)) {
+                return 0;
+              }
+              if (z == 19) {
+                return 350;
+              }
+              boolean plate = z <= 5 || z >= 34 || (z >= 17 && z <= 21);
+              return plate || !Phantom.inDisc(x, y, 20, 20, 8) ? 1200 : 150;
+            });
+    BoxMask both = where(hollow, hollow::huAt);
+    for (int[][] clicks :
+        new int[][][] {
+          {{20, 20, 10}, {20, 20, 28}}, // both in marrow
+          {{20, 20, 10}, {20, 29, 28}}, // marrow and cortex
+          {{14, 22, 7}, {25, 17, 32}}
+        }) {
+      BoneSplit.Split s = AutoSplit.splitBetween(both, clicks[0], clicks[1], 1, 1, 1, hollow);
+      assertEquals(both.count(), s.kept().count() + s.cut().count());
+      int keptTop = s.kept().box().z1();
+      int cutBottom = s.cut().box().z0();
+      assertTrue(keptTop >= 18 && keptTop <= 19, "the lower bone ends at z " + keptTop);
+      assertTrue(cutBottom >= 19 && cutBottom <= 20, "the upper bone starts at z " + cutBottom);
+    }
+  }
+
   @Test
   void aCoarseGridStillSplitsTheJoint() {
     Result r = split(Phantom.twoBones(), AutoSplit.Options.of(1, 1, 1).withMaxWorkVoxels(10_000));

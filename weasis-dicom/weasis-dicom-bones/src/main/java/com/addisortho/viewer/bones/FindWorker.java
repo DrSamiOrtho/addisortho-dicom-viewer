@@ -38,7 +38,9 @@ final class FindWorker extends SwingWorker<AutoSplit.Result, Void> {
     AutoSplit.Options options =
         AutoSplit.Options.of(
             ct.grid().columnSpacing(), ct.grid().rowSpacing(), ct.grid().sliceSpacing());
-    AutoSplit.Result r = AutoSplit.split(box, ct::huSource, shown, options);
+    AutoSplit.Result r =
+        AutoSplit.refineBorders(
+            AutoSplit.split(box, ct::huSource, shown, options), ct::huSource, options);
     LOGGER.info(
         "Bones found: {} bones, {} fragments joined, {} specks dropped, grid factor {}, {} ms",
         r.pieces().size(),

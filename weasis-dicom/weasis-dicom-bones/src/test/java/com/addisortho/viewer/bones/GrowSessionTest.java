@@ -36,13 +36,9 @@ class GrowSessionTest {
       }
     }
     int id = s.newId();
+    BoxMask mask = new BoxMask(box, bits);
     return new Bone(
-        id,
-        label,
-        s.colorOf(id),
-        new BoxMask(box, bits),
-        new int[] {box.x0(), box.y0(), box.z0()},
-        null);
+        id, label, s.colorOf(id, mask), mask, new int[] {box.x0(), box.y0(), box.z0()}, null);
   }
 
   @Test

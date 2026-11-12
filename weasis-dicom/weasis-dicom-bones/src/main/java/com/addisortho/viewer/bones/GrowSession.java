@@ -28,17 +28,6 @@ import org.dcm4che3.util.UIDUtils;
 final class GrowSession {
 
   /** Colours given to the bones in turn: bone, then distinct hues for the neighbours. */
-  private static final Color[] COLORS = {
-    new Color(241, 214, 145),
-    new Color(111, 184, 210),
-    new Color(216, 101, 79),
-    new Color(128, 174, 128),
-    new Color(183, 156, 220),
-    new Color(220, 200, 60),
-    new Color(240, 140, 190),
-    new Color(90, 130, 220)
-  };
-
   /** A bone found near a voxel, and its voxel nearest to it. */
   record Found(Bone bone, int[] voxel) {}
 
@@ -114,8 +103,9 @@ final class GrowSession {
     return nextId++;
   }
 
-  Color colorOf(int id) {
-    return COLORS[(id - 1) % COLORS.length];
+  /** A colour for a new bone with this mask: one that no bone touching it has. */
+  Color colorOf(int id, BoxMask mask) {
+    return BoneColors.pick(id, mask, bones);
   }
 
   /** The masks of every bone but {@code id}. */
