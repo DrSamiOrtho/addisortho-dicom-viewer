@@ -10,6 +10,8 @@ package com.addisortho.viewer.bones;
 
 import com.addisortho.viewer.bones.grow.AutoSplit;
 import com.addisortho.viewer.bones.grow.VoxelBox;
+import java.awt.Color;
+import java.util.List;
 import javax.swing.SwingWorker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +24,7 @@ final class FindWorker extends SwingWorker<AutoSplit.Result, Void> {
   private final CtSource ct;
   private final VoxelBox box;
   private final AutoSplit.Shown shown;
+  private volatile List<Color> colours;
 
   FindWorker(CtSource ct, VoxelBox box, AutoSplit.Shown shown) {
     this.ct = ct;
@@ -33,6 +36,14 @@ final class FindWorker extends SwingWorker<AutoSplit.Result, Void> {
     return ct;
   }
 
+  /**
+   * A colour for each bone found, in their order. Which bones touch is worked out here and not on
+   * the event dispatch thread: it looks through the voxels of every pair (Astra, 12 Nov 2026).
+   */
+  List<Color> colours() {
+    return colours;
+  }
+
   @Override
   protected AutoSplit.Result doInBackground() {
     AutoSplit.Options options =
@@ -41,6 +52,7 @@ final class FindWorker extends SwingWorker<AutoSplit.Result, Void> {
     AutoSplit.Result r =
         AutoSplit.refineBorders(
             AutoSplit.split(box, ct::huSource, shown, options), ct::huSource, options);
+    colours = BoneColors.assign(r.pieces().stream().map(AutoSplit.Piece::mask).toList());
     LOGGER.info(
         "Bones found: {} bones, {} fragments joined, {} specks dropped, grid factor {}, {} ms",
         r.pieces().size(),

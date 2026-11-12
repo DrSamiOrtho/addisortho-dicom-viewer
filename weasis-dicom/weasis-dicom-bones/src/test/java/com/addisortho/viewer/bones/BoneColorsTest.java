@@ -56,6 +56,24 @@ class BoneColorsTest {
     assertFalse(BoneColors.near(new BoxMask(box, bits), block(30, 36, 30, 36), 3));
   }
 
+  private static BoxMask voxel(int x, int y, int z) {
+    BitVolume bits = new BitVolume(1, 1, 1);
+    bits.set(0, 0, 0);
+    return new BoxMask(new VoxelBox(x, x, y, y, z, z), bits);
+  }
+
+  /** Bones that meet only corner to corner are neighbours too (Astra, 12 Nov 2026). */
+  @Test
+  void bonesThatMeetCornerToCornerAreNear() {
+    assertTrue(BoneColors.near(voxel(0, 0, 0), voxel(1, 1, 0), 3));
+    assertTrue(BoneColors.near(voxel(0, 0, 0), voxel(3, 3, 3), 3));
+    assertTrue(BoneColors.near(voxel(0, 0, 0), voxel(-3, 2, -1), 3));
+    assertFalse(BoneColors.near(voxel(0, 0, 0), voxel(4, 0, 0), 3));
+    assertFalse(BoneColors.near(voxel(0, 0, 0), voxel(4, 4, 4), 3));
+    // a block and a block off its corner, two voxels away along each axis
+    assertTrue(BoneColors.near(block(0, 9, 0, 9), block(12, 20, 12, 20), 3));
+  }
+
   /**
    * Twenty bones in a row, each touching the next, with the ninth also touching the first as the
    * eight-colour round did in a foot: no two neighbours share a colour.

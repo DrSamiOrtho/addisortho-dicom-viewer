@@ -761,8 +761,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       return;
     }
     List<Bone> bones = new ArrayList<>();
-    List<Color> colours =
-        BoneColors.assign(result.pieces().stream().map(AutoSplit.Piece::mask).toList());
+    List<Color> colours = done.colours();
     for (AutoSplit.Piece piece : result.pieces()) {
       int id = session.newId();
       bones.add(
@@ -1234,7 +1233,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
             found.get().bone(),
             found.get().voxel(),
             mm,
-            ct.huSource()));
+            ct.huSource(),
+            session.bones()));
   }
 
   private static void startGrow(View3d view, CtSource ct, GrowSession session, int[] voxel)
@@ -1433,7 +1433,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
           new Bone(
               fragmentId,
               fragmentName,
-              session.colorOf(fragmentId, split.cut()),
+              done.takenColours() == null
+                  ? session.colorOf(fragmentId, split.cut())
+                  : BoneColors.pick(fragmentId, done.takenColours()),
               split.cut(),
               done.voxel(),
               "Separated from " + bone.label() + "; not reviewed"); // NON-NLS

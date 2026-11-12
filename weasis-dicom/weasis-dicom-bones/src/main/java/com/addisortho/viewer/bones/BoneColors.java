@@ -63,12 +63,25 @@ final class BoneColors {
 
   /** A colour for a new bone beside the bones that are there. */
   static Color pick(int id, BoxMask mask, List<Bone> others) {
+    return pick(id, taken(mask, others));
+  }
+
+  /**
+   * The colours of the bones beside {@code mask}. This looks through voxels, so a worker asks it
+   * and the event dispatch thread only picks: see {@link #pick(int, List)}.
+   */
+  static List<Color> taken(BoxMask mask, List<Bone> others) {
     List<Color> taken = new ArrayList<>();
     for (Bone b : others) {
       if (near(mask, b.mask(), REACH)) {
         taken.add(b.color());
       }
     }
+    return taken;
+  }
+
+  /** A colour for a new bone that none of its neighbours has. */
+  static Color pick(int id, List<Color> taken) {
     return firstFree(id - 1, taken);
   }
 
@@ -83,7 +96,13 @@ final class BoneColors {
     return PALETTE[Math.floorMod(start, PALETTE.length)];
   }
 
-  /** Whether some voxel of {@code a} lies within {@code reach} voxels of one of {@code b}. */
+  /**
+   * Whether some voxel of {@code a} lies within {@code reach} voxels of one of {@code b}, along
+   * each axis: the cube round it, so two bones that meet only corner to corner are neighbours too
+   * (until 12 Nov 2026 only the six axis directions were looked along, and such a pair could get
+   * one colour: Astra). Only the voxels on the surface of the smaller mask are asked, nearest
+   * offsets first; a voxel inside it has a surface voxel between it and anything outside.
+   */
   static boolean near(BoxMask a, BoxMask b, int reach) {
     if (a.count() > b.count()) {
       return near(b, a, reach);
@@ -102,18 +121,37 @@ final class BoneColors {
       }
       for (int y = y0; y <= y1; y++) {
         for (int x = x0; x <= x1; x++) {
-          if (!a.contains(x, y, z)) {
+          if (!a.contains(x, y, z) || inside(a, x, y, z)) {
             continue;
           }
           for (int r = 0; r <= reach; r++) {
-            if (b.contains(x + r, y, z)
-                || b.contains(x - r, y, z)
-                || b.contains(x, y + r, z)
-                || b.contains(x, y - r, z)
-                || b.contains(x, y, z + r)
-                || b.contains(x, y, z - r)) {
+            if (onShell(b, x, y, z, r)) {
               return true;
             }
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  private static boolean inside(BoxMask a, int x, int y, int z) {
+    return a.contains(x + 1, y, z)
+        && a.contains(x - 1, y, z)
+        && a.contains(x, y + 1, z)
+        && a.contains(x, y - 1, z)
+        && a.contains(x, y, z + 1)
+        && a.contains(x, y, z - 1);
+  }
+
+  // whether b holds a voxel exactly r away from (x, y, z) along its furthest axis
+  private static boolean onShell(BoxMask b, int x, int y, int z, int r) {
+    for (int dz = -r; dz <= r; dz++) {
+      for (int dy = -r; dy <= r; dy++) {
+        boolean face = Math.abs(dz) == r || Math.abs(dy) == r;
+        for (int dx = -r; dx <= r; dx += face || r == 0 ? 1 : 2 * r) {
+          if (b.contains(x + dx, y + dy, z + dz)) {
+            return true;
           }
         }
       }
