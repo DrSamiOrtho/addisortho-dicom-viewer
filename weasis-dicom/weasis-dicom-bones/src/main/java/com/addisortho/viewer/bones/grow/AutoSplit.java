@@ -1095,6 +1095,8 @@ public final class AutoSplit {
       private final double ux = o.mmX() * fx;
       private final double uy = o.mmY() * fy;
       private final double uz = o.mmZ() * fz;
+      // the squared mm from the voxel last asked to the large piece nearestTo gave for it
+      private double foundMm2;
 
       Reach(int[] label, long[] voxels, int count) {
         this.label = label;
@@ -1112,24 +1114,25 @@ public final class AutoSplit {
             nearestMm2[m] = g[i];
           }
         }
-        // Every voxel of a piece that lies at its least distance is asked which large pieces are
-        // exactly that near, so two bones equally near different ends of a long fragment are both
-        // seen and the tie is settled by rule (Astra, 11 Nov 2026). Each asks only the voxels at
-        // that distance from it, a shell and not the cube round it, so a fragment lying flat
-        // against a bone, with hundreds of such voxels, costs little; none is left out.
+        // Every voxel of a piece that lies at its least distance is asked which large piece is
+        // that near, so two bones equally near different ends of a long fragment are both seen
+        // (Astra, 11 Nov 2026). Each asks only the voxels at that distance from it, a shell and
+        // not the cube round it. The nearer wins by the distance worked out afresh in full
+        // precision; only pieces truly equally near are settled by size, then by order.
         target = new int[count + 1];
         Arrays.fill(target, -1);
+        double[] targetMm2 = new double[count + 1];
         double reach2 = o.attachMm() * o.attachMm();
-        int asked = 0;
         for (int i = 0; i < g.length; i++) {
           int m = label[i];
           if (m > 0 && !large(m) && g[i] <= reach2 && g[i] <= nearestMm2[m] * (1 + 1e-6) + 1e-6) {
-            if ((asked++ & 0xFF) == 0) {
-              RegionGrow.checkCancelled(caller);
-            }
             int to = nearestTo(i, g[i], m);
-            if (to > 0 && (target[m] < 0 || better(to, target[m]))) {
+            if (to > 0
+                && (target[m] < 0
+                    || nearer(foundMm2, targetMm2[m])
+                    || (same(foundMm2, targetMm2[m]) && better(to, target[m])))) {
               target[m] = to;
+              targetMm2[m] = foundMm2;
             }
           }
         }
@@ -1144,15 +1147,27 @@ public final class AutoSplit {
         return voxels[a] > voxels[b] || (voxels[a] == voxels[b] && a < b);
       }
 
+      private static boolean same(double a, double b) {
+        return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.max(a, b));
+      }
+
+      private static boolean nearer(double a, double b) {
+        return a < b && !same(a, b);
+      }
+
       /** The large piece nearest piece {@code l}, within the reach; -1 when there is none. */
       int nearestLarge(int l) {
         return target[l];
       }
 
       /**
-       * The best of the large pieces that lie exactly {@code mm2} (squared mm) from working voxel
-       * {@code i}, the distance the transform gave it: for each row and slice offset the one or two
-       * columns that complete that distance are looked at, nothing else.
+       * The large piece nearest working voxel {@code i}, which the transform put {@code mm2}
+       * (squared mm, single precision) from one; its squared distance in full precision is left in
+       * {@link #foundMm2}. For each row and slice offset only the columns that can complete that
+       * distance are looked at: every column whose own squared distance lies within the transform's
+       * rounding of the rest, which is one or two columns unless the columns are far finer than the
+       * rows, and then as many as the rounding spans. Among what is found the nearest by the
+       * recomputed distance wins.
        */
       private int nearestTo(int i, double mm2, int self) {
         int x = i % wx;
@@ -1162,7 +1177,9 @@ public final class AutoSplit {
         int ry = (int) Math.floor(Math.sqrt(mm2 + tol) / uy);
         int rz = (int) Math.floor(Math.sqrt(mm2 + tol) / uz);
         int best = -1;
+        double bestMm2 = Double.POSITIVE_INFINITY;
         for (int dz = -rz; dz <= rz; dz++) {
+          RegionGrow.checkCancelled(caller);
           int pz = z + dz;
           if (pz < 0 || pz >= wz) {
             continue;
@@ -1173,24 +1190,31 @@ public final class AutoSplit {
             if (py < 0 || py >= wy || rest < -tol) {
               continue;
             }
-            int dx = (int) Math.round(Math.sqrt(Math.max(0, rest)) / ux);
-            if (Math.abs(sq(dx * ux) - rest) > tol) {
-              continue;
-            }
-            for (int side = -1; side <= 1; side += 2) {
-              int px = x + side * dx;
-              if (px >= 0 && px < wx) {
-                int m = label[index(px, py, pz)];
-                if (m != self && large(m) && (best < 0 || better(m, best))) {
-                  best = m;
+            int from = (int) Math.ceil(Math.sqrt(Math.max(0, rest - tol)) / ux - 1e-9);
+            int to = (int) Math.floor(Math.sqrt(rest + tol) / ux + 1e-9);
+            for (int dx = from; dx <= to; dx++) {
+              double d2 = sq(dx * ux) + sq(dy * uy) + sq(dz * uz);
+              for (int side = -1; side <= 1; side += 2) {
+                int px = x + side * dx;
+                if (px >= 0 && px < wx) {
+                  int m = label[index(px, py, pz)];
+                  if (m != self
+                      && large(m)
+                      && (best < 0
+                          || nearer(d2, bestMm2)
+                          || (same(d2, bestMm2) && better(m, best)))) {
+                    best = m;
+                    bestMm2 = d2;
+                  }
                 }
-              }
-              if (dx == 0) {
-                break;
+                if (dx == 0) {
+                  break;
+                }
               }
             }
           }
         }
+        foundMm2 = bestMm2;
         return best;
       }
     }

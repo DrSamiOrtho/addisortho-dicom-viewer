@@ -202,6 +202,68 @@ class AutoSplitTest {
     assertTrue(r.pieces().get(0).mask().contains(18, 20, 20));
   }
 
+  /**
+   * Nearly equally near is not equally near: a fragment 6 voxels from a bone along the columns and
+   * 6 from a larger bone along rows that are a hair wider (1.00001 mm) goes to the nearer, smaller
+   * bone. And where the columns are far finer than the rows, the bone straight along a row is still
+   * found (Astra, 12 Nov 2026).
+   */
+  @Test
+  void theNearerBoneWinsOverALargerOneAHairFurther() {
+    Phantom scene =
+        new Phantom(
+            60,
+            70,
+            40,
+            (x, y, z) -> {
+              boolean slab = z >= 10 && z <= 29;
+              boolean chip = slab && x >= 28 && x <= 31 && y >= 20 && y <= 23 && z >= 18 && z <= 21;
+              boolean nearA = slab && x >= 37 && x <= 46 && y >= 13 && y <= 22; // 6 columns away
+              boolean largerB = slab && x >= 10 && x <= 50 && y >= 29 && y <= 60; // 6 rows away
+              return chip || nearA || largerB ? 700 : 0;
+            });
+    Result r = split(scene, AutoSplit.Options.of(1, 1.00001, 1));
+    assertEquals(2, r.pieces().size());
+    assertEquals(1, r.fragments());
+    assertEquals(0, r.pieces().get(0).fragments(), "the larger bone, a hair further, has none");
+    assertEquals(1, r.pieces().get(1).fragments(), "the nearer one has the chip");
+
+    // columns of 0.05 mm against rows and slices of 1 mm
+    Phantom fine =
+        new Phantom(
+            40,
+            40,
+            20,
+            (x, y, z) -> {
+              boolean bone = x >= 5 && x <= 35 && y >= 4 && y <= 14 && z >= 4 && z <= 15;
+              boolean chip = x >= 10 && x <= 30 && y >= 18 && y <= 20 && z >= 8 && z <= 11;
+              return bone || chip ? 700 : 0;
+            });
+    AutoSplit.Options o = AutoSplit.Options.of(0.05, 1, 1);
+    Result f =
+        split(
+            fine,
+            new AutoSplit.Options(
+                o.boneHu(),
+                o.denseHu(),
+                o.mmX(),
+                o.mmY(),
+                o.mmZ(),
+                1,
+                o.minDepthMm(),
+                o.neckRatio(),
+                50, // the bone is 205 mm3, the chip 13
+                o.attachMm(),
+                0.5,
+                o.maxWorkVoxels(),
+                0,
+                o.jointReachMm(),
+                o.jointMaxHu(),
+                o.maxJointVoxels()));
+    assertEquals(1, f.pieces().size(), "the chip 4 rows from the bone is its fragment");
+    assertEquals(1, f.fragments());
+  }
+
   @Test
   void aCoarseGridStillSplitsTheJoint() {
     Result r = split(Phantom.twoBones(), AutoSplit.Options.of(1, 1, 1).withMaxWorkVoxels(10_000));
