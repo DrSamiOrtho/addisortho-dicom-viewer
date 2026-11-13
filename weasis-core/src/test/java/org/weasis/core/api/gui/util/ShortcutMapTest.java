@@ -52,6 +52,20 @@ class ShortcutMapTest {
   }
 
   @Test
+  void marksKeysAreFreeInTheViewer() throws IllegalAccessException {
+    key(ShortcutManager.ID_DICOM_SAVE_MARKS, KeyEvent.VK_S, CTRL);
+    key(ShortcutManager.ID_DICOM_TOGGLE_MARKS, KeyEvent.VK_D, 0);
+    assertTrue(
+        sm.findConflicts(ShortcutManager.ID_DICOM_SAVE_MARKS, KeyEvent.VK_S, CTRL).isEmpty());
+    assertTrue(sm.findConflicts(ShortcutManager.ID_DICOM_TOGGLE_MARKS, KeyEvent.VK_D, 0).isEmpty());
+    for (java.lang.reflect.Field f : ActionW.class.getFields()) {
+      if (f.get(null) instanceof KeyActionValue a && a.getKeyCode() == KeyEvent.VK_D) {
+        assertTrue(a.getModifier() != 0, "a tool already uses D: " + f.getName());
+      }
+    }
+  }
+
+  @Test
   void viewKeys() {
     key(ShortcutManager.ID_VIEWER_FULLSCREEN, KeyEvent.VK_F, 0);
     key(ShortcutManager.ID_VIEWER_INVERT, KeyEvent.VK_F11, 0);
