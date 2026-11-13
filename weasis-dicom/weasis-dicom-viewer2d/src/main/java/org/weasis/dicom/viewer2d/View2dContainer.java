@@ -23,6 +23,7 @@ import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
+import javax.swing.JPopupMenu;
 import javax.swing.JSeparator;
 import javax.swing.SwingUtilities;
 import org.dcm4che3.data.Tag;
@@ -241,7 +242,13 @@ public class View2dContainer extends DicomViewerPlugin implements PropertyChange
           InsertableUtil.getCName(MeasureToolBar.class),
           key,
           true)) {
-        toolBars.add(new MeasureToolBar(evtMg, 11));
+        toolBars.add(
+            new MeasureToolBar(evtMg, 11) {
+              @Override
+              protected void extendDrawMenu(JPopupMenu menu) {
+                SavedMarks.addMenuItems(menu, EventManager.getInstance());
+              }
+            });
       }
       if (InsertableUtil.getBooleanProperty(
           preferences,
