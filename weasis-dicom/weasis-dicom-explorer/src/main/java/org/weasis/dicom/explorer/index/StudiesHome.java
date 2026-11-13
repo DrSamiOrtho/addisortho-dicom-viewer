@@ -449,7 +449,7 @@ public final class StudiesHome extends JPanel {
 
     detailRows.setOpaque(false);
     detailRows.setLayout(
-        new MigLayout("wrap 2, fillx, ins 0, gapy 4lp", "[88lp!][grow,fill]")); // NON-NLS
+        new MigLayout("wrap 2, fillx, ins 0, gapy 4lp", "[pref!][grow,fill]")); // NON-NLS
 
     TrackingPanel content = new TrackingPanel();
     content.setOpaque(false);
@@ -459,12 +459,14 @@ public final class StudiesHome extends JPanel {
     content.add(new JLabel(Messages.getString("index.selected")));
     content.add(detailName, "wmin 0"); // NON-NLS
     content.add(openButton);
-    JPanel share = new JPanel(new GridLayout(1, 0, GuiUtils.getScaleLength(GAP), 0));
+    JPanel share =
+        new JPanel(
+            new MigLayout(
+                "ins 0, fillx, hidemode 3, gapx " + GAP + "lp", // NON-NLS
+                "[grow,fill,sg share][grow,fill,sg share]")); // NON-NLS
     share.setOpaque(false);
     share.add(exportButton);
-    if (sendButton.isVisible()) {
-      share.add(sendButton);
-    }
+    share.add(sendButton);
     content.add(share);
     content.add(detailRows, "gaptop 8lp, wmin 0"); // NON-NLS
     JScrollPane scroll = new JScrollPane(content);
@@ -815,6 +817,7 @@ public final class StudiesHome extends JPanel {
     headerOpen.setEnabled(selected);
     exportButton.setEnabled(study);
     sendButton.setEnabled(study);
+    sendButton.setVisible(sendIsInstalled()); // checked again: the send bundle may start after this
     keepItem.setEnabled(temporaryFolder != null && !temporary.isEmpty());
     showDetails(s);
   }

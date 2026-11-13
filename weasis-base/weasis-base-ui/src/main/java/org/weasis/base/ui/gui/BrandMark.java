@@ -47,6 +47,7 @@ class BrandMark extends JButton {
     setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
     setToolTipText(Messages.getString("BrandMark.home"));
     addActionListener(_ -> goHome());
+    AppShell.getInstance().whenHome(() -> setVisible(false)); // the rail carries the mark then
   }
 
   @Override

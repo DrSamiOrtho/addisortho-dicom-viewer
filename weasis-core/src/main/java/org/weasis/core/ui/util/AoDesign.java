@@ -63,8 +63,8 @@ public final class AoDesign {
   private static final String LIGHT_BUTTON =
       "background:#FFFFFF; foreground:#14201C; borderColor:#7A8A84; hoverBackground:#EDF1EF;"
           + " pressedBackground:#D9E0DD; focusedBorderColor:#034537; focusColor:#034537;"
-          + " focusedBackground:#FFFFFF; hoverBorderColor:#034537; disabledBorderColor:#D9E0DD;"
-          + " disabledText:#8E9A95; arc:12"; // NON-NLS
+          + " focusedBackground:#FFFFFF; hoverBorderColor:#034537; disabledBackground:#F4F6F5;"
+          + " disabledBorderColor:#D9E0DD; disabledText:#8E9A95; arc:12"; // NON-NLS
   private static final String PRIMARY_BUTTON =
       "background:#034537; foreground:#FFFFFF; borderColor:#034537; hoverBackground:#075A48;"
           + " pressedBackground:#02352B; focusedBorderColor:#A8FF30; focusColor:#034537;"

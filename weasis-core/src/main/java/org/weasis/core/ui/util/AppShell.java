@@ -15,17 +15,20 @@ import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Insets;
 import java.awt.RenderingHints;
+import java.util.ArrayList;
+import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
+import javax.swing.JButton;
 import javax.swing.JComponent;
-import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JToggleButton;
 import javax.swing.SwingConstants;
@@ -60,6 +63,7 @@ public final class AppShell {
   private Place current = Place.REVIEW;
   private boolean reviewAsked;
   private Runnable returnToViewer = () -> {};
+  private final List<Runnable> homeListeners = new ArrayList<>();
 
   AppShell() {
     rail.setVisible(false);
@@ -76,8 +80,14 @@ public final class AppShell {
         });
     studies.setEnabled(false);
     rail.add(Box.createVerticalStrut(UIScale.scale(AoDesign.GAP_SMALL)));
-    JLabel mark = new JLabel(ResourceUtil.getIcon(ResourceUtil.LogoIcon.SMALL, 38, 38));
-    mark.getAccessibleContext().setAccessibleName("Addis Ortho");
+    JButton mark = new JButton(ResourceUtil.getIcon(ResourceUtil.LogoIcon.SMALL, 38, 38));
+    mark.getAccessibleContext().setAccessibleName(Messages.getString("shell.home"));
+    mark.setToolTipText(Messages.getString("shell.home"));
+    mark.setBorder(BorderFactory.createEmptyBorder());
+    mark.setContentAreaFilled(false);
+    mark.setFocusPainted(false);
+    mark.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+    mark.addActionListener(_ -> show(Place.STUDIES));
     mark.setAlignmentX(Component.CENTER_ALIGNMENT);
     rail.add(Box.createVerticalStrut(UIScale.scale(10)));
     rail.add(mark);
@@ -113,6 +123,8 @@ public final class AppShell {
     cards.add(homeScreen, Place.STUDIES.name());
     studies.setEnabled(true);
     rail.setVisible(true);
+    homeListeners.forEach(Runnable::run);
+    homeListeners.clear();
     if (!reviewAsked) {
       show(Place.STUDIES);
     }
@@ -120,6 +132,15 @@ public final class AppShell {
 
   public boolean hasHome() {
     return home != null;
+  }
+
+  /** Runs {@code action} once the studies home is there: now, or when it is set. */
+  public void whenHome(Runnable action) {
+    if (home != null) {
+      action.run();
+    } else {
+      homeListeners.add(action);
+    }
   }
 
   /** What gives the keyboard back to the viewer when the user returns to it from the rail. */
