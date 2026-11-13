@@ -239,7 +239,19 @@ public final class BitVolume {
    * @throws CancellationException when {@code caller} is interrupted
    */
   void step(BitVolume target, boolean dilate, boolean outside, Thread caller) {
+    step(target, dilate, outside, true, caller);
+  }
+
+  /**
+   * As {@link #step(BitVolume, boolean, boolean, Thread)}; without {@code acrossSlices} the
+   * neighbours in the slices before and after take no part, so the step works within each slice
+   * only. On slices several times as far apart as the pixels are wide, a step across them is that
+   * many in-plane steps long.
+   */
+  void step(
+      BitVolume target, boolean dilate, boolean outside, boolean acrossSlices, Thread caller) {
     checkSameSize(target);
+    long neutral = dilate ? 0L : -1L;
     long border = outside ? -1L : 0L;
     int sliceWords = sizeY * wordsPerRow;
     IntStream.range(0, sizeZ)
@@ -259,8 +271,9 @@ public final class BitVolume {
                   }
                   long up = y > 0 ? words[i - wordsPerRow] : border;
                   long down = y < sizeY - 1 ? words[i + wordsPerRow] : border;
-                  long front = z > 0 ? words[i - sliceWords] : border;
-                  long back = z < sizeZ - 1 ? words[i + sliceWords] : border;
+                  long front = !acrossSlices ? neutral : z > 0 ? words[i - sliceWords] : border;
+                  long back =
+                      !acrossSlices ? neutral : z < sizeZ - 1 ? words[i + sliceWords] : border;
                   long v =
                       dilate
                           ? self | fromLeft | fromRight | up | down | front | back

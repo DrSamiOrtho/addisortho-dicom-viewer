@@ -50,7 +50,7 @@ import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.PluginOpeningStrategy;
-import org.weasis.dicom.explorer.index.FindPatientDialog;
+import org.weasis.dicom.explorer.index.StudiesHome;
 import org.weasis.dicom.explorer.library.StoreNaming;
 import org.weasis.dicom.explorer.library.StoredInstance;
 import org.weasis.dicom.explorer.library.StoredStudy;
@@ -102,13 +102,14 @@ public class ReceiveService implements ReceiveListener {
     batchTimer.scheduleWithFixedDelay(
         this::loadPending, BATCH_INTERVAL_MS, BATCH_INTERVAL_MS, TimeUnit.MILLISECONDS);
     instance = this;
-    FindPatientDialog.registerReceive(Messages.getString("receive.title"), this::statusLine);
-    lifecycle.execute(this::restart);
+    StudiesHome.registerReceive(Messages.getString("receive.title"), this::statusLine);
+    lifecycle.execute(this::restartAndRefresh);
   }
 
   @Deactivate
   protected void deactivate() {
     instance = null;
+    StudiesHome.registerReceive(null, () -> "");
     stopReceiver();
     batchTimer.shutdownNow();
     lifecycle.shutdownNow();
@@ -128,7 +129,7 @@ public class ReceiveService implements ReceiveListener {
     PropertiesUtil.storeProperties(settingsFile, newSettings.toProperties(), null);
     lifecycle.execute(
         () -> {
-          restart();
+          restartAndRefresh();
           GuiExecutor.execute(whenDone);
         });
   }
@@ -167,6 +168,13 @@ public class ReceiveService implements ReceiveListener {
   public StudyStore store() {
     return StudyLibrary.getInstance()
         .useRoot(settings.storageFolder(), settings.includeNameInFileNames());
+  }
+
+  private void restartAndRefresh() {
+    restart();
+    if (instance == this) {
+      StudiesHome.registerReceive(Messages.getString("receive.title"), this::statusLine);
+    }
   }
 
   private void restart() {

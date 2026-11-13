@@ -34,7 +34,9 @@ import org.weasis.dicom.viewer3d.vr.VoxelFlood.IntQueue;
  *
  * <ol>
  *   <li>dense voxels: from the bone threshold up to {@link #METAL_HU}; metal above it is kept
- *       apart, so a fixator pin never joins the bone to the outside;
+ *       apart, and the dense voxels within {@link #METAL_HALO_VOXELS} of it (its blurred rim) are
+ *       set aside until the pieces are told apart where that rim reaches the outside air, so a
+ *       fixator pin never joins the bone to the outside;
  *   <li>outside air: the voxels below {@link #AIR_HU} joined, within their own axial slice, to the
  *       slice's border; in two dimensions the lungs, the bowel and an air gap under a cast never
  *       count as outside, and the volume's own edge is not air, so a bone cut by the first slice or
@@ -51,9 +53,14 @@ import org.weasis.dicom.viewer3d.vr.VoxelFlood.IntQueue;
  *       spaces, while the specks in a pad, the sheet of a table board and the marker on a pad go,
  *       and a string of specks cannot carry the bone far along a pad seam. Without any piece of
  *       {@link #SEED_MM3} the largest internal piece serves as the seed;
- *   <li>the bone region: each kept piece with its own holes filled slice by slice (the marrow canal
- *       and a nail inside it stay), so two bones never close a hole between them over pad or soft
- *       tissue; the dropped pieces are out before the fill;
+ *   <li>each kept piece grows into the voxels that touch it and are a little less dense, down to
+ *       {@link #GROW_BELOW_HU} under the bone threshold and no further than {@link #GROW_MM}: the
+ *       thin cortex of an osteopenic bone on a standard kernel reads under the threshold, so the
+ *       shell of a condyle or a radial head is open there and its inside would be cut away. The
+ *       threshold still decides alone which pieces are bone; the growth only completes them;
+ *   <li>the bone region: each kept piece, grown, with its own holes filled slice by slice (the
+ *       marrow canal and a nail inside it stay), one piece at a time, so two bones never close a
+ *       hole between them over pad or soft tissue; the dropped pieces are out before the fill;
  *   <li>metal touching a bone of that region, before it is widened, without air contact (a plate, a
  *       nail, a prosthesis) is kept whole; a marker or other metal beside the bone does not touch
  *       it and goes; of metal touching air (a fixator pin, a wire out of the skin) only the part
@@ -67,15 +74,25 @@ import org.weasis.dicom.viewer3d.vr.VoxelFlood.IntQueue;
  * and any bone smaller than {@link #SEED_MM3} in a volume that holds no bigger bone near it. The
  * other way round, a marker or a speck of {@link #NOISE_MM3} or more within {@link #JOIN_MM} of the
  * bone stays, and so does a chain of such specks that starts there, up to {@link #MAX_LINKS} long.
+ * The growth can take what is nearly as dense as bone and touches it: a calcified or
+ * contrast-filled vessel on the bone, or the edge of a cast pressed on a bone under thin skin, for
+ * {@link #GROW_MM} at most. A bone whose cortex reads under the lower value over a wide area still
+ * opens.
  *
  * <p>The result is a guess for display, applied as one undoable cut; it changes no voxel. Memory:
- * four bit volumes of the grid plus the scratch of one slice, all taken from the budget up front,
+ * six bit volumes of the grid plus the scratch of one slice, all taken from the budget up front,
  * and one record per piece between the two sizes.
  */
 public final class BoneIsolation {
 
   /** Dense voxels above this are metal, not bone. */
   public static final double METAL_HU = 2500;
+
+  /**
+   * How many voxels round metal are its blurred rim, set aside while the pieces are told apart and
+   * given back to the bone beside them.
+   */
+  public static final int METAL_HALO_VOXELS = 2;
 
   /** Voxels below this are air. */
   public static final double AIR_HU = -400;
@@ -94,6 +111,21 @@ public final class BoneIsolation {
 
   /** Share of a dense piece's voxels that must touch outside air to make it external. */
   public static final double AIR_CONTACT_SHARE = 0.005;
+
+  /**
+   * How far under the bone threshold, in HU, a voxel touching a kept piece still belongs to it: 150
+   * HU for the 300 HU threshold, near where the bone preset starts to draw, so the bone alone looks
+   * as it does in the whole volume. Soft tissue and marrow stay under it; noise reaches it but far
+   * too seldom to form a chain from the bone.
+   */
+  public static final double GROW_BELOW_HU = 150;
+
+  /**
+   * How far a kept piece grows into such voxels, in mm: an open stretch of weak cortex closes from
+   * both of its ends, so one up to twice this long is closed. Longer costs little on a clean scan
+   * and bounds what a strand of near-bone density on the bone (a vessel, a cast's edge) can add.
+   */
+  public static final double GROW_MM = 5;
 
   /** Widening of the bone region, in grid voxels. */
   public static final int MARGIN_VOXELS = 2;
@@ -217,6 +249,10 @@ public final class BoneIsolation {
     VoxelBits metal = new VoxelBits(sx, sy, sz);
     VoxelBits air = new VoxelBits(sx, sy, sz);
     VoxelBits region = new VoxelBits(sx, sy, sz);
+    VoxelBits soft = new VoxelBits(sx, sy, sz);
+    VoxelBits rim = new VoxelBits(sx, sy, sz);
+    double growHu = boneHu - GROW_BELOW_HU;
+    GrowthSchedule growSchedule = growSchedule(gridVoxelMm);
     byte[] cell = new byte[sliceVoxels];
     IntQueue queue = new IntQueue(1 << 12, budget);
     try {
@@ -226,10 +262,49 @@ public final class BoneIsolation {
           return Optional.empty();
         }
         float[] values = grid.slice(z);
-        classify(values, boneHu, dense.sliceWords(z), metal.sliceWords(z), cell);
+        classify(
+            values,
+            boneHu,
+            growHu,
+            dense.sliceWords(z),
+            metal.sliceWords(z),
+            soft.sliceWords(z),
+            cell);
         floodFromBorder(cell, sx, sy, queue);
         widenAir(cell, values, boneHu, sx, sy, airSteps);
         mark(cell, REACHED, air.sliceWords(z));
+      }
+      boolean anyRim = metal.count() > 0;
+      if (anyRim) {
+        takeMetalRim(dense, metal, rim, region);
+        // Only a rim that reaches the outside air is kept aside: that is the rim of a pin through
+        // the skin, the one that passed for a bridge from the bone to the outside. The rim round a
+        // nail, a screw or a prosthesis touches no air and goes back as the bone it always was, so
+        // a thin bone wholly inside the rim of its implant is still a piece of its own and is not
+        // lost with it (Astra, 11 Nov 2026).
+        for (int z = 0; z < sz; z++) {
+          long[] r = rim.sliceWords(z);
+          for (int w = 0; w < r.length; w++) {
+            while (r[w] != 0) {
+              if (cancelled.getAsBoolean()) {
+                return Optional.empty();
+              }
+              int i = (w << 6) + Long.numberOfTrailingZeros(r[w]);
+              int x = i % sx;
+              int y = i / sx;
+              Piece part = flood(rim, region, air, null, x, y, z, queue);
+              if (part.airVoxels() == 0) {
+                flood(region, dense, null, null, x, y, z, queue);
+              }
+            }
+          }
+        }
+        // The rim volume is empty now and the parts kept aside are in the region's: they change
+        // places, so the region is clear again for the pieces.
+        VoxelBits aside = region;
+        region = rim;
+        rim = aside;
+        anyRim = rim.count() > 0;
       }
 
       // Every dense piece: external, bone by size, noise, or a candidate between the two sizes.
@@ -325,17 +400,31 @@ public final class BoneIsolation {
       droppedPieces += candidates.size();
       bones = join.box();
 
-      // Each bone's own holes, so that two bones cannot enclose pad or soft tissue between them.
+      // Each bone on its own: grown into the less dense voxels that touch it, then its own holes,
+      // so that two bones cannot enclose pad or soft tissue between them. The pieces leave the
+      // region one by one for the volume of the candidates, whose leftovers are dropped by now.
+      VoxelBits bone = cand;
+      bone.fill(false);
+      if (anyRim) {
+        restoreRim(region, rim, bone, scratch, bones);
+      }
+      GrowBuffers buffers = new GrowBuffers(region);
+      int[] growReach = growSchedule.reach();
       long keptVoxels = 0;
       for (Piece p : kept) {
         if (cancelled.getAsBoolean()) {
           return Optional.empty();
         }
-        fillPiece(region, scratch, p, cell, queue);
+        bones =
+            union(
+                bones,
+                growAndFillPiece(
+                    region, scratch, soft, bone, p, growSchedule, growReach, buffers, cell, queue));
         keptVoxels += p.voxels();
       }
-      // The fills only add voxels: fewer than the kept pieces means a bone was lost, and the view
-      // must stay whole rather than show what is left of it.
+      region = bone;
+      // Growing and filling only add voxels: fewer than the kept pieces means a bone was lost, and
+      // the view must stay whole rather than show what is left of it.
       long filled = region.count();
       if (filled < keptVoxels) {
         throw new IllegalStateException(
@@ -381,12 +470,117 @@ public final class BoneIsolation {
     }
   }
 
-  /** Memory of a search on the grid: four bit volumes and the scratch of one slice. */
+  /**
+   * Takes out of {@code dense}, into {@code rim}, the dense voxels within {@link
+   * #METAL_HALO_VOXELS} steps of metal: the rim that partial volume and the upload smoothing leave
+   * round metal reads between bone and metal, so it counted as bone. Along a fixator pin that rim
+   * ran from the bone out through the skin into the air, or into a cast or a carbon rod: the bone
+   * touched outside air through it, was taken for something external and was cut away. With four
+   * pins in a tibia the view lost the tibia and kept the fibula (review of 11 Nov 2026). The rim
+   * takes no part in telling the pieces apart; {@link #restoreRim} gives the bone its own back. The
+   * caller puts back at once every part of the rim that touches no outside air.
+   *
+   * @param scratch clear, and clear again on return
+   */
+  static void takeMetalRim(VoxelBits dense, VoxelBits metal, VoxelBits rim, VoxelBits scratch) {
+    int sz = metal.sizeZ();
+    for (int z = 0; z < sz; z++) {
+      long[] m = metal.sliceWords(z);
+      System.arraycopy(m, 0, rim.sliceWords(z), 0, m.length);
+    }
+    dilate(
+        rim,
+        scratch,
+        METAL_HALO_VOXELS,
+        new Box(0, metal.sizeX() - 1, 0, metal.sizeY() - 1, 0, sz - 1));
+    for (int z = 0; z < sz; z++) {
+      long[] r = rim.sliceWords(z);
+      long[] d = dense.sliceWords(z);
+      for (int w = 0; w < r.length; w++) {
+        r[w] &= d[w];
+        d[w] &= ~r[w];
+      }
+    }
+  }
+
+  /**
+   * Gives back to {@code region}, the pieces that stay, the voxels of {@code rim} within {@link
+   * #METAL_HALO_VOXELS} steps of them: the bone round a pin, a screw or a nail is whole again
+   * before its holes are filled, and of the rim along a pin outside the bone only a stub of that
+   * length returns.
+   *
+   * @param copy clear, and clear again on return
+   * @param scratch clear, and clear again on return
+   */
+  static void restoreRim(
+      VoxelBits region, VoxelBits rim, VoxelBits copy, VoxelBits scratch, Box bones) {
+    int sz = region.sizeZ();
+    for (int z = 0; z < sz; z++) {
+      long[] g = region.sliceWords(z);
+      System.arraycopy(g, 0, copy.sliceWords(z), 0, g.length);
+    }
+    dilate(copy, scratch, METAL_HALO_VOXELS, bones);
+    for (int z = 0; z < sz; z++) {
+      long[] c = copy.sliceWords(z);
+      long[] r = rim.sliceWords(z);
+      long[] g = region.sliceWords(z);
+      for (int w = 0; w < c.length; w++) {
+        g[w] |= c[w] & r[w];
+      }
+      Arrays.fill(c, 0L);
+    }
+  }
+
+  /** Memory of a search on the grid: six bit volumes and the scratch of one slice. */
   public static long workingBytes(VolumeSpace space) {
     Vector3i g = space.grid();
     long sliceVoxels = (long) g.x * g.y;
     long sliceWords = (sliceVoxels + 63) >>> 6;
-    return 4 * 8L * sliceWords * g.z + sliceVoxels + 3 * 8L * sliceWords;
+    return 6 * 8L * sliceWords * g.z + sliceVoxels + (3 + GrowBuffers.ARRAYS) * 8L * sliceWords;
+  }
+
+  /**
+   * The growth schedule of a kept piece, with one flag array per axis. A set flag permits one grid
+   * voxel of growth on that axis in that round. Each axis is capped at {@link #GROW_MM} in physical
+   * distance and advances no faster than the finer in-plane axis, so non-square pixels and thick
+   * slices cannot turn the bound into a larger distance on another axis.
+   */
+  record GrowthSchedule(boolean[] x, boolean[] y, boolean[] z) {
+    int[] reach() {
+      return new int[] {count(x), count(y), count(z)};
+    }
+
+    private static int count(boolean[] flags) {
+      int n = 0;
+      for (boolean flag : flags) {
+        if (flag) {
+          n++;
+        }
+      }
+      return n;
+    }
+  }
+
+  static GrowthSchedule growSchedule(Vector3d voxelMm) {
+    double pace = Math.min(voxelMm.x, voxelMm.y);
+    int rounds = Math.max(1, (int) Math.ceil(GROW_MM / pace - 1e-9));
+    return new GrowthSchedule(
+        axisRounds(rounds, pace, voxelMm.x),
+        axisRounds(rounds, pace, voxelMm.y),
+        axisRounds(rounds, pace, voxelMm.z));
+  }
+
+  private static boolean[] axisRounds(int rounds, double pace, double axisMm) {
+    boolean[] schedule = new boolean[rounds];
+    int steps = 0;
+    for (int r = 0; r < rounds; r++) {
+      double next = (steps + 1) * axisMm;
+      if (next <= GROW_MM + 1e-9 && next <= (r + 1) * pace + 1e-9) {
+        schedule[r] = true;
+        steps++;
+      }
+    }
+    return schedule;
   }
 
   /**
@@ -637,20 +831,121 @@ public final class BoneIsolation {
   }
 
   /**
-   * Fills the holes of one kept piece, slice by slice within its box: the piece moves out of {@code
-   * region} into {@code scratch}, is filled there, and goes back with its holes. A piece that lay
-   * in the hole of a bone filled before it (a speck in the marrow canal) is joined to that bone by
-   * now and moves with it, so the box is the one of what moved, not of the piece alone.
+   * One kept piece, grown and filled: the piece moves out of {@code region} into {@code scratch},
+   * grows there into the voxels of {@code soft} that touch it, has its holes filled slice by slice,
+   * and is added to {@code bone}. Each piece is handled alone, so a speck in the marrow canal and
+   * the bone around it never depend on which comes first. {@code scratch} is clear again on return.
+   *
+   * @return the box the piece may have grown to
    */
-  private static void fillPiece(
-      VoxelBits region, VoxelBits scratch, Piece p, byte[] cell, IntQueue queue) {
+  private static Box growAndFillPiece(
+      VoxelBits region,
+      VoxelBits scratch,
+      VoxelBits soft,
+      VoxelBits bone,
+      Piece p,
+      GrowthSchedule growSchedule,
+      int[] growReach,
+      GrowBuffers buffers,
+      byte[] cell,
+      IntQueue queue) {
     Piece moved = flood(region, scratch, null, null, p.x(), p.y(), p.z(), queue);
-    Box box = moved.box().grow(1, region);
+    Box reach = grow(moved.box(), growReach, region);
+    growInto(scratch, soft, reach.z0(), reach.z1(), growSchedule, buffers);
+    Box box = reach.grow(1, region);
     fillHoles(scratch, box, cell, queue);
     for (int z = box.z0(); z <= box.z1(); z++) {
       long[] s = scratch.sliceWords(z);
-      or(region.sliceWords(z), s);
+      or(bone.sliceWords(z), s);
       Arrays.fill(s, 0L);
+    }
+    return reach;
+  }
+
+  /**
+   * Grows {@code piece} within the slices {@code z0..z1} into the voxels of {@code soft} that touch
+   * it face to face. The schedule permits one voxel on each axis in the rounds marked for that
+   * axis. A round reads the piece as it was when the round began, so growth never runs further than
+   * the schedule allows.
+   */
+  static void growInto(
+      VoxelBits piece, VoxelBits soft, int z0, int z1, GrowthSchedule schedule, GrowBuffers b) {
+    int sx = piece.sizeX();
+    int words = b.shifted.length;
+    for (int r = 0; r < schedule.x().length; r++) {
+      boolean alongX = schedule.x()[r];
+      boolean alongY = schedule.y()[r];
+      boolean across = schedule.z()[r];
+      if (!alongX && !alongY && !across) {
+        continue;
+      }
+      long[] below = b.below;
+      long[] before = b.before;
+      Arrays.fill(below, 0L);
+      for (int z = z0; z <= z1; z++) {
+        long[] cur = piece.sliceWords(z);
+        System.arraycopy(cur, 0, before, 0, words);
+        long[] acc = b.acc;
+        Arrays.fill(acc, 0L);
+        if (alongX) {
+          shiftInto(acc, before, 1);
+          and(acc, b.notFirstColumn);
+          shiftInto(b.shifted, before, -1);
+          and(b.shifted, b.notLastColumn);
+          or(acc, b.shifted);
+        }
+        if (alongY) {
+          shiftInto(b.shifted, before, sx);
+          or(acc, b.shifted);
+          shiftInto(b.shifted, before, -sx);
+          or(acc, b.shifted);
+        }
+        if (across) {
+          or(acc, below);
+          if (z < z1) {
+            or(acc, piece.sliceWords(z + 1)); // not yet grown in this round
+          }
+        }
+        long[] band = soft.sliceWords(z);
+        for (int w = 0; w < words; w++) {
+          cur[w] |= acc[w] & band[w] & ~before[w];
+        }
+        long[] t = below;
+        below = before;
+        before = t;
+      }
+    }
+  }
+
+  /** The slice-sized scratch of {@link #growInto}, made once for a search. */
+  static final class GrowBuffers {
+    static final int ARRAYS = 6;
+    final long[] notFirstColumn;
+    final long[] notLastColumn;
+    final long[] shifted;
+    final long[] acc;
+    final long[] before;
+    final long[] below;
+
+    GrowBuffers(VoxelBits grid) {
+      int sx = grid.sizeX();
+      int sliceBits = grid.sliceBits();
+      int words = grid.sliceWords(0).length;
+      notFirstColumn = new long[words];
+      notLastColumn = new long[words];
+      for (int i = 0; i < sliceBits; i++) {
+        int x = i % sx;
+        if (x != 0) {
+          notFirstColumn[i >>> 6] |= 1L << i;
+        }
+        if (x != sx - 1) {
+          notLastColumn[i >>> 6] |= 1L << i;
+        }
+      }
+      shifted = new long[words];
+      acc = new long[words];
+      before = new long[words];
+      below = new long[words];
     }
   }
 
@@ -690,8 +985,18 @@ public final class BoneIsolation {
     }
   }
 
-  /** Dense and metal bits of a slice; the cells open to the air flood are the air voxels. */
-  private static void classify(float[] v, double boneHu, long[] dense, long[] metal, byte[] cell) {
+  /**
+   * Dense and metal bits of a slice, and the bits of the voxels a little under the bone threshold
+   * that a kept piece may grow into; the cells open to the air flood are the air voxels.
+   */
+  private static void classify(
+      float[] v,
+      double boneHu,
+      double growHu,
+      long[] dense,
+      long[] metal,
+      long[] soft,
+      byte[] cell) {
     for (int i = 0; i < cell.length; i++) {
       float value = v[i];
       if (value >= boneHu) {
@@ -702,6 +1007,9 @@ public final class BoneIsolation {
         }
         cell[i] = BLOCKED;
       } else {
+        if (value >= growHu) {
+          soft[i >>> 6] |= 1L << i;
+        }
         cell[i] = value < AIR_HU ? OPEN : BLOCKED;
       }
     }

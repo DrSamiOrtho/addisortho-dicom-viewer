@@ -25,7 +25,12 @@ import java.util.stream.IntStream;
  *   <li>The bone is read twice: at the bone threshold (200 HU), closed by one voxel and with the
  *       marrow filled, which is the bone each piece will hold; and at the dense threshold (300 HU),
  *       marrow filled, where the joint spaces are open because the subchondral plates are dense and
- *       the cartilage is not.
+ *       the cartilage is not. A small joint (a finger, the carpus, the tarsus) is narrower than the
+ *       scanner resolves: its line reads above the dense threshold, only darker than the plate on
+ *       each side. Such voxels, a valley of {@link Options#jointHu()} or more between brighter bone
+ *       on both sides within {@link Options#jointReachMm()}, are taken out of the dense read before
+ *       the marrow is filled, so the fill puts back the ones a cortex encloses (a narrow marrow
+ *       canal) and leaves the joint line open.
  *   <li>The distance of each dense voxel to the nearest non-bone voxel, in mm (a Euclidean distance
  *       transform, exact on the anisotropic grid).
  *   <li>A watershed on that distance: the voxels are taken deepest first and pieces meet where the
@@ -34,13 +39,15 @@ import java.util.stream.IntStream;
  *       touching at a point splits, the femoral neck or a narrow metaphysis does not.
  *   <li>Every voxel of the bone threshold goes to the piece that reaches it first.
  *   <li>Pieces under {@link Options#fragmentMm3()} are fragments: each joins the large piece it
- *       touches most, or the nearest within {@link Options#attachMm()}, so a comminuted fracture
- *       gives one bone with its fragments and not dozens of entries. Specks are dropped.
+ *       touches most, or the nearest within {@link Options#attachMm()} bone to bone, so a
+ *       comminuted fracture gives one bone with its fragments and not dozens of entries. Specks are
+ *       dropped.
  * </ol>
  *
- * <p>A large CT is worked on a grid coarser by a whole factor, to bound memory; each voxel then
- * takes the piece of its coarse voxel. Run off the event dispatch thread; interrupting the thread
- * cancels it.
+ * <p>A large CT is worked on a coarser grid, to bound memory; each voxel then takes the piece of
+ * its coarse voxel. Each axis is coarsened by its own whole factor, the finest spacing first, so a
+ * scan with thick slices keeps the slices it has. Run off the event dispatch thread; interrupting
+ * the thread cancels it.
  */
 public final class AutoSplit {
 
@@ -65,6 +72,12 @@ public final class AutoSplit {
    * @param attachMm farthest a loose fragment may lie from its bone
    * @param speckMm3 a loose piece below this, near no bone, is dropped
    * @param maxWorkVoxels largest grid worked on; a larger CT is worked on a coarser grid
+   * @param jointHu how much darker than the bone on both sides a dense voxel must be to count as a
+   *     joint line; 0 leaves the dense read as it is
+   * @param jointReachMm how far on each side the brighter bone is looked for
+   * @param jointMaxHu a voxel this bright or brighter is never a joint line
+   * @param maxJointVoxels largest block holding the bone for which the joint lines are looked for:
+   *     two bytes each while they are
    */
   public record Options(
       double boneHu,
@@ -78,7 +91,11 @@ public final class AutoSplit {
       double fragmentMm3,
       double attachMm,
       double speckMm3,
-      long maxWorkVoxels) {
+      long maxWorkVoxels,
+      double jointHu,
+      double jointReachMm,
+      double jointMaxHu,
+      long maxJointVoxels) {
 
     public static Options of(double mmX, double mmY, double mmZ) {
       return new Options(
@@ -93,7 +110,11 @@ public final class AutoSplit {
           1000,
           10,
           30,
-          16_000_000L);
+          16_000_000L,
+          250,
+          1.6,
+          900,
+          64_000_000L);
     }
 
     public Options withMaxWorkVoxels(long voxels) {
@@ -109,7 +130,74 @@ public final class AutoSplit {
           fragmentMm3,
           attachMm,
           speckMm3,
+          voxels,
+          jointHu,
+          jointReachMm,
+          jointMaxHu,
+          maxJointVoxels);
+    }
+
+    /** The same with another valley depth for the joint lines; 0 looks for none. */
+    public Options withJointHu(double hu) {
+      return new Options(
+          boneHu,
+          denseHu,
+          mmX,
+          mmY,
+          mmZ,
+          minBoneMm3,
+          minDepthMm,
+          neckRatio,
+          fragmentMm3,
+          attachMm,
+          speckMm3,
+          maxWorkVoxels,
+          hu,
+          jointReachMm,
+          jointMaxHu,
+          maxJointVoxels);
+    }
+
+    /** The same with another size of block up to which the joint lines are looked for. */
+    public Options withMaxJointVoxels(long voxels) {
+      return new Options(
+          boneHu,
+          denseHu,
+          mmX,
+          mmY,
+          mmZ,
+          minBoneMm3,
+          minDepthMm,
+          neckRatio,
+          fragmentMm3,
+          attachMm,
+          speckMm3,
+          maxWorkVoxels,
+          jointHu,
+          jointReachMm,
+          jointMaxHu,
           voxels);
+    }
+
+    /** The same with another size under which a piece is a fragment of its neighbour. */
+    public Options withFragmentMm3(double mm3) {
+      return new Options(
+          boneHu,
+          denseHu,
+          mmX,
+          mmY,
+          mmZ,
+          minBoneMm3,
+          minDepthMm,
+          neckRatio,
+          mm3,
+          attachMm,
+          speckMm3,
+          maxWorkVoxels,
+          jointHu,
+          jointReachMm,
+          jointMaxHu,
+          maxJointVoxels);
     }
   }
 
@@ -126,11 +214,30 @@ public final class AutoSplit {
    * @param pieces the bones, largest first
    * @param fragments fragments joined to a bone
    * @param specks loose specks dropped
-   * @param factor coarsening of the grid worked on, 1 for the CT's own
+   * @param factor coarsening of the grid worked on, 1 for the CT's own; the largest of the three
+   *     axes' factors
+   * @param jointsSkipped the joint lines were not looked for because the block holding the bone is
+   *     over {@link Options#maxJointVoxels()}: bones pressed together at a small joint may have
+   *     come out as one, and the caller says so (review of 11 Nov 2026, B4: this was silent)
    */
-  public record Result(List<Piece> pieces, int fragments, int specks, int factor, long millis) {}
+  public record Result(
+      List<Piece> pieces,
+      int fragments,
+      int specks,
+      int factor,
+      long millis,
+      boolean jointsSkipped) {
 
-  private static final float INF = 1e12f;
+    public Result(List<Piece> pieces, int fragments, int specks, int factor, long millis) {
+      this(pieces, fragments, specks, factor, millis, false);
+    }
+
+    Result withJointsSkipped(boolean skipped) {
+      return new Result(pieces, fragments, specks, factor, millis, skipped);
+    }
+  }
+
+  static final float INF = 1e12f;
 
   private AutoSplit() {}
 
@@ -173,12 +280,12 @@ public final class AutoSplit {
             });
     BitVolume solid =
         RegionGrow.fillHoles(RegionGrow.close(atBone, 1, GrowProgress.NONE, caller), caller);
-    BitVolume dense = RegionGrow.fillHoles(atDense, caller);
-    dense.and(solid);
     VoxelBox tight = solid.bounds();
     if (tight == null) {
       return new Result(List.of(), 0, 0, 1, millis(start));
     }
+    BitVolume dense = RegionGrow.fillHoles(atDense, caller);
+    dense.and(solid);
     solid = solid.crop(tight);
     dense = dense.crop(tight);
     VoxelBox block =
@@ -189,44 +296,427 @@ public final class AutoSplit {
             box.y0() + tight.y1(),
             box.z0() + tight.z0(),
             box.z0() + tight.z1());
-    return new Work(solid, dense, block, o, caller).run(start);
+    BitVolume joints = null;
+    boolean skipped = o.jointHu() > 0 && tight.voxels() > o.maxJointVoxels();
+    if (o.jointHu() > 0 && !skipped) {
+      joints = openJointLines(dense, solid, block, hu, shown, o, caller);
+    }
+    return new Work(solid, dense, joints, block, o, caller).run(start).withJointsSkipped(skipped);
+  }
+
+  /** The 13 directions of a voxel's 26 neighbours, one of each opposite pair. */
+  private static final int[][] HALF_NEIGHBOURS = {
+    {1, 0, 0},
+    {0, 1, 0},
+    {0, 0, 1},
+    {1, 1, 0},
+    {1, -1, 0},
+    {1, 0, 1},
+    {1, 0, -1},
+    {0, 1, 1},
+    {0, 1, -1},
+    {1, 1, 1},
+    {1, 1, -1},
+    {1, -1, 1},
+    {1, -1, -1}
+  };
+
+  /** A value no CT holds, for the voxels outside the block or not shown. */
+  private static final short NO_VALUE = Short.MIN_VALUE;
+
+  /**
+   * How many times the joint reach one voxel step may be long and still be looked along: 1.5 keeps
+   * every direction of a grid up to 2.4 mm a step, the thin-slice CTs the reach was set on.
+   */
+  private static final double JOINT_STEP_SLACK = 1.5;
+
+  /**
+   * Clears from the dense bone the voxels of the joint lines. A voxel may be one when it is darker
+   * by {@link Options#jointHu()} or more than a voxel within {@link Options#jointReachMm()} on each
+   * of two opposite sides, and along no direction brighter than both sides: that is a weak spot in
+   * a cortex, a valley along the cortex and a ridge across it. Such voxels also fill the narrow
+   * marrow canal of a small bone and the gaps between its trabeculae, shut inside the bone, while a
+   * joint line comes out at its rim. So the voxels are taken together over the whole bone, each
+   * group of touching ones (by a face, an edge or a corner), and only a group that comes out of the
+   * bone is cleared from the dense bone.
+   *
+   * @param dense the dense bone with its marrow filled, on the block holding the bone
+   * @param solid the whole bone, on the same block
+   * @param block that block, on the CT grid
+   * @return the voxels cleared, on the same block
+   */
+  private static BitVolume openJointLines(
+      BitVolume dense,
+      BitVolume solid,
+      VoxelBox block,
+      Supplier<HuSource> hu,
+      Shown shown,
+      Options o,
+      Thread caller) {
+    int tx = block.sizeX();
+    int ty = block.sizeY();
+    int tz = block.sizeZ();
+    short[] value = new short[tx * ty * tz];
+    IntStream.range(0, tz)
+        .parallel()
+        .forEach(
+            k -> {
+              RegionGrow.checkCancelled(caller);
+              HuSource ct = hu.get();
+              int gz = block.z0() + k;
+              int i = k * tx * ty;
+              for (int y = 0; y < ty; y++) {
+                int gy = block.y0() + y;
+                for (int x = 0; x < tx; x++, i++) {
+                  int gx = block.x0() + x;
+                  double v = shown.at(gx, gy, gz) ? ct.huAt(gx, gy, gz) : Double.NaN;
+                  value[i] =
+                      Double.isNaN(v)
+                          ? NO_VALUE
+                          : (short) Math.clamp(Math.round(v), NO_VALUE + 1, Short.MAX_VALUE);
+                }
+              }
+            });
+    int[] steps = new int[HALF_NEIGHBOURS.length];
+    for (int d = 0; d < steps.length; d++) {
+      int[] n = HALF_NEIGHBOURS[d];
+      double mm = Math.sqrt(sq(n[0] * o.mmX()) + sq(n[1] * o.mmY()) + sq(n[2] * o.mmZ()));
+      // A direction whose first voxel already lies well beyond the reach is not looked along: on
+      // 3 to 5 mm slices one step across them is two or three times the reach, and the bone found
+      // there is another level of the bone, not the far side of a joint line (review of 11 Nov
+      // 2026, B8). Up to JOINT_STEP_SLACK times the reach one step is still taken, as before.
+      steps[d] =
+          mm > JOINT_STEP_SLACK * o.jointReachMm()
+              ? 0
+              : Math.max(1, (int) Math.round(o.jointReachMm() / mm));
+    }
+    // For each direction, the directions square to it, as bits.
+    int[] square = new int[HALF_NEIGHBOURS.length];
+    for (int d = 0; d < square.length; d++) {
+      for (int e = 0; e < square.length; e++) {
+        if (Math.abs(cosine(HALF_NEIGHBOURS[d], HALF_NEIGHBOURS[e], o)) <= JOINT_SQUARE) {
+          square[d] |= 1 << e;
+        }
+      }
+    }
+    int depth = (int) Math.ceil(o.jointHu());
+    int ridge = (int) Math.ceil(o.jointHu() * JOINT_RIDGE);
+    int cap = (int) Math.ceil(o.jointMaxHu());
+    // The valley voxels of each direction on their own, so a sheet can be told from a speck.
+    BitVolume[] across = new BitVolume[HALF_NEIGHBOURS.length];
+    for (int d = 0; d < across.length; d++) {
+      across[d] = new BitVolume(tx, ty, tz);
+    }
+    // One slice per task: a slice's bits share no word with another slice's.
+    IntStream.range(0, tz)
+        .parallel()
+        .forEach(
+            z -> {
+              RegionGrow.checkCancelled(caller);
+              for (int y = 0; y < ty; y++) {
+                for (int x = 0; x < tx; x++) {
+                  if (!solid.get(x, y, z)) {
+                    continue;
+                  }
+                  int v = value[(z * ty + y) * tx + x];
+                  if (v >= cap || v == NO_VALUE) {
+                    continue;
+                  }
+                  int level = Math.max(v + depth, JOINT_PLATE_HU);
+                  int along = 0;
+                  for (int d = 0; d < steps.length; d++) {
+                    int[] n = HALF_NEIGHBOURS[d];
+                    if (reaches(value, tx, ty, tz, x, y, z, n[0], n[1], n[2], steps[d], level, true)
+                        && reaches(
+                            value, tx, ty, tz, x, y, z, -n[0], -n[1], -n[2], steps[d], level,
+                            true)) {
+                      along |= 1 << d;
+                    }
+                  }
+                  if (along == 0 || isRidge(value, tx, ty, tz, x, y, z, v - ridge, steps)) {
+                    continue;
+                  }
+                  // A sheet is a valley across it and none along it; a canal is one all round.
+                  for (int d = 0; d < steps.length; d++) {
+                    if ((along & 1 << d) != 0 && (along & square[d]) == 0) {
+                      across[d].set(x, y, z);
+                    }
+                  }
+                }
+              }
+            });
+    BitVolume valley = new BitVolume(tx, ty, tz);
+    IntStream.range(0, tz)
+        .parallel()
+        .forEach(
+            z -> {
+              RegionGrow.checkCancelled(caller);
+              for (BitVolume a : across) {
+                if (a.countSlice(z) == 0) {
+                  continue;
+                }
+                for (int y = 0; y < ty; y++) {
+                  for (int x = 0; x < tx; x++) {
+                    if (a.get(x, y, z)
+                        && !valley.get(x, y, z)
+                        && neighbours(a, x, y, z) >= JOINT_SHEET) {
+                      valley.set(x, y, z);
+                    }
+                  }
+                }
+              }
+            });
+    // Each group of touching valley voxels, cleared from the dense bone when it comes out of it.
+    BitVolume joints = new BitVolume(tx, ty, tz);
+    int[] group = new int[1 << 12];
+    for (int z0 = 0; z0 < tz; z0++) {
+      RegionGrow.checkCancelled(caller);
+      if (valley.countSlice(z0) == 0) {
+        continue;
+      }
+      for (int y0 = 0; y0 < ty; y0++) {
+        for (int x0 = 0; x0 < tx; x0++) {
+          if (!valley.get(x0, y0, z0)) {
+            continue;
+          }
+          int size = 0;
+          boolean open = false;
+          valley.clear(x0, y0, z0);
+          group[size++] = (z0 * ty + y0) * tx + x0;
+          for (int next = 0; next < size; next++) {
+            int i = group[next];
+            int x = i % tx;
+            int y = (i / tx) % ty;
+            int z = i / (tx * ty);
+            // The edge of the block is not the outside: a bone cut by the first slice or by the
+            // field of view shows its marrow canal there.
+            open =
+                open
+                    || (x > 0 && !solid.get(x - 1, y, z))
+                    || (x < tx - 1 && !solid.get(x + 1, y, z))
+                    || (y > 0 && !solid.get(x, y - 1, z))
+                    || (y < ty - 1 && !solid.get(x, y + 1, z))
+                    || (z > 0 && !solid.get(x, y, z - 1))
+                    || (z < tz - 1 && !solid.get(x, y, z + 1));
+            for (int dz = -1; dz <= 1; dz++) {
+              int pz = z + dz;
+              if (pz < 0 || pz >= tz) {
+                continue;
+              }
+              for (int dy = -1; dy <= 1; dy++) {
+                int py = y + dy;
+                if (py < 0 || py >= ty) {
+                  continue;
+                }
+                for (int dx = -1; dx <= 1; dx++) {
+                  int px = x + dx;
+                  if (px >= 0 && px < tx && valley.get(px, py, pz)) {
+                    valley.clear(px, py, pz);
+                    if (size == group.length) {
+                      group = Arrays.copyOf(group, 2 * size);
+                    }
+                    group[size++] = (pz * ty + py) * tx + px;
+                  }
+                }
+              }
+            }
+          }
+          if (open) {
+            for (int n = 0; n < size; n++) {
+              int i = group[n];
+              int x = i % tx;
+              int y = (i / tx) % ty;
+              int z = i / (tx * ty);
+              if (dense.get(x, y, z)) {
+                dense.clear(x, y, z);
+                joints.set(x, y, z);
+              }
+            }
+          }
+        }
+      }
+    }
+    return joints;
+  }
+
+  /** How bright against both sides, as a part of the valley depth, makes a voxel a ridge. */
+  private static final double JOINT_RIDGE = 0.6;
+
+  /**
+   * The bone on each side of a joint line is at least this bright, in HU: a subchondral plate. The
+   * trabeculae on each side of a marrow gap seldom are.
+   */
+  private static final int JOINT_PLATE_HU = 600;
+
+  /** Two directions are square to each other up to this cosine of their angle. */
+  private static final double JOINT_SQUARE = 0.25;
+
+  /**
+   * Fewest of a voxel's 26 neighbours that are a valley along the same direction: a joint line is a
+   * sheet, the gap between two trabeculae a speck or a thread.
+   */
+  private static final int JOINT_SHEET = 5;
+
+  private static double sq(double v) {
+    return v * v;
+  }
+
+  /** Cosine of the angle between two voxel steps, in mm. */
+  private static double cosine(int[] a, int[] b, Options o) {
+    double ax = a[0] * o.mmX();
+    double ay = a[1] * o.mmY();
+    double az = a[2] * o.mmZ();
+    double bx = b[0] * o.mmX();
+    double by = b[1] * o.mmY();
+    double bz = b[2] * o.mmZ();
+    return (ax * bx + ay * by + az * bz)
+        / Math.sqrt((ax * ax + ay * ay + az * az) * (bx * bx + by * by + bz * bz));
+  }
+
+  /** Whether, along one direction, a voxel at {@code level} or below lies on each side. */
+  private static boolean isRidge(
+      short[] value, int tx, int ty, int tz, int x, int y, int z, int level, int[] steps) {
+    for (int d = 0; d < steps.length; d++) {
+      int[] n = HALF_NEIGHBOURS[d];
+      if (reaches(value, tx, ty, tz, x, y, z, n[0], n[1], n[2], steps[d], level, false)
+          && reaches(value, tx, ty, tz, x, y, z, -n[0], -n[1], -n[2], steps[d], level, false)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** How many of the 26 neighbours of a voxel are set. */
+  private static int neighbours(BitVolume bits, int x, int y, int z) {
+    int count = 0;
+    for (int dz = -1; dz <= 1; dz++) {
+      int pz = z + dz;
+      if (pz < 0 || pz >= bits.sizeZ()) {
+        continue;
+      }
+      for (int dy = -1; dy <= 1; dy++) {
+        int py = y + dy;
+        if (py < 0 || py >= bits.sizeY()) {
+          continue;
+        }
+        for (int dx = -1; dx <= 1; dx++) {
+          int px = x + dx;
+          if ((dx != 0 || dy != 0 || dz != 0)
+              && px >= 0
+              && px < bits.sizeX()
+              && bits.get(px, py, pz)) {
+            count++;
+          }
+        }
+      }
+    }
+    return count;
+  }
+
+  private static boolean reaches(
+      short[] value,
+      int tx,
+      int ty,
+      int tz,
+      int x,
+      int y,
+      int z,
+      int dx,
+      int dy,
+      int dz,
+      int steps,
+      int level,
+      boolean above) {
+    for (int s = 1; s <= steps; s++) {
+      int px = x + s * dx;
+      int py = y + s * dy;
+      int pz = z + s * dz;
+      if (px < 0 || py < 0 || pz < 0 || px >= tx || py >= ty || pz >= tz) {
+        return !above;
+      }
+      int v = value[(pz * ty + py) * tx + px];
+      if (above ? v >= level : v <= level) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static long millis(long start) {
     return (System.nanoTime() - start) / 1_000_000;
   }
 
+  /**
+   * How much each axis is coarsened so that the grid fits {@link Options#maxWorkVoxels()}: one step
+   * at a time on the axes whose coarse voxel is smallest in mm, up to 4 each. An isotropic CT is
+   * coarsened alike on all three, as before; a CT with 3 mm slices and 1 mm pixels is halved in the
+   * plane only. One factor for all three (until 11 Nov 2026) made the slices 6 mm there, and a
+   * joint one slice wide between two bones closed (review of 11 Nov 2026).
+   */
+  static int[] factors(int sx, int sy, int sz, Options o) {
+    int[] f = {1, 1, 1};
+    int[] size = {sx, sy, sz};
+    double[] mm = {o.mmX(), o.mmY(), o.mmZ()};
+    while (Work.coarse(sx, f[0]) * (long) Work.coarse(sy, f[1]) * Work.coarse(sz, f[2])
+        > o.maxWorkVoxels()) {
+      double least = Double.POSITIVE_INFINITY;
+      for (int a = 0; a < 3; a++) {
+        if (f[a] < 4 && size[a] > 1) {
+          least = Math.min(least, mm[a] * f[a]);
+        }
+      }
+      if (least == Double.POSITIVE_INFINITY) {
+        break;
+      }
+      for (int a = 0; a < 3; a++) {
+        if (f[a] < 4 && size[a] > 1 && mm[a] * f[a] <= least * 1.02) {
+          f[a]++;
+        }
+      }
+    }
+    return f;
+  }
+
   /** One split, on the block holding the bone. */
   private static final class Work {
     private final BitVolume solid;
     private final BitVolume dense;
+    private final BitVolume joints;
     private final VoxelBox block;
     private final Options o;
     private final Thread caller;
-    private final int f;
+    // the coarsening of each axis
+    private final int fx;
+    private final int fy;
+    private final int fz;
     private final int wx;
     private final int wy;
     private final int wz;
     private final double fineMm3;
 
-    Work(BitVolume solid, BitVolume dense, VoxelBox block, Options o, Thread caller) {
+    /**
+     * @param joints the voxels of the joint lines, already cleared from {@code dense}, or null
+     */
+    Work(
+        BitVolume solid,
+        BitVolume dense,
+        BitVolume joints,
+        VoxelBox block,
+        Options o,
+        Thread caller) {
       this.solid = solid;
       this.dense = dense;
+      this.joints = joints;
       this.block = block;
       this.o = o;
       this.caller = caller;
-      int factor = 1;
-      while (factor < 4
-          && coarse(solid.sizeX(), factor)
-                  * (long) coarse(solid.sizeY(), factor)
-                  * coarse(solid.sizeZ(), factor)
-              > o.maxWorkVoxels()) {
-        factor++;
-      }
-      this.f = factor;
-      this.wx = coarse(solid.sizeX(), f);
-      this.wy = coarse(solid.sizeY(), f);
-      this.wz = coarse(solid.sizeZ(), f);
+      int[] f = factors(solid.sizeX(), solid.sizeY(), solid.sizeZ(), o);
+      this.fx = f[0];
+      this.fy = f[1];
+      this.fz = f[2];
+      this.wx = coarse(solid.sizeX(), fx);
+      this.wy = coarse(solid.sizeY(), fy);
+      this.wz = coarse(solid.sizeZ(), fz);
       this.fineMm3 = o.mmX() * o.mmY() * o.mmZ();
     }
 
@@ -265,33 +755,39 @@ public final class AutoSplit {
                     int denseCount = 0;
                     int present = 0;
                     boolean any = false;
-                    for (int dz = 0; dz < f; dz++) {
-                      int fz = z * f + dz;
-                      if (fz >= solid.sizeZ()) {
+                    boolean joint = false;
+                    for (int dz = 0; dz < fz; dz++) {
+                      int pz = z * fz + dz;
+                      if (pz >= solid.sizeZ()) {
                         continue;
                       }
-                      for (int dy = 0; dy < f; dy++) {
-                        int fy = y * f + dy;
-                        if (fy >= solid.sizeY()) {
+                      for (int dy = 0; dy < fy; dy++) {
+                        int py = y * fy + dy;
+                        if (py >= solid.sizeY()) {
                           continue;
                         }
-                        for (int dx = 0; dx < f; dx++) {
-                          int fx = x * f + dx;
-                          if (fx >= solid.sizeX()) {
+                        for (int dx = 0; dx < fx; dx++) {
+                          int px = x * fx + dx;
+                          if (px >= solid.sizeX()) {
                             continue;
                           }
                           present++;
-                          any |= solid.get(fx, fy, fz);
-                          if (dense.get(fx, fy, fz)) {
+                          any |= solid.get(px, py, pz);
+                          if (dense.get(px, py, pz)) {
                             denseCount++;
                           }
+                          joint |= joints != null && joints.get(px, py, pz);
                         }
                       }
                     }
                     int i = index(x, y, z);
                     solidW[i] = any;
-                    // A coarse voxel is dense when most of it is: a joint space stays open.
-                    g[i] = present > 0 && 2 * denseCount >= present ? INF : 0;
+                    // A coarse voxel is dense when at least half of it is, so a cortex one voxel
+                    // thick stays bone. (More than half was tried on 11 Nov 2026: it opens a
+                    // joint one voxel wide, but on a pelvis it cut thin bone into a sixth more
+                    // pieces than the CT's own grid gives.) A joint line is thinner than a coarse
+                    // voxel and would close: it opens the whole of each coarse voxel it crosses.
+                    g[i] = present > 0 && !joint && 2 * denseCount >= present ? INF : 0;
                   }
                 }
               });
@@ -304,9 +800,9 @@ public final class AutoSplit {
 
     /** Squared Euclidean distance in mm², in place: 0 stays 0, {@link #INF} gets its distance. */
     private void distanceTransform(float[] g) {
-      double ux = o.mmX() * f;
-      double uy = o.mmY() * f;
-      double uz = o.mmZ() * f;
+      double ux = o.mmX() * fx;
+      double uy = o.mmY() * fy;
+      double uz = o.mmZ() * fz;
       squaredDistance(g, wx, wy, wz, ux, uy, uz, caller);
       // The edge of the block counts as outside the bone: no voxel is farther than that.
       clampToEdges(g, ux, uy, uz);
@@ -364,7 +860,7 @@ public final class AutoSplit {
       Nodes nodes = new Nodes();
       int[] roots = new int[6];
       int[] kept = new int[6];
-      double coarseMm3 = fineMm3 * f * f * f;
+      double coarseMm3 = fineMm3 * fx * fy * fz;
       for (int n = 0; n < order.length; n++) {
         if ((n & 0xFFFF) == 0) {
           RegionGrow.checkCancelled(caller);
@@ -538,7 +1034,7 @@ public final class AutoSplit {
         for (int y = 0; y < solid.sizeY(); y++) {
           for (int x = 0; x < solid.sizeX(); x++) {
             if (solid.get(x, y, z)) {
-              int l = label[index(x / f, y / f, z / f)];
+              int l = label[index(x / fx, y / fy, z / fz)];
               voxels[l]++;
               extent[l] = grow(extent[l], x, y, z);
             }
@@ -546,6 +1042,7 @@ public final class AutoSplit {
         }
       }
       Map<Long, Integer> contacts = contacts(label);
+      Reach reach = null;
       int[] home = new int[count + 1];
       int fragments = 0;
       int specks = 0;
@@ -561,7 +1058,10 @@ public final class AutoSplit {
         } else {
           int to = mostTouched(l, contacts, voxels);
           if (to < 0) {
-            to = nearestLarge(l, extent, voxels);
+            if (reach == null) {
+              reach = new Reach(label, voxels, count);
+            }
+            to = reach.nearestLarge(l);
           }
           if (to > 0) {
             home[l] = to;
@@ -590,7 +1090,8 @@ public final class AutoSplit {
         pieces.add(new Piece(mask(label, home, l, e), anchor(l, e), joined));
       }
       pieces.sort(Comparator.comparingLong((Piece p) -> p.mask().count()).reversed());
-      return new Result(List.copyOf(pieces), fragments, specks, f, millis(start));
+      return new Result(
+          List.copyOf(pieces), fragments, specks, Math.max(fx, Math.max(fy, fz)), millis(start));
     }
 
     /** Touching faces between two pieces, by the pair (smaller label, larger label). */
@@ -632,29 +1133,157 @@ public final class AutoSplit {
       return best;
     }
 
-    /** The large piece whose extent lies nearest the piece's centre, within the reach. */
-    private int nearestLarge(int l, int[][] extent, long[] voxels) {
-      int[] e = extent[l];
-      double cx = (e[0] + e[1]) / 2.0;
-      double cy = (e[2] + e[3]) / 2.0;
-      double cz = (e[4] + e[5]) / 2.0;
-      int best = -1;
-      double bestMm = o.attachMm();
-      for (int m = 1; m < extent.length; m++) {
-        if (m == l || extent[m] == null || voxels[m] * fineMm3 < o.fragmentMm3()) {
-          continue;
+    /**
+     * How far each piece lies from the nearest large piece, bone to bone: the distance in mm from
+     * its nearest voxel to the nearest voxel of a large piece, on the working grid. Until 11 Nov
+     * 2026 the distance was taken from the piece's centre to the large piece's bounding box, so
+     * anything inside that box was "at" the bone: a calcification or a speck anywhere in the hollow
+     * of a pelvis was joined to a pelvic bone and went into its surface, and where two boxes
+     * overlapped the piece went to whichever came later in the list (review of 11 Nov 2026).
+     */
+    private final class Reach {
+      private final int[] label;
+      private final long[] voxels;
+      private final int[] target;
+      private final double ux = o.mmX() * fx;
+      private final double uy = o.mmY() * fy;
+      private final double uz = o.mmZ() * fz;
+      // the squared mm from the voxel last asked to the large piece nearestTo gave for it
+      private double foundMm2;
+
+      Reach(int[] label, long[] voxels, int count) {
+        this.label = label;
+        this.voxels = voxels;
+        float[] g = new float[label.length];
+        for (int i = 0; i < g.length; i++) {
+          g[i] = large(label[i]) ? 0 : INF;
         }
-        int[] b = extent[m];
-        double dx = Math.max(0, Math.max(b[0] - cx, cx - b[1])) * o.mmX();
-        double dy = Math.max(0, Math.max(b[2] - cy, cy - b[3])) * o.mmY();
-        double dz = Math.max(0, Math.max(b[4] - cz, cz - b[5])) * o.mmZ();
-        double mm = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (mm <= bestMm) {
-          best = m;
-          bestMm = mm;
+        squaredDistance(g, wx, wy, wz, ux, uy, uz, caller);
+        double[] nearestMm2 = new double[count + 1];
+        Arrays.fill(nearestMm2, Double.POSITIVE_INFINITY);
+        for (int i = 0; i < g.length; i++) {
+          int m = label[i];
+          if (m > 0 && g[i] < nearestMm2[m]) {
+            nearestMm2[m] = g[i];
+          }
+        }
+        // Every voxel of a piece that lies at its least distance is asked which large piece is
+        // that near, so two bones equally near different ends of a long fragment are both seen
+        // (Astra, 11 Nov 2026). Each asks only the voxels at that distance from it, a shell and
+        // not the cube round it. The nearer wins by the distance worked out afresh in full
+        // precision; only pieces truly equally near are settled by size, then by order.
+        target = new int[count + 1];
+        Arrays.fill(target, -1);
+        double[] targetMm2 = new double[count + 1];
+        double reach2 = o.attachMm() * o.attachMm();
+        for (int i = 0; i < g.length; i++) {
+          int m = label[i];
+          if (m > 0 && !large(m) && g[i] <= reach2 && g[i] <= nearestMm2[m] * (1 + 1e-6) + 1e-6) {
+            int to = nearestTo(i, g[i], m);
+            if (to > 0
+                && (target[m] < 0
+                    || nearer(foundMm2, targetMm2[m])
+                    || (same(foundMm2, targetMm2[m]) && better(to, target[m])))) {
+              target[m] = to;
+              targetMm2[m] = foundMm2;
+            }
+          }
         }
       }
-      return best;
+
+      private boolean large(int m) {
+        return m > 0 && voxels[m] * fineMm3 >= o.fragmentMm3();
+      }
+
+      /** Of two large pieces equally near: the larger, then the earlier. */
+      private boolean better(int a, int b) {
+        return voxels[a] > voxels[b] || (voxels[a] == voxels[b] && a < b);
+      }
+
+      private static boolean same(double a, double b) {
+        return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.max(a, b));
+      }
+
+      private static boolean nearer(double a, double b) {
+        return a < b && !same(a, b);
+      }
+
+      private static double lowest(double mm2) {
+        return Math.sqrt(Math.max(0, mm2));
+      }
+
+      /** The large piece nearest piece {@code l}, within the reach; -1 when there is none. */
+      int nearestLarge(int l) {
+        return target[l];
+      }
+
+      /**
+       * The large piece nearest working voxel {@code i}, which the transform put {@code mm2}
+       * (squared mm, single precision) from one; its squared distance in full precision is left in
+       * {@link #foundMm2}. For each row and slice offset only the columns that can complete that
+       * distance are looked at: every column whose own squared distance lies within the transform's
+       * rounding of the rest, which is one or two columns unless the columns are far finer than the
+       * rows, and then as many as the rounding spans. Among what is found the nearest by the
+       * recomputed distance wins.
+       */
+      private int nearestTo(int i, double mm2, int self) {
+        int x = i % wx;
+        int y = (i / wx) % wy;
+        int z = i / (wx * wy);
+        double tol = 1e-4 * Math.max(1, mm2);
+        // Rows and slices as the columns below: only offsets inside the image, however fine the
+        // spacing (Astra, 12 Nov 2026).
+        int ry = (int) Math.min(wy, Math.floor(Math.sqrt(mm2 + tol) / uy));
+        int rz = (int) Math.min(wz, Math.floor(Math.sqrt(mm2 + tol) / uz));
+        int best = -1;
+        double bestMm2 = Double.POSITIVE_INFINITY;
+        long looked = 0;
+        for (int dz = Math.max(-rz, -z); dz <= Math.min(rz, wz - 1 - z); dz++) {
+          RegionGrow.checkCancelled(caller);
+          int pz = z + dz;
+          if (pz < 0 || pz >= wz) {
+            continue;
+          }
+          for (int dy = Math.max(-ry, -y); dy <= Math.min(ry, wy - 1 - y); dy++) {
+            int py = y + dy;
+            double rest = mm2 - sq(dy * uy) - sq(dz * uz);
+            if (py < 0 || py >= wy || rest < -tol) {
+              continue;
+            }
+            // Only offsets that stay inside the image: with columns far finer than the rows the
+            // rounding spans a great many, and the count must not run past an int (Astra, 12 Nov
+            // 2026).
+            int widest = Math.max(x, wx - 1 - x);
+            int from = (int) Math.min(widest + 1.0, Math.ceil(lowest(rest - tol) / ux - 1e-9));
+            int to = (int) Math.min(widest, Math.floor(Math.sqrt(rest + tol) / ux + 1e-9));
+            for (int dx = Math.max(0, from); dx <= to; dx++) {
+              if ((++looked & 0xFFFF) == 0) {
+                RegionGrow.checkCancelled(caller);
+              }
+              double d2 = sq(dx * ux) + sq(dy * uy) + sq(dz * uz);
+              for (int side = -1; side <= 1; side += 2) {
+                int px = x + side * dx;
+                if (px >= 0 && px < wx) {
+                  int m = label[index(px, py, pz)];
+                  if (m != self
+                      && large(m)
+                      && (best < 0
+                          || nearer(d2, bestMm2)
+                          || (same(d2, bestMm2) && better(m, best)))) {
+                    best = m;
+                    bestMm2 = d2;
+                  }
+                }
+                if (dx == 0) {
+                  break;
+                }
+              }
+            }
+          }
+        }
+        foundMm2 = bestMm2;
+        return best;
+      }
     }
 
     private BoxMask mask(int[] label, int[] home, int l, int[] e) {
@@ -663,7 +1292,7 @@ public final class AutoSplit {
         for (int y = e[2]; y <= e[3]; y++) {
           for (int x = e[0]; x <= e[1]; x++) {
             if (solid.get(x, y, z)) {
-              int m = label[index(x / f, y / f, z / f)];
+              int m = label[index(x / fx, y / fy, z / fz)];
               if (m > 0 && home[m] == l) {
                 bits.set(x - e[0], y - e[2], z - e[4]);
               }
@@ -689,9 +1318,9 @@ public final class AutoSplit {
       int y;
       int z;
       if (peak != null) {
-        x = Math.min(solid.sizeX() - 1, (peak % wx) * f + f / 2);
-        y = Math.min(solid.sizeY() - 1, ((peak / wx) % wy) * f + f / 2);
-        z = Math.min(solid.sizeZ() - 1, (peak / (wx * wy)) * f + f / 2);
+        x = Math.min(solid.sizeX() - 1, (peak % wx) * fx + fx / 2);
+        y = Math.min(solid.sizeY() - 1, ((peak / wx) % wy) * fy + fy / 2);
+        z = Math.min(solid.sizeZ() - 1, (peak / (wx * wy)) * fz + fz / 2);
       } else {
         x = (e[0] + e[1]) / 2;
         y = (e[2] + e[3]) / 2;
@@ -801,13 +1430,59 @@ public final class AutoSplit {
   public static BoneSplit.Split splitBetween(
       BoxMask bone, int[] keep, int[] cut, double mmX, double mmY, double mmZ, HuSource hu)
       throws BoneSplit.SplitException {
-    return flood(bone, keep, cut, null, null, mmX, mmY, mmZ, hu);
+    return flood(bone, keep, cut, null, null, null, mmX, mmY, mmZ, hu, null);
+  }
+
+  /**
+   * Splits one bone in two from two sets of its voxels, flooded brightest first, so the two sides
+   * meet along the darkest surface between the sets.
+   *
+   * @throws BoneSplit.SplitException when one side comes out empty
+   */
+  static BoneSplit.Split splitFrom(
+      BoxMask bone,
+      BoxMask keepSeeds,
+      BoxMask cutSeeds,
+      double mmX,
+      double mmY,
+      double mmZ,
+      HuSource hu)
+      throws BoneSplit.SplitException {
+    return flood(
+        bone,
+        anyVoxel(keepSeeds),
+        anyVoxel(cutSeeds),
+        keepSeeds,
+        cutSeeds,
+        null,
+        mmX,
+        mmY,
+        mmZ,
+        hu,
+        null);
   }
 
   /**
    * Draws the border between two bones again, along the darkest surface between two clicks, one on
-   * each. Each bone keeps for certain what lies more than {@code bandMm} from the other: only the
-   * band along their contact is decided again, so neither can lose its body to the other.
+   * each.
+   *
+   * <p>Two answers are worked out. In the first each bone keeps for certain what lies more than
+   * {@code bandMm} from the other and only the band along their contact is decided again, so
+   * neither can lose its body to the other. In the second the clicks decide alone: each looks for
+   * the cortex of its own bone (see {@link #climb}) and the two bones are flooded again from there,
+   * as one. The second is taken only when both clicks found cortex and its border lies on a joint
+   * line where the first's does not ({@link #WIDER_SHARE}, {@link #WIDER_GAIN}, as for a wide move
+   * after a find). Otherwise the first. Either answer must leave each bone at least {@link
+   * #WIDER_KEEPS} of itself; when neither does, the split is refused and the bones stay as they
+   * are.
+   *
+   * <p>Until 12 Nov 2026 it was the band alone. On a foot CT the find had left a slice of the
+   * cuboid, more than the band thick in places, with the fifth metatarsal: what the metatarsal
+   * "kept for certain" then held cuboid cortex, the flood ran on along the cuboid from there, and
+   * 34 of 40 pairs of clicks gave the metatarsal still more of the cuboid. The clicks alone put the
+   * border on the joint there. On two scans that show no joint lines (1.25 mm slices with a
+   * standard kernel, 3 mm with a soft one) the clicks alone moved borders about more than the band
+   * did, with nothing to say they were better: hence the joint line as the condition.
    *
    * @param keepBone the bone clicked at {@code keep}, which keeps the other side
    * @param cutBone the bone clicked at {@code cut}
@@ -827,22 +1502,610 @@ public final class AutoSplit {
     BoxMask union = BoxMask.union(List.of(keepBone, cutBone));
     BoxMask keepCore = farFrom(keepBone, cutBone, bandMm, mmX, mmY, mmZ);
     BoxMask cutCore = farFrom(cutBone, keepBone, bandMm, mmX, mmY, mmZ);
-    return flood(union, keep, cut, keepCore, cutCore, mmX, mmY, mmZ, hu);
+    BoneSplit.Split banded = null;
+    BoneSplit.SplitException refused = null;
+    try {
+      banded = flood(union, keep, cut, keepCore, cutCore, cutBone, mmX, mmY, mmZ, hu, null);
+    } catch (BoneSplit.SplitException e) {
+      refused = e;
+    }
+    if (hu != null) {
+      Options o = Options.of(mmX, mmY, mmZ);
+      boolean[] climbed = new boolean[2];
+      try {
+        BoneSplit.Split s =
+            flood(union, keep, cut, null, null, cutBone, mmX, mmY, mmZ, hu, climbed);
+        if (climbed[0] && climbed[1] && bothStand(s, keepBone, cutBone)) {
+          double byClicks = jointShare(s.kept(), s.cut(), o, hu)[0];
+          double byBand = banded == null ? 0 : jointShare(banded.kept(), banded.cut(), o, hu)[0];
+          if (byClicks >= WIDER_SHARE && byClicks >= byBand + WIDER_GAIN) {
+            return s;
+          }
+        }
+      } catch (BoneSplit.SplitException e) {
+        // the clicks alone leave one side empty: the band's answer
+      }
+    }
+    if (banded != null && bothStand(banded, keepBone, cutBone)) {
+      return banded;
+    }
+    // Neither answer may be used: the bones stay as they are. A small bone wholly within the band
+    // of a brighter one has no body kept for it and can be left a few voxels (an elbow CT, a piece
+    // of 3.5 cm3 left 15 mm3); the clicks' answer is no better without a joint line to show for it
+    // (Astra, 12 Nov 2026).
+    throw refused != null
+        ? refused
+        : new BoneSplit.SplitException(BoneSplit.SplitException.Reason.NOT_SEPARABLE);
+  }
+
+  private static boolean bothStand(BoneSplit.Split s, BoxMask keepBone, BoxMask cutBone) {
+    return s.kept().count() >= WIDER_KEEPS * keepBone.count()
+        && s.cut().count() >= WIDER_KEEPS * cutBone.count();
+  }
+
+  /**
+   * How deep into each of two bones their border may move when it is drawn again after a find: the
+   * first always, the wider ones only when they bring the border onto a joint line.
+   */
+  static final double[] REFINE_BANDS_MM = {2.5, 5, 8, 14};
+
+  /** A border with this share of its faces on a joint line is a joint: no wider band is tried. */
+  static final double JOINT_SHARE = 0.8;
+
+  /**
+   * A wider band is taken only when it leaves this share of the border on a joint line, and that
+   * much more than the band before.
+   */
+  static final double WIDER_SHARE = 0.6;
+
+  static final double WIDER_GAIN = 0.15;
+
+  /**
+   * Wider bands are tried only while less than this share of the narrowest band's border lies on a
+   * joint line: a border half on a line is at the joint already, and a faint joint must not lose
+   * the border to a stronger line further off. On the four CTs tried every border that a wider band
+   * moved had started under 0.5, and ended smaller than it was; a wider band that makes the border
+   * larger is refused as well (after Astra, 12 Nov 2026: the share alone is not enough to move a
+   * border far).
+   */
+  static final double WIDER_FROM = 0.5;
+
+  /**
+   * No redraw may leave either bone less than this part of what the find gave it: a small bone must
+   * not be swallowed by its neighbour (on an elbow CT a piece of 4 cm3 went almost whole to the
+   * bone beside it), while a border moved onto a joint leaves both bones standing (the fifth
+   * metatarsal kept half of a piece that had held a slice of the cuboid as well). Measured against
+   * the bone as found, not as the pair before left it, so a bone with several neighbours cannot
+   * lose that share to each in turn (Astra, 12 Nov 2026).
+   */
+  static final double WIDER_KEEPS = 0.3;
+
+  /**
+   * The narrowest band is applied without a joint line to show for it, so it may only tidy the
+   * border: it is refused when it leaves either bone less than this part of what it had before this
+   * pair. Before 12 Nov 2026 it was applied whatever it took, and a small bone lying mostly within
+   * the band, with only a sliver further off, could go to its neighbour (Astra). On the four CTs
+   * tried no narrowest band took more than 7 % of a bone.
+   */
+  static final double NARROW_KEEPS = 0.8;
+
+  /**
+   * The largest block in which a border is drawn again. Two bones that touch in two places far
+   * apart (both ends of a tibia and fibula) are worked in one block round both; beyond this size
+   * the border is left as the find drew it instead of asking for gigabytes (Astra, 12 Nov 2026).
+   */
+  static final long REFINE_MAX_VOXELS = 64_000_000L;
+
+  /** CT values from here on are metal: nothing beside them says where a joint is. */
+  static final double METAL_HU = 2500;
+
+  /** How far each side of a border voxel brighter bone is looked for, as a joint line has. */
+  static final double JOINT_LOOK_MM = 2.0;
+
+  /**
+   * Draws the border between every two bones that touch again, on the CT's own grid, along the
+   * darkest surface between them: the joint. The find works on a coarser grid when the CT is large,
+   * so its borders ran in steps of a coarse voxel, a millimetre or more, with specks of one bone
+   * left in the other, and at a narrow joint (a tarsometatarsal joint) it could put the border
+   * several millimetres off the joint, through the bone: on a foot CT a slice of the cuboid went
+   * with the fifth metatarsal. In the coloured 3D picture that read as bones mixed into each other
+   * (Sami, 12 Nov 2026).
+   *
+   * <p>For each pair the border is flooded again, brightest first, from what each bone keeps for
+   * certain: what lies further from the other than a band, {@link #REFINE_BANDS_MM}. The narrowest
+   * band is applied when it leaves both bones nearly whole ({@link #NARROW_KEEPS}). A border counts
+   * as a joint when {@link #JOINT_SHARE} of its faces lie on a joint line, a voxel at least {@link
+   * Options#jointHu()} darker than the bone of one of the two on one side of it and of the other on
+   * the other side, within {@link #JOINT_LOOK_MM}. While it lies clearly off any line ({@link
+   * #WIDER_FROM}), the next wider band is tried and taken only if it does clearly better ({@link
+   * #WIDER_SHARE}, {@link #WIDER_GAIN}), makes the border no larger and leaves both bones standing
+   * ({@link #WIDER_KEEPS}): a border may move far only onto a line the CT shows. On a scan that
+   * shows no such lines (thick slices, a soft kernel: tried on a public trunk CT of 1 by 1 by 3 mm)
+   * nothing moves further than the narrowest band. Every voxel stays in exactly one bone; none is
+   * added or lost, and no bones are joined.
+   *
+   * <p>What this cannot do: the joint line is judged from brightness alone. A dark layer between
+   * two bright ones inside one bone (a growth plate, a fracture line, layered dense bone) reads the
+   * same, so a border moved here is a proposal to be looked at, not a proven joint. The pairs are
+   * taken in order of size and once each: a contact that a later pair's redraw creates is not gone
+   * over again.
+   */
+  public static Result refineBorders(Result found, Supplier<HuSource> hu, Options o) {
+    long start = System.nanoTime();
+    Thread caller = Thread.currentThread();
+    HuSource ct = hu.get();
+    List<BoxMask> masks = new ArrayList<>();
+    for (Piece p : found.pieces()) {
+      masks.add(p.mask());
+    }
+    int n = masks.size();
+    long[] asFound = new long[n];
+    for (int i = 0; i < n; i++) {
+      asFound[i] = masks.get(i).count();
+    }
+    for (int i = 0; i < n; i++) {
+      for (int j = i + 1; j < n; j++) {
+        RegionGrow.checkCancelled(caller);
+        VoxelBox touch = contact(masks.get(i), masks.get(j));
+        if (touch == null) {
+          continue;
+        }
+        BoxMask[] best = null;
+        double bestShare = -1;
+        double bestFaces = Double.MAX_VALUE;
+        for (double band : REFINE_BANDS_MM) {
+          BoxMask[] drawn = redrawn(masks.get(i), masks.get(j), touch, band, o, ct);
+          if (drawn == null) {
+            break; // one of them is thinner than the band here: no wider band either
+          }
+          double[] onLine = jointShare(drawn[0], drawn[1], o, ct);
+          double share = o.jointHu() > 0 ? onLine[0] : 1;
+          double faces = onLine[1];
+          boolean narrowest = band == REFINE_BANDS_MM[0];
+          // each still has its share of what the find gave it, whatever earlier pairs took
+          boolean bothStay =
+              drawn[0].count() >= WIDER_KEEPS * asFound[i]
+                  && drawn[1].count() >= WIDER_KEEPS * asFound[j];
+          if (narrowest) {
+            if (bothStay
+                && drawn[0].count() >= NARROW_KEEPS * masks.get(i).count()
+                && drawn[1].count() >= NARROW_KEEPS * masks.get(j).count()) {
+              best = drawn;
+            } else {
+              // Refused: the wider bands are measured against the border as it stays, not against
+              // a redraw that was thrown away (Astra, 12 Nov 2026).
+              double[] asIs = jointShare(masks.get(i), masks.get(j), o, ct);
+              share = o.jointHu() > 0 ? asIs[0] : 1;
+              faces = asIs[1];
+            }
+            bestShare = share;
+            bestFaces = faces;
+            if (share >= WIDER_FROM || faces == 0) {
+              break; // at a joint already, or apart: nothing to look for further off
+            }
+          } else if (bothStay
+              && faces > 0
+              && faces <= bestFaces
+              && share >= WIDER_SHARE
+              && share >= bestShare + WIDER_GAIN) {
+            best = drawn;
+            bestShare = share;
+            bestFaces = faces;
+          }
+          if (bestShare >= JOINT_SHARE) {
+            break;
+          }
+        }
+        if (best != null) {
+          masks.set(i, best[0]);
+          masks.set(j, best[1]);
+        }
+      }
+    }
+    List<Piece> pieces = new ArrayList<>();
+    for (int i = 0; i < n; i++) {
+      Piece p = found.pieces().get(i);
+      pieces.add(new Piece(masks.get(i), anchorIn(masks.get(i), p.anchor()), p.fragments()));
+    }
+    pieces.sort(Comparator.comparingLong((Piece p) -> p.mask().count()).reversed());
+    return new Result(
+        List.copyOf(pieces),
+        found.fragments(),
+        found.specks(),
+        found.factor(),
+        found.millis() + millis(start),
+        found.jointsSkipped());
+  }
+
+  /**
+   * The two bones with the band along their contact decided again, or null when one of them has
+   * nothing further than the band from the other near the contact.
+   */
+  private static BoxMask[] redrawn(
+      BoxMask wholeA, BoxMask wholeB, VoxelBox touch, double band, Options o, HuSource ct) {
+    int padX = pad(band + 2, o.mmX());
+    int padY = pad(band + 2, o.mmY());
+    int padZ = pad(band + 2, o.mmZ());
+    VoxelBox crop =
+        new VoxelBox(
+            touch.x0() - padX,
+            touch.x1() + padX,
+            touch.y0() - padY,
+            touch.y1() + padY,
+            touch.z0() - padZ,
+            touch.z1() + padZ);
+    if (crop.voxels() > REFINE_MAX_VOXELS) {
+      return null;
+    }
+    BoxMask a = within(wholeA, crop);
+    BoxMask b = within(wholeB, crop);
+    if (a == null || b == null) {
+      return null;
+    }
+    // Far from the whole of the other bone, not only from its part in the block: where the two
+    // come near each other again just outside it, a voxel is not far (Astra, 12 Nov 2026).
+    BoxMask coreA;
+    BoxMask coreB;
+    try {
+      coreA = farFrom(a, wholeB, band, o.mmX(), o.mmY(), o.mmZ());
+      coreB = farFrom(b, wholeA, band, o.mmX(), o.mmY(), o.mmZ());
+    } catch (TooLargeException e) {
+      return null;
+    }
+    if (coreA == null || coreB == null) {
+      return null;
+    }
+    try {
+      BoneSplit.Split s =
+          flood(
+              BoxMask.union(List.of(a, b)),
+              anyVoxel(coreA),
+              anyVoxel(coreB),
+              coreA,
+              coreB,
+              b,
+              o.mmX(),
+              o.mmY(),
+              o.mmZ(),
+              ct,
+              null);
+      return new BoxMask[] {rejoined(wholeA, a, s.kept()), rejoined(wholeB, b, s.cut())};
+    } catch (BoneSplit.SplitException | TooLargeException e) {
+      return null;
+    }
+  }
+
+  /** {@code mm} in voxels, rounded up, and never so many that sums of them overflow. */
+  private static int pad(double mm, double spacing) {
+    return (int) Math.min(1 << 16, Math.ceil(mm / spacing));
+  }
+
+  /**
+   * How much of the border between two bones lies on a joint line: the share of the faces where a
+   * voxel of one meets a voxel of the other at which one of the two is darker by {@link
+   * Options#jointHu()} or more than the bone within {@link #JOINT_LOOK_MM} on both sides of it,
+   * along one of the 13 directions: bone of the one on one side and of the other on the other side.
+   * Returns the share and the number of faces; a share of 0 when the two do not touch.
+   *
+   * <p>Until 12 Nov 2026 any brighter CT on both sides counted, whatever it belonged to, so a third
+   * bone, metal, or the bone's own texture beside the border could stand in for a joint (Astra).
+   * Brightness is still all this sees: see {@link #refineBorders}.
+   */
+  static double[] jointShare(BoxMask a, BoxMask b, Options o, HuSource ct) {
+    if (a.count() > b.count()) {
+      return jointShare(b, a, o, ct);
+    }
+    int[] steps = new int[HALF_NEIGHBOURS.length];
+    for (int d = 0; d < steps.length; d++) {
+      int[] nb = HALF_NEIGHBOURS[d];
+      double mm = Math.sqrt(sq(nb[0] * o.mmX()) + sq(nb[1] * o.mmY()) + sq(nb[2] * o.mmZ()));
+      steps[d] = Math.max(1, (int) Math.round(JOINT_LOOK_MM / mm));
+    }
+    VoxelBox ab = a.box();
+    VoxelBox bb = b.box();
+    int x0 = Math.max(ab.x0(), bb.x0() - 1);
+    int x1 = Math.min(ab.x1(), bb.x1() + 1);
+    int y0 = Math.max(ab.y0(), bb.y0() - 1);
+    int y1 = Math.min(ab.y1(), bb.y1() + 1);
+    int z0 = Math.max(ab.z0(), bb.z0() - 1);
+    int z1 = Math.min(ab.z1(), bb.z1() + 1);
+    int[][] face = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    long faces = 0;
+    long onLine = 0;
+    Thread caller = Thread.currentThread();
+    for (int z = z0; z <= z1; z++) {
+      RegionGrow.checkCancelled(caller);
+      if (!a.hasVoxelsInSlice(z)) {
+        continue;
+      }
+      for (int y = y0; y <= y1; y++) {
+        for (int x = x0; x <= x1; x++) {
+          if (!a.contains(x, y, z)) {
+            continue;
+          }
+          double own = Double.NaN;
+          for (int[] f : face) {
+            if (b.contains(x + f[0], y + f[1], z + f[2])) {
+              if (Double.isNaN(own)) {
+                own = valleyDepth(ct, a, b, x, y, z, steps);
+              }
+              faces++;
+              if (own >= o.jointHu()
+                  || valleyDepth(ct, a, b, x + f[0], y + f[1], z + f[2], steps) >= o.jointHu()) {
+                onLine++;
+              }
+            }
+          }
+        }
+      }
+    }
+    return new double[] {faces == 0 ? 0 : (double) onLine / faces, faces};
+  }
+
+  /**
+   * How much darker a voxel is than the brightest bone of {@code a} on one side of it and of {@code
+   * b} on the other, the best direction; 0 when there is no such direction. Values count up to
+   * {@link #BRIGHT_HU}, and a direction with metal on it does not count.
+   */
+  private static double valleyDepth(
+      HuSource ct, BoxMask a, BoxMask b, int x, int y, int z, int[] steps) {
+    double here = value(ct, x, y, z);
+    if (here >= METAL_HU) {
+      return 0;
+    }
+    double[] peak = new double[2];
+    int[] whose = new int[2];
+    double best = 0;
+    for (int d = 0; d < steps.length; d++) {
+      int[] nb = HALF_NEIGHBOURS[d];
+      boolean metal = false;
+      for (int way = 0; way < 2 && !metal; way++) {
+        int sign = way == 0 ? 1 : -1;
+        peak[way] = Double.NEGATIVE_INFINITY;
+        whose[way] = 0;
+        for (int s = 1; s <= steps[d]; s++) {
+          int px = x + sign * s * nb[0];
+          int py = y + sign * s * nb[1];
+          int pz = z + sign * s * nb[2];
+          double v = value(ct, px, py, pz);
+          if (v >= METAL_HU) {
+            metal = true;
+            break;
+          }
+          if (v > peak[way]) {
+            int owner = a.contains(px, py, pz) ? 1 : b.contains(px, py, pz) ? 2 : 0;
+            if (owner != 0) {
+              peak[way] = v;
+              whose[way] = owner;
+            }
+          }
+        }
+      }
+      if (metal || whose[0] == 0 || whose[1] == 0 || whose[0] == whose[1]) {
+        continue;
+      }
+      double low = Math.min(Math.min(peak[0], peak[1]), BRIGHT_HU);
+      best = Math.max(best, low - Math.min(here, BRIGHT_HU));
+    }
+    return best;
+  }
+
+  /**
+   * {@code anchor} when the mask still holds it. Else the voxel nearest to it in the largest
+   * connected part of the mask, one with bone on all six sides if there is any: not a voxel of a
+   * small island the redraw left beside the bone, which Erase piece would then keep in place of the
+   * bone (Astra's reread, 12 Nov 2026).
+   */
+  static int[] anchorIn(BoxMask mask, int[] anchor) {
+    if (anchor == null || mask.contains(anchor[0], anchor[1], anchor[2])) {
+      return anchor;
+    }
+    VoxelBox box = mask.box();
+    BitVolume main = largestPart(mask.bits());
+    int[] best = anchor;
+    long bestD = Long.MAX_VALUE;
+    boolean bestInside = false;
+    for (int z = 0; z < box.sizeZ(); z++) {
+      long dz = box.z0() + z - anchor[2];
+      for (int y = 0; y < box.sizeY(); y++) {
+        long dy = box.y0() + y - anchor[1];
+        for (int x = 0; x < box.sizeX(); x++) {
+          if (!main.get(x, y, z)) {
+            continue;
+          }
+          long dx = box.x0() + x - anchor[0];
+          long d = dx * dx + dy * dy + dz * dz;
+          if (bestInside && d >= bestD) {
+            continue;
+          }
+          boolean inside =
+              x > 0
+                  && y > 0
+                  && z > 0
+                  && x < box.sizeX() - 1
+                  && y < box.sizeY() - 1
+                  && z < box.sizeZ() - 1
+                  && main.get(x - 1, y, z)
+                  && main.get(x + 1, y, z)
+                  && main.get(x, y - 1, z)
+                  && main.get(x, y + 1, z)
+                  && main.get(x, y, z - 1)
+                  && main.get(x, y, z + 1);
+          if ((inside && !bestInside) || (inside == bestInside && d < bestD)) {
+            bestD = d;
+            bestInside = inside;
+            best = new int[] {box.x0() + x, box.y0() + y, box.z0() + z};
+          }
+        }
+      }
+    }
+    return best;
+  }
+
+  /** The largest part of {@code bits} that hangs together face to face. */
+  private static BitVolume largestPart(BitVolume bits) {
+    int nx = bits.sizeX();
+    int ny = bits.sizeY();
+    int nz = bits.sizeZ();
+    BitVolume seen = new BitVolume(nx, ny, nz);
+    BitVolume best = null;
+    long bestCount = 0;
+    long left = bits.count();
+    for (int z = 0; z < nz && left > bestCount; z++) {
+      for (int y = 0; y < ny; y++) {
+        for (int x = 0; x < nx; x++) {
+          if (!bits.get(x, y, z) || seen.get(x, y, z)) {
+            continue;
+          }
+          BitVolume part = new BitVolume(nx, ny, nz);
+          java.util.ArrayDeque<int[]> open = new java.util.ArrayDeque<>();
+          open.add(new int[] {x, y, z});
+          seen.set(x, y, z);
+          long count = 0;
+          while (!open.isEmpty()) {
+            int[] v = open.poll();
+            part.set(v[0], v[1], v[2]);
+            count++;
+            for (int[] f : FACES) {
+              int px = v[0] + f[0];
+              int py = v[1] + f[1];
+              int pz = v[2] + f[2];
+              if (px >= 0
+                  && py >= 0
+                  && pz >= 0
+                  && px < nx
+                  && py < ny
+                  && pz < nz
+                  && bits.get(px, py, pz)
+                  && !seen.get(px, py, pz)) {
+                seen.set(px, py, pz);
+                open.add(new int[] {px, py, pz});
+              }
+            }
+          }
+          left -= count;
+          if (count > bestCount) {
+            bestCount = count;
+            best = part;
+          }
+        }
+      }
+    }
+    return best == null ? bits : best;
+  }
+
+  private static final int[][] FACES = {
+    {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
+  };
+
+  private static double value(HuSource ct, int x, int y, int z) {
+    double v = ct.huAt(x, y, z);
+    return Double.isNaN(v) ? -1000 : v;
+  }
+
+  /** The box round the voxels of the smaller mask that touch the other face to face, or null. */
+  static VoxelBox contact(BoxMask a, BoxMask b) {
+    if (a.count() > b.count()) {
+      return contact(b, a);
+    }
+    VoxelBox ab = a.box();
+    VoxelBox bb = b.box();
+    int x0 = Math.max(ab.x0(), bb.x0() - 1);
+    int x1 = Math.min(ab.x1(), bb.x1() + 1);
+    int y0 = Math.max(ab.y0(), bb.y0() - 1);
+    int y1 = Math.min(ab.y1(), bb.y1() + 1);
+    int z0 = Math.max(ab.z0(), bb.z0() - 1);
+    int z1 = Math.min(ab.z1(), bb.z1() + 1);
+    int[] e = null;
+    Thread caller = Thread.currentThread();
+    for (int z = z0; z <= z1; z++) {
+      RegionGrow.checkCancelled(caller);
+      if (!a.hasVoxelsInSlice(z)) {
+        continue;
+      }
+      for (int y = y0; y <= y1; y++) {
+        for (int x = x0; x <= x1; x++) {
+          if (a.contains(x, y, z)
+              && (b.contains(x + 1, y, z)
+                  || b.contains(x - 1, y, z)
+                  || b.contains(x, y + 1, z)
+                  || b.contains(x, y - 1, z)
+                  || b.contains(x, y, z + 1)
+                  || b.contains(x, y, z - 1))) {
+            e = grow(e, x, y, z);
+          }
+        }
+      }
+    }
+    return e == null ? null : new VoxelBox(e[0], e[1], e[2], e[3], e[4], e[5]);
+  }
+
+  private static int[] grow(int[] e, int x, int y, int z) {
+    if (e == null) {
+      return new int[] {x, x, y, y, z, z};
+    }
+    e[0] = Math.min(e[0], x);
+    e[1] = Math.max(e[1], x);
+    e[2] = Math.min(e[2], y);
+    e[3] = Math.max(e[3], y);
+    e[4] = Math.min(e[4], z);
+    e[5] = Math.max(e[5], z);
+    return e;
+  }
+
+  /** The part of {@code mask} inside {@code crop}, or null. */
+  static BoxMask within(BoxMask mask, VoxelBox crop) {
+    VoxelBox common = mask.box().intersect(crop);
+    if (common == null) {
+      return null;
+    }
+    VoxelBox b = mask.box();
+    VoxelBox local =
+        new VoxelBox(
+            common.x0() - b.x0(),
+            common.x1() - b.x0(),
+            common.y0() - b.y0(),
+            common.y1() - b.y0(),
+            common.z0() - b.z0(),
+            common.z1() - b.z0());
+    return BoxMask.trimmed(common, mask.bits().crop(local));
+  }
+
+  private static int[] anyVoxel(BoxMask mask) {
+    VoxelBox b = mask.box();
+    for (int z = 0; z < b.sizeZ(); z++) {
+      for (int y = 0; y < b.sizeY(); y++) {
+        for (int x = 0; x < b.sizeX(); x++) {
+          if (mask.bits().get(x, y, z)) {
+            return new int[] {b.x0() + x, b.y0() + y, b.z0() + z};
+          }
+        }
+      }
+    }
+    throw new IllegalArgumentException("empty mask");
+  }
+
+  /** {@code whole} with its part {@code was} replaced by {@code now}. */
+  private static BoxMask rejoined(BoxMask whole, BoxMask was, BoxMask now) {
+    BoxMask rest = whole.minus(List.of(was));
+    return rest == null ? now : BoxMask.union(List.of(rest, now));
   }
 
   /** The voxels of {@code a} farther than {@code mm} from every voxel of {@code b}, or null. */
   static BoxMask farFrom(BoxMask a, BoxMask b, double mm, double mmX, double mmY, double mmZ) {
     VoxelBox box = a.box();
-    int px = (int) Math.ceil(mm / mmX) + 1;
-    int py = (int) Math.ceil(mm / mmY) + 1;
-    int pz = (int) Math.ceil(mm / mmZ) + 1;
+    Thread caller = Thread.currentThread();
+    int px = pad(mm, mmX) + 1;
+    int py = pad(mm, mmY) + 1;
+    int pz = pad(mm, mmZ) + 1;
     int nx = box.sizeX() + 2 * px;
     int ny = box.sizeY() + 2 * py;
     int nz = box.sizeZ() + 2 * pz;
-    float[] g = new float[nx * ny * nz];
+    float[] g = new float[cells(nx, ny, nz, 5)]; // the field and the transform's working rows
     Arrays.fill(g, INF);
     VoxelBox bb = b.box();
     for (int z = 0; z < nz; z++) {
+      RegionGrow.checkCancelled(caller);
       int gz = box.z0() - pz + z;
       if (gz < bb.z0() || gz > bb.z1()) {
         continue;
@@ -857,7 +2120,7 @@ public final class AutoSplit {
         }
       }
     }
-    squaredDistance(g, nx, ny, nz, mmX, mmY, mmZ, Thread.currentThread());
+    squaredDistance(g, nx, ny, nz, mmX, mmY, mmZ, caller);
     BitVolume far = new BitVolume(box.sizeX(), box.sizeY(), box.sizeZ());
     double limit = mm * mm;
     for (int z = 0; z < box.sizeZ(); z++) {
@@ -872,16 +2135,24 @@ public final class AutoSplit {
     return BoxMask.trimmed(box, far);
   }
 
+  /**
+   * @param cutOwner the voxels the flood does not reach stay with the kept side unless they are in
+   *     this mask: then they go to the cut side, where they were. Null when one bone is split
+   * @param climbed when not null: set to whether the keep mark and the cut mark each found the way
+   *     to cortex that was given to its side
+   */
   private static BoneSplit.Split flood(
       BoxMask bone,
       int[] keep,
       int[] cut,
       BoxMask keepSeeds,
       BoxMask cutSeeds,
+      BoxMask cutOwner,
       double mmX,
       double mmY,
       double mmZ,
-      HuSource hu)
+      HuSource hu,
+      boolean[] climbed)
       throws BoneSplit.SplitException {
     Thread caller = Thread.currentThread();
     VoxelBox box = bone.box();
@@ -894,7 +2165,8 @@ public final class AutoSplit {
     if (a == null || b == null) {
       throw new BoneSplit.SplitException(BoneSplit.SplitException.Reason.NOT_IN_BONE);
     }
-    float[] g = new float[nx * ny * nz];
+    // the brightness, the side of each voxel and the queue of the flood
+    float[] g = new float[cells(nx, ny, nz, 9)];
     for (int z = 0; z < box.sizeZ(); z++) {
       for (int y = 0; y < box.sizeY(); y++) {
         for (int x = 0; x < box.sizeX(); x++) {
@@ -936,6 +2208,57 @@ public final class AutoSplit {
     push(buckets, ib, levels - 1);
     seed(keepSeeds, (byte) 1, box, nx, ny, side, buckets, levels - 1);
     seed(cutSeeds, (byte) 2, box, nx, ny, side, buckets, levels - 1);
+    if (hu != null && (keepSeeds == null || cutSeeds == null)) {
+      // Starting at once is not enough: from a click in the marrow everything beyond is reached
+      // through that dark marrow, later than from a click on the other bone's cortex, so the other
+      // side took this bone's cortex as well. On a foot CT, clicks in the marrow of the fifth
+      // metatarsal and of the cuboid gave the metatarsal nothing at all; clicks on a slice land in
+      // marrow more often than not (12 Nov 2026). A mark with no core of its own to start from
+      // therefore first looks, brightest first, for the way to the cortex of its own bone; that
+      // way is its side's, and from there the two sides compete as cortex against cortex.
+      //
+      // The first version gave a mark everything it looked at on the way, one mark after the
+      // other, and Astra showed what that allowed (12 Nov 2026): where no cortex was in reach the
+      // first mark took the whole bone before the second could move, and nothing kept a mark out
+      // of the other bone. Now each mark looks on its own and nothing is given until it has ended
+      // on cortex; then only the way there is given, not all that was looked at. Between two
+      // bones a mark stays inside its own bone. Two ways that share a voxel (both marks in one
+      // marrow space) are both dropped. A mark that finds no cortex starts as before, alone.
+      // Only the cortex at the end of a way starts at once; the dark voxels of the way are its
+      // side's but wait their turn, or a way running beside the other bone's cortex would take
+      // the voxels next to it before that bone's own front arrived (Astra's reread, 12 Nov 2026).
+      //
+      // What is left open: inside one mask nothing tells a mark which bone it is in, so where a
+      // bone has no cortex towards its neighbour a way can end on the neighbour's cortex. Astra
+      // would switch the climb off inside one mask for that. It stays, because without it a click
+      // in marrow leaves its side nearly nothing, which is what a click on a slice is; the result
+      // is shown, and Undo takes it back.
+      int[] step6 = {1, -1, nx, -nx, nx * ny, -nx * ny};
+      int cap = Math.max(2000, (int) Math.min(Integer.MAX_VALUE, bone.count() / 20));
+      java.util.function.IntPredicate inCut =
+          cutOwner == null
+              ? null
+              : i ->
+                  cutOwner.contains(
+                      box.x0() + i % nx - 1,
+                      box.y0() + (i / nx) % ny - 1,
+                      box.z0() + i / (nx * ny) - 1);
+      int[] keepWay =
+          keepSeeds != null
+              ? null
+              : climb(g, side, ia, inCut == null ? null : inCut.negate(), cap, step6, caller);
+      int[] cutWay = cutSeeds != null ? null : climb(g, side, ib, inCut, cap, step6, caller);
+      if (keepWay != null && cutWay != null && share(keepWay, cutWay)) {
+        keepWay = null;
+        cutWay = null;
+      }
+      take(keepWay, (byte) 1, g, side, buckets, levels - 1);
+      take(cutWay, (byte) 2, g, side, buckets, levels - 1);
+      if (climbed != null) {
+        climbed[0] = keepWay != null;
+        climbed[1] = cutWay != null;
+      }
+    }
     int[] step = {1, -1, nx, -nx, nx * ny, -nx * ny};
     long visited = 0;
     for (int lv = levels - 1; lv >= 0; ) {
@@ -962,7 +2285,12 @@ public final class AutoSplit {
     for (int z = 0; z < box.sizeZ(); z++) {
       for (int y = 0; y < box.sizeY(); y++) {
         for (int x = 0; x < box.sizeX(); x++) {
-          if (side[((z + 1) * ny + y + 1) * nx + x + 1] == 2) {
+          byte s = side[((z + 1) * ny + y + 1) * nx + x + 1];
+          if (s == 2
+              || (s == 0
+                  && cutOwner != null
+                  && bone.bits().get(x, y, z)
+                  && cutOwner.contains(box.x0() + x, box.y0() + y, box.z0() + z))) {
             cutBits.set(x, y, z);
           }
         }
@@ -978,6 +2306,130 @@ public final class AutoSplit {
     return new BoneSplit.Split(kept, gone, 0);
   }
 
+  /**
+   * The brightness at which a voxel is cortex for {@link #climb}: what the brightest 15 % of the
+   * voxels {@code own} holds reach (of all the bone when it is null), and 500 HU at least.
+   */
+  private static float cortexLevel(float[] g, java.util.function.IntPredicate own) {
+    int[] count = new int[level((float) ((BRIGHT_HU + 100) / 200)) + 2];
+    long total = 0;
+    Thread caller = Thread.currentThread();
+    for (int i = 0; i < g.length; i++) {
+      if ((i & 0xFFFFF) == 0) {
+        RegionGrow.checkCancelled(caller);
+      }
+      if (g[i] > 0 && (own == null || own.test(i))) {
+        count[Math.min(count.length - 1, level(g[i]))]++;
+        total++;
+      }
+    }
+    long above = 0;
+    int lv = count.length - 1;
+    while (lv > 0 && above + count[lv] < total * 0.15) {
+      above += count[lv--];
+    }
+    return Math.max(lv / 20f, (float) ((500 + 100) / 200.0));
+  }
+
+  /**
+   * The way from a mark to the cortex of its bone: brightest first from the mark, through voxels no
+   * side has yet and, between two bones, only through those {@code own} holds, until a voxel of
+   * cortex is met. Returns the voxels from that one back to the mark, or null when no cortex was
+   * met within {@code cap} voxels. Changes nothing: see {@link #take}.
+   */
+  static int[] climb(
+      float[] g,
+      byte[] side,
+      int from,
+      java.util.function.IntPredicate own,
+      int cap,
+      int[] step,
+      Thread caller) {
+    float cortex = cortexLevel(g, own);
+    java.util.PriorityQueue<Integer> open =
+        new java.util.PriorityQueue<>((a, b) -> Float.compare(g[b], g[a]));
+    // Where each voxel looked at was reached from: as large as the search, not as the block.
+    java.util.Map<Integer, Integer> cameFrom = new java.util.HashMap<>();
+    open.add(from);
+    cameFrom.put(from, -1);
+    int looked = 0;
+    while (!open.isEmpty() && looked < cap) {
+      int i = open.poll();
+      if ((++looked & 0xFFF) == 0) {
+        RegionGrow.checkCancelled(caller);
+      }
+      if (g[i] >= cortex) {
+        List<Integer> way = new ArrayList<>();
+        for (int at = i; at >= 0; at = cameFrom.get(at)) {
+          way.add(at);
+        }
+        return way.stream().mapToInt(Integer::intValue).toArray();
+      }
+      for (int s : step) {
+        int j = i + s;
+        if (g[j] > 0 && side[j] == 0 && (own == null || own.test(j)) && !cameFrom.containsKey(j)) {
+          cameFrom.put(j, i);
+          open.add(j);
+        }
+      }
+    }
+    return null;
+  }
+
+  private static boolean share(int[] a, int[] b) {
+    java.util.Set<Integer> seen = new java.util.HashSet<>();
+    for (int i : a) {
+      seen.add(i);
+    }
+    for (int i : b) {
+      if (seen.contains(i)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Gives the voxels of a way to {@code who}. The cortex voxel at its end starts the flood at once,
+   * with the mark; the others are flooded from at their own brightness.
+   */
+  static void take(int[] way, byte who, float[] g, byte[] side, IntQueue[] buckets, int top) {
+    if (way == null) {
+      return;
+    }
+    for (int k = 0; k < way.length; k++) {
+      int i = way[k];
+      if (side[i] == 0) {
+        side[i] = who;
+        push(buckets, i, k == 0 ? top : Math.min(top, level(g[i])));
+      }
+    }
+  }
+
+  /** A block that does not fit the memory the viewer has: the work on it is not done. */
+  static final class TooLargeException extends IllegalStateException {
+    TooLargeException(String message) {
+      super(message);
+    }
+  }
+
+  /**
+   * The number of voxels of a block, when an array of them can be made and {@code bytesEach} bytes
+   * for each fit in half the memory the viewer may use. Otherwise the work is refused before
+   * anything is allocated: two long bones at 0.3 mm asked for well over a gigabyte (Astra, 12 Nov
+   * 2026).
+   */
+  static int cells(long nx, long ny, long nz, int bytesEach) {
+    double n = (double) nx * ny * nz;
+    if (n > Integer.MAX_VALUE - 8 || n * bytesEach > Runtime.getRuntime().maxMemory() / 2.0) {
+      throw new TooLargeException(
+          String.format(
+              "the block of %.0f million voxels is too large for the memory the viewer has", // NON-NLS
+              n / 1e6));
+    }
+    return (int) n;
+  }
+
   /** CT values above this all flood together: cortex is cortex. */
   private static final double BRIGHT_HU = 1500;
 
@@ -987,7 +2439,9 @@ public final class AutoSplit {
    * around the bone stay 0.
    */
   private static void brightness(float[] g, VoxelBox box, int nx, int ny, int nz, HuSource hu) {
+    Thread caller = Thread.currentThread();
     for (int z = 1; z < nz - 1; z++) {
+      RegionGrow.checkCancelled(caller);
       int gz = box.z0() + z - 1;
       for (int y = 1; y < ny - 1; y++) {
         int gy = box.y0() + y - 1;

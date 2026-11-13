@@ -13,6 +13,8 @@ import com.addisortho.viewer.bones.grow.BoneSplit;
 import com.addisortho.viewer.bones.grow.BoneSplit.Split;
 import com.addisortho.viewer.bones.grow.BoneSplit.SplitException;
 import com.addisortho.viewer.bones.grow.HuSource;
+import java.awt.Color;
+import java.util.List;
 import javax.swing.SwingWorker;
 
 /**
@@ -29,8 +31,13 @@ final class SplitWorker extends SwingWorker<Split, Void> {
     SPLIT
   }
 
-  /** How deep into each of two bones their border may move when it is drawn again. */
-  static final double BORDER_BAND_MM = 3;
+  /**
+   * How deep into each of two bones their border may move when the two clicks alone cannot decide
+   * it (a click that finds no cortex, or a result that would leave a bone under a third of itself):
+   * each bone then keeps for certain what lies further than this from the other. See {@link
+   * AutoSplit#splitBorder}.
+   */
+  static final double BORDER_BAND_MM = 12;
 
   private final Kind kind;
   private final Bone bone;
@@ -39,6 +46,8 @@ final class SplitWorker extends SwingWorker<Split, Void> {
   private final int[] keep;
   private final double[] mm;
   private final HuSource hu;
+  private final List<Bone> others;
+  private volatile List<Color> takenColours;
 
   /**
    * Cuts the clicked part off at its narrowest link to the bone's anchor.
@@ -46,7 +55,12 @@ final class SplitWorker extends SwingWorker<Split, Void> {
    * @param voxel the clicked voxel of the bone
    */
   SplitWorker(Kind kind, Bone bone, int[] voxel) {
-    this(kind, bone, null, null, voxel, null, null);
+    this(kind, bone, null, null, voxel, null, null, List.of());
+  }
+
+  /** As above, with the voxel size along x, y and z so the cut is as deep in mm on every axis. */
+  SplitWorker(Kind kind, Bone bone, int[] voxel, double[] mm) {
+    this(kind, bone, null, null, voxel, mm, null, List.of());
   }
 
   /**
@@ -60,6 +74,7 @@ final class SplitWorker extends SwingWorker<Split, Void> {
    * @param neighbourVoxel the click on it
    * @param mm voxel size along x, y and z
    * @param hu the CT, read on the worker thread only
+   * @param others the bones as they are now, to find the colours beside a fragment cut off
    */
   SplitWorker(
       Bone fragment,
@@ -67,12 +82,21 @@ final class SplitWorker extends SwingWorker<Split, Void> {
       Bone neighbour,
       int[] neighbourVoxel,
       double[] mm,
-      HuSource hu) {
-    this(Kind.SPLIT, fragment, neighbour, neighbourVoxel, fragmentVoxel, mm, hu);
+      HuSource hu,
+      List<Bone> others) {
+    this(Kind.SPLIT, fragment, neighbour, neighbourVoxel, fragmentVoxel, mm, hu, others);
   }
 
   private SplitWorker(
-      Kind kind, Bone bone, Bone neighbour, int[] keep, int[] voxel, double[] mm, HuSource hu) {
+      Kind kind,
+      Bone bone,
+      Bone neighbour,
+      int[] keep,
+      int[] voxel,
+      double[] mm,
+      HuSource hu,
+      List<Bone> others) {
+    this.others = List.copyOf(others);
     this.kind = kind;
     this.bone = bone;
     this.neighbour = neighbour;
@@ -100,17 +124,36 @@ final class SplitWorker extends SwingWorker<Split, Void> {
     return voxel;
   }
 
+  /** The bones this worker looked at for {@link #takenColours()}. */
+  List<Bone> others() {
+    return others;
+  }
+
+  /**
+   * For a fragment cut off one bone: the colours of the bones beside it, found on the worker
+   * thread; null otherwise.
+   */
+  List<Color> takenColours() {
+    return takenColours;
+  }
+
   @Override
   protected Split doInBackground() throws SplitException {
     if (keep != null) {
       // The neighbour's side is kept, the fragment's side is cut.
       if (neighbour.id() == bone.id()) {
-        return AutoSplit.splitBetween(bone.mask(), keep, voxel, mm[0], mm[1], mm[2], hu);
+        Split s = AutoSplit.splitBetween(bone.mask(), keep, voxel, mm[0], mm[1], mm[2], hu);
+        takenColours = BoneColors.taken(s.cut(), others);
+        return s;
       }
       // Two bones: only the band along their contact is decided again.
       return AutoSplit.splitBorder(
           neighbour.mask(), bone.mask(), keep, voxel, mm[0], mm[1], mm[2], hu, BORDER_BAND_MM);
     }
-    return BoneSplit.split(bone.mask(), bone.anchor(), voxel, BoneSplit.MAX_DEPTH);
+    if (mm == null) {
+      return BoneSplit.split(bone.mask(), bone.anchor(), voxel, BoneSplit.MAX_DEPTH);
+    }
+    return BoneSplit.split(
+        bone.mask(), bone.anchor(), voxel, BoneSplit.depthFor(mm[0], mm[1]), mm[0], mm[1], mm[2]);
   }
 }

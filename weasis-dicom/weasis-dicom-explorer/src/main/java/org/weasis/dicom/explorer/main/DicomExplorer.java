@@ -51,6 +51,7 @@ import org.weasis.core.ui.editor.SeriesViewerListener;
 import org.weasis.core.ui.editor.image.ImageViewerPlugin;
 import org.weasis.core.ui.editor.image.SequenceHandler;
 import org.weasis.core.ui.editor.image.ViewCanvas;
+import org.weasis.core.ui.util.AppShell;
 import org.weasis.core.ui.util.ArrayListComboBoxModel;
 import org.weasis.core.ui.util.DefaultAction;
 import org.weasis.core.ui.util.SearchableComboBox;
@@ -58,12 +59,12 @@ import org.weasis.core.ui.util.TitleMenuItem;
 import org.weasis.core.util.StringUtil;
 import org.weasis.dicom.codec.*;
 import org.weasis.dicom.explorer.*;
-import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.Messages;
 import org.weasis.dicom.explorer.exp.ExplorerTask;
 import org.weasis.dicom.explorer.exp.ExportToolBar;
 import org.weasis.dicom.explorer.imp.ImportToolBar;
-import org.weasis.dicom.explorer.index.FindPatientDialog;
+import org.weasis.dicom.explorer.imp.LocalOpen;
+import org.weasis.dicom.explorer.index.StudiesHome;
 import org.weasis.dicom.explorer.pref.download.DicomExplorerPrefView;
 
 public class DicomExplorer extends PluginTool
@@ -138,6 +139,9 @@ public class DicomExplorer extends PluginTool
 
     // Initialize core model and managers
     this.model = model != null ? model : new DicomModel();
+    DicomModel homeModel = this.model;
+    GuiExecutor.execute(
+        () -> AppShell.getInstance().setHome(new StudiesHome(homeModel, new SeriesHandler())));
     this.paneManager = new DicomPaneManager(this);
     this.splitSeriesManager = new SplitSeriesManager(this);
     this.taskManager = new DicomTaskManager(this);
@@ -265,7 +269,7 @@ public class DicomExplorer extends PluginTool
       findOnComputer.setToolTipText(Messages.getString("index.button.tip"));
       findOnComputer.putClientProperty(
           FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_TOOLBAR_BUTTON);
-      findOnComputer.addActionListener(_ -> FindPatientDialog.show(this, model));
+      findOnComputer.addActionListener(_ -> AppShell.getInstance().show(AppShell.Place.STUDIES));
       patientBar.add(findOnComputer);
       panelMain.add(patientBar, "newline, spanx, growx"); // NON-NLS
 
@@ -1402,10 +1406,7 @@ public class DicomExplorer extends PluginTool
 
   @Override
   public void importFiles(File[] files, boolean recursive) {
-    if (files != null) {
-      DicomModel.LOADING_EXECUTOR.execute(
-          new LoadLocalDicom(files, recursive, model, OpeningViewer.ALL_PATIENTS));
-    }
+    LocalOpen.open(files, recursive, model);
   }
 
   @Override

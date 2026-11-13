@@ -32,16 +32,30 @@ public final class CameraFraming {
   private CameraFraming() {}
 
   /**
+   * Tangent of half the vertical field of view, as the projection has it. {@link Camera} hands its
+   * field-of-view number (45) to JOML's {@code setPerspective}, which reads radians: the picture
+   * has tan(22.5 rad) = 0.558, a field of view of about 58 degrees, and has had since upstream. The
+   * picture stays as it is; the framing follows it. Until 11 Nov 2026 the framing took the number
+   * as degrees (0.414), so a pan moved the picture 74 % of the way the cursor went and Fit left the
+   * bone at 69 % of the view's height instead of 93 % (review of 11 Nov 2026).
+   *
+   * @param fov the camera's field-of-view number, as given to the projection
+   */
+  public static double tanHalfFov(double fov) {
+    return Math.abs(Math.tan(fov / 2.0));
+  }
+
+  /**
    * The zoom at which the box {@code [min, max]} (world units, centred on the pivot) is entirely in
    * view whatever its orientation on screen is after {@code rotation}.
    *
-   * @param fovDegrees vertical field of view
+   * @param fov the camera's field-of-view number, see {@link #tanHalfFov}
    * @param aspect viewport width over height
    */
   public static double fitZoom(
-      Vector3d min, Vector3d max, Quaterniond rotation, double fovDegrees, double aspect) {
+      Vector3d min, Vector3d max, Quaterniond rotation, double fov, double aspect) {
     Vector3d centre = new Vector3d(min).add(max).mul(0.5);
-    double tanHalf = Math.tan(Math.toRadians(fovDegrees) / 2.0);
+    double tanHalf = tanHalfFov(fov);
     double distance = 0.0;
     Vector3d corner = new Vector3d();
     for (int i = 0; i < 8; i++) {
@@ -96,12 +110,12 @@ public final class CameraFraming {
       Vector2d pan,
       double cameraDistance,
       double depthOffset,
-      double fovDegrees) {
+      double fov) {
     Vector3d d = rotation.transform(new Vector3d(pivotDelta));
     double z0 = -cameraDistance + depthOffset;
     double z1 = z0 + d.z;
-    double hh0 = viewHalfHeight(Math.abs(z0), fovDegrees);
-    double hh1 = viewHalfHeight(Math.abs(z1), fovDegrees);
+    double hh0 = viewHalfHeight(Math.abs(z0), fov);
+    double hh1 = viewHalfHeight(Math.abs(z1), fov);
     if (hh1 <= 0) {
       return new PivotRebase(new Vector2d(pan), depthOffset + d.z);
     }
@@ -110,8 +124,8 @@ public final class CameraFraming {
   }
 
   /** Half height of the view at the pivot, in world units. */
-  public static double viewHalfHeight(double cameraDistance, double fovDegrees) {
-    return cameraDistance * Math.tan(Math.toRadians(fovDegrees) / 2.0);
+  public static double viewHalfHeight(double cameraDistance, double fov) {
+    return cameraDistance * tanHalfFov(fov);
   }
 
   /**

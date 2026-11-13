@@ -9,6 +9,8 @@
 package com.addisortho.viewer.stitching;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -114,6 +116,165 @@ class SeamMatcherTest {
     assertTrue(seam.reasons().get(0).contains("parallax"), seam.reasons().get(0));
   }
 
+  /**
+   * One target leg, but the band left on the whole width of a film of both legs: the legs sit 3 or
+   * 4 mm apart in the second film (parallax). One rigid fit of both turns that into a tilt of 0.8
+   * to 1 deg that passes the residual and hold-out gates; each half's own points are level, so the
+   * seam is refused and keeps no tilt (review of 11 Nov 2026).
+   */
+  @Test
+  void aWholeWidthSeamOnTwoLegsThatDisagreeIsRefused() {
+    double w = 427;
+    double h = 356;
+    Phantom legs = Phantom.twoLegs(w, 900, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lowerLeft = new Phantom.Cut(Rigid.shift(2, 280), w, h, 0.139, 1, 0);
+    for (double apart : new double[] {3, 4}) {
+      var lowerRight = new Phantom.Cut(Rigid.shift(2, 280 - apart), w, h, 0.139, 1, 0);
+      Seam seam =
+          SeamMatcher.match(
+              legs.matchImage(upper, 0.02, 45),
+              legs.splicedMatchImage(lowerLeft, lowerRight, 0.02, 46),
+              SeamMatcher.Band.WHOLE);
+      assertEquals(Seam.Status.FAILED, seam.status(), apart + " mm: " + seam.summary());
+      assertEquals(0, seam.transform().theta(), 0.0, seam.summary());
+      assertTrue(
+          seam.reasons().stream().anyMatch(r -> r.contains("do not share one seam")),
+          seam.reasons().toString());
+    }
+  }
+
+  private static List<Rigid.Pair> group(Rigid truth, double x, double y0, double dy, int n) {
+    List<Rigid.Pair> out = new ArrayList<>();
+    for (int i = 0; i < n; i++) {
+      double fx = x + (i % 2) * 3;
+      double fy = y0 + i * dy;
+      double[] t = truth.apply(fx, fy);
+      out.add(new Rigid.Pair(fx, fy, t[0], t[1]));
+    }
+    return out;
+  }
+
+  /**
+   * The two sides of the image on their matched points alone (Astra, 11 Nov 2026): five points on
+   * each leg, the right leg 4 mm lower, fit a 1.1 deg turn with a tenth of a millimetre left over.
+   * Neither group fixes a rotation by itself, so the turn rests on the difference between the legs
+   * alone and the seam is refused; missing evidence is not agreement.
+   */
+  @Test
+  void twoSmallGroupsOfPointsCannotVouchForARotation() {
+    MatchImage upper =
+        Phantom.leg(427, 400, 21)
+            .matchImage(new Phantom.Cut(Rigid.IDENTITY, 427, 356, 0.5, 1, 0), 0.01, 30);
+    List<Rigid.Pair> pairs = new ArrayList<>(group(Rigid.shift(0, 280), 100, 20, 4, 5));
+    pairs.addAll(group(Rigid.shift(0, 284), 300, 20, 4, 5));
+    Rigid fit = Rigid.fit(pairs);
+    assertTrue(Math.abs(fit.degrees()) > 1.0 && fit.rms(pairs) < 0.3, "the fit looks sound");
+    String why = SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, fit, pairs);
+    assertNotNull(why);
+    assertTrue(why.contains("neither group fixes a rotation"), why);
+
+    // six level points on one leg, five on the other 2 mm lower and 400 mm away: a turn of 0.29
+    // deg, under the limit, and one side too small to judge alone; the larger side's seam still
+    // says where the other's points should be, and they are 2 mm off
+    List<Rigid.Pair> oneSided = new ArrayList<>();
+    for (int i = 0; i < 6; i++) {
+      oneSided.add(new Rigid.Pair(100, 100 + 4 * i, 100, 380 + 4 * i));
+    }
+    for (int i = 0; i < 5; i++) {
+      oneSided.add(new Rigid.Pair(500, 100 + 4 * i, 500, 382 + 4 * i));
+    }
+    Rigid small = Rigid.fit(oneSided);
+    assertTrue(Math.abs(small.degrees()) < SeamMatcher.MAX_LEG_DISAGREE_DEG, small.toString());
+    MatchImage wide =
+        Phantom.leg(600, 400, 21)
+            .matchImage(new Phantom.Cut(Rigid.IDENTITY, 600, 356, 0.5, 1, 0), 0.01, 30);
+    String moved = SeamMatcher.halvesDisagree(wide, SeamMatcher.Band.WHOLE, small, oneSided);
+    assertNotNull(moved);
+    assertTrue(moved.contains("lie 2.0 mm from where"), moved);
+
+    // the same two small groups under a level seam: nothing rests on them
+    List<Rigid.Pair> level = new ArrayList<>(group(Rigid.shift(0, 280), 100, 20, 4, 5));
+    level.addAll(group(Rigid.shift(0, 280.3), 300, 20, 4, 5));
+    assertNull(SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, Rigid.fit(level), level));
+
+    // one leg, one group of points, however it lies about the middle: not parted, not judged
+    List<Rigid.Pair> one = new ArrayList<>();
+    Rigid turned = new Rigid(Math.toRadians(1.2), 3, 280);
+    for (int i = 0; i < 30; i++) {
+      double fx = 180 + (i % 6) * 12;
+      double fy = 10 + (i / 6) * 12;
+      double[] t = turned.apply(fx, fy);
+      one.add(new Rigid.Pair(fx, fy, t[0], t[1]));
+    }
+    assertNull(SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, Rigid.fit(one), one));
+
+    // two legs that each show the same turn: a film that turned
+    List<Rigid.Pair> both = new ArrayList<>();
+    for (double x : new double[] {70, 290}) {
+      for (int i = 0; i < 30; i++) {
+        double fx = x + (i % 6) * 12;
+        double fy = 10 + (i / 6) * 12;
+        double[] t = turned.apply(fx, fy);
+        both.add(new Rigid.Pair(fx, fy, t[0] + (i % 3 - 1) * 0.1, t[1] + (i % 2) * 0.1));
+      }
+    }
+    assertNull(SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, Rigid.fit(both), both));
+
+    // and two legs, each level, one 2 mm lower: both sides fixed, and they disagree
+    List<Rigid.Pair> apart = new ArrayList<>();
+    for (double[] leg : new double[][] {{70, 280}, {290, 282}}) {
+      for (int i = 0; i < 30; i++) {
+        double fx = leg[0] + (i % 6) * 12;
+        double fy = 10 + (i / 6) * 12;
+        apart.add(new Rigid.Pair(fx, fy, fx + (i % 3 - 1) * 0.1, fy + leg[1] + (i % 2) * 0.1));
+      }
+    }
+    assertNotNull(
+        SeamMatcher.halvesDisagree(upper, SeamMatcher.Band.WHOLE, Rigid.fit(apart), apart));
+  }
+
+  /** The same films with the legs moved alike: a film that truly turned is not refused for it. */
+  @Test
+  void aWholeWidthSeamOnTwoLegsThatTurnedTogetherPasses() {
+    double w = 427;
+    double h = 356;
+    Phantom legs = Phantom.twoLegs(w, 900, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lower = new Phantom.Cut(new Rigid(Math.toRadians(0.8), 2, 280), w, h, 0.139, 1.2, 0);
+    Seam seam =
+        SeamMatcher.match(
+            legs.matchImage(upper, 0.02, 43),
+            legs.matchImage(lower, 0.02, 44),
+            SeamMatcher.Band.WHOLE);
+    assertEquals(Seam.Status.CHECK, seam.status(), String.join("; ", seam.reasons()));
+    assertRecovers(Phantom.truth(upper, lower), seam, w / 2, 320);
+  }
+
+  /**
+   * Target leg Both refusing a whole-width seam that had passed on its own: the refused seam keeps
+   * no fitted rotation and no residual figures (review of 11 Nov 2026).
+   */
+  @Test
+  void bothLegsRefusedKeepNoTilt() {
+    double w = 427;
+    double h = 356;
+    Phantom legs = Phantom.twoLegs(w, 900, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lowerLeft = new Phantom.Cut(Rigid.shift(2, 280), w, h, 0.139, 1, 0);
+    for (double apart : new double[] {2, 3}) {
+      var lowerRight = new Phantom.Cut(Rigid.shift(2, 280 - apart), w, h, 0.139, 1, 0);
+      Seam seam =
+          SeamMatcher.matchBothLegs(
+              legs.matchImage(upper, 0.02, 45),
+              legs.splicedMatchImage(lowerLeft, lowerRight, 0.02, 46));
+      assertEquals(Seam.Status.FAILED, seam.status(), apart + " mm: " + seam.summary());
+      assertEquals(0, seam.transform().theta(), 0.0, apart + " mm: " + seam.summary());
+      assertTrue(Double.isNaN(seam.rmsMm()), seam.summary());
+      assertTrue(Double.isNaN(seam.rotationSigmaDeg()), seam.summary());
+    }
+  }
+
   /** The same leg with the overlap on bare shaft, no texture there: still refused. */
   @Test
   void refusesASingleLegShaftOverlap() {
@@ -182,6 +343,99 @@ class SeamMatcherTest {
     } else {
       assertTrue(Math.abs(seam.transform().degrees()) < 1.0, seam.summary());
     }
+  }
+
+  /**
+   * A refused automatic seam with enough matched points is left where those points agree, by shift
+   * alone, never at a rough peak far from them (real case, 10 Nov 2026: the knee-to-ankle seam was
+   * left 7 mm above its matched points). Here one leg turned 1.2 deg and sits 2 mm lower; the rough
+   * peak of the whole width lies about 300 mm from the matched points.
+   */
+  @Test
+  void aRefusedSeamIsLeftWhereItsMatchedPointsAgree() {
+    double w = 427;
+    double h = 427;
+    Phantom legs = Phantom.twoLegs(w, 1100, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lowerLeft = new Phantom.Cut(Rigid.shift(2, 85), w, h, 0.139, 1, 0);
+    var lowerRight = new Phantom.Cut(new Rigid(Math.toRadians(1.2), 2, 87), w, h, 0.139, 1, 0);
+    Seam seam =
+        SeamMatcher.match(
+            legs.matchImage(upper, 0.02, 45),
+            legs.splicedMatchImage(lowerLeft, lowerRight, 0.02, 46),
+            SeamMatcher.Band.WHOLE);
+
+    assertEquals(Seam.Status.FAILED, seam.status(), seam.summary());
+    assertTrue(seam.pairs().size() >= SeamMatcher.MIN_INLIERS, seam.summary());
+    assertEquals(0, seam.transform().theta(), 0.0, "still no fitted rotation");
+    assertEquals(SeamMatcher.meanShift(seam.pairs()), seam.transform());
+    assertTrue(
+        seam.reasons().stream().anyMatch(r -> r.contains("average shift of the matched points")),
+        seam.reasons().toString());
+    // at the matched points' centre the seam carries them where they matched
+    double fx = seam.pairs().stream().mapToDouble(Rigid.Pair::fx).average().orElseThrow();
+    double fy = seam.pairs().stream().mapToDouble(Rigid.Pair::fy).average().orElseThrow();
+    double tx = seam.pairs().stream().mapToDouble(Rigid.Pair::tx).average().orElseThrow();
+    double ty = seam.pairs().stream().mapToDouble(Rigid.Pair::ty).average().orElseThrow();
+    double[] got = seam.transform().apply(fx, fy);
+    assertEquals(tx, got[0], 1e-6);
+    assertEquals(ty, got[1], 1e-6);
+    // and within a few millimetres of one of the legs' true seams, not hundreds away
+    double[] left = Phantom.truth(upper, lowerLeft).apply(fx, fy);
+    double[] right = Phantom.truth(upper, lowerRight).apply(fx, fy);
+    double off =
+        Math.min(
+            Math.hypot(got[0] - left[0], got[1] - left[1]),
+            Math.hypot(got[0] - right[0], got[1] - right[1]));
+    assertTrue(off < 3, "%.1f mm from the nearer leg's seam".formatted(off));
+  }
+
+  /**
+   * The known limit of that rule (reviews of 10 Nov 2026): on a whole-width match of two legs that
+   * moved differently, no single shift suits both, and the refused seam follows the leg its matched
+   * points lie on. The other leg is then several millimetres off, the seam stays refused, and
+   * "Both" stays refused too. Printed so a change to the matcher shows what it did to the far leg.
+   */
+  @Test
+  void aRefusedWholeWidthSeamFollowsOneLegAndIsOffOnTheOther() {
+    double w = 427;
+    double h = 427;
+    Phantom legs = Phantom.twoLegs(w, 1100, 110, 320, 41);
+    var upper = new Phantom.Cut(Rigid.IDENTITY, w, h, 0.139, 1, 0);
+    var lowerLeft = new Phantom.Cut(Rigid.shift(2, 85), w, h, 0.139, 1, 0);
+    var lowerRight = new Phantom.Cut(new Rigid(Math.toRadians(1.2), 2, 87), w, h, 0.139, 1, 0);
+    MatchImage up = legs.matchImage(upper, 0.02, 45);
+    MatchImage low = legs.splicedMatchImage(lowerLeft, lowerRight, 0.02, 46);
+    Seam seam = SeamMatcher.match(up, low, SeamMatcher.Band.WHOLE);
+
+    assertEquals(Seam.Status.FAILED, seam.status(), seam.summary());
+    // each leg's axis, mid-height of the overlap, in the upper piece
+    double y = (85 + h) / 2;
+    double offLeft = off(seam.transform(), Phantom.truth(upper, lowerLeft), 110, y);
+    double offRight = off(seam.transform(), Phantom.truth(upper, lowerRight), 320, y);
+    String both = "left %.1f mm, right %.1f mm".formatted(offLeft, offRight);
+    assertTrue(Math.min(offLeft, offRight) < 3, both);
+    assertTrue(Math.max(offLeft, offRight) < 15, both);
+    assertEquals(Seam.Status.FAILED, SeamMatcher.matchBothLegs(up, low).status());
+  }
+
+  private static double off(Rigid got, Rigid truth, double x, double y) {
+    double[] g = got.apply(x, y);
+    double[] t = truth.apply(x, y);
+    return Math.hypot(g[0] - t[0], g[1] - t[1]);
+  }
+
+  @Test
+  void theAverageShiftOfMatchedPointsIsTheirMeanDisplacement() {
+    var pairs =
+        java.util.List.of(
+            new Rigid.Pair(0, 0, 2, 85),
+            new Rigid.Pair(10, 0, 12, 86),
+            new Rigid.Pair(0, 10, 2, 96));
+    Rigid r = SeamMatcher.meanShift(pairs);
+    assertEquals(2, r.tx(), 1e-12);
+    assertEquals(85 + 2.0 / 3, r.ty(), 1e-12);
+    assertEquals(0, r.theta(), 0.0);
   }
 
   @Test
@@ -278,11 +532,17 @@ class SeamMatcherTest {
             0.1,
             List.of(),
             List.of("automatic match, not reviewed"));
-    Seam moved = auto.adjusted(Rigid.shift(0.1, 300));
+    Seam moved = auto.adjusted(Rigid.shift(0.1, 300), 100, 20);
     assertEquals(Seam.Method.SEMI_AUTOMATIC, moved.method());
     assertEquals(Seam.Status.CHECK, moved.status());
     Seam failed = Seam.failed(Rigid.shift(0, 300), Seam.Method.AUTOMATIC, List.of("no overlap"));
-    assertEquals(Seam.Status.FAILED, failed.adjusted(Rigid.shift(0, 301)).status());
+    assertEquals(Seam.Status.FAILED, failed.adjusted(Rigid.shift(0, 301), 100, 20).status());
+    // a turn is measured where the overlap is, not at the piece's corner
+    Seam turned = auto.adjusted(new Rigid(Math.toRadians(0.2), 0, 300), 100, 20);
+    assertEquals(Seam.Status.CHECK, turned.status(), turned.reasons().toString());
+    assertEquals(
+        Seam.Status.FAILED, auto.adjusted(new Rigid(Math.toRadians(0.5), 0, 300), 0, 0).status());
+    assertEquals(Seam.Status.FAILED, auto.adjusted(Rigid.shift(2.5, 300), 100, 20).status());
   }
 
   /**

@@ -14,6 +14,7 @@ import com.formdev.flatlaf.util.SystemFileChooser;
 import java.awt.Dialog;
 import java.io.File;
 import java.net.URI;
+import java.text.MessageFormat;
 import java.util.Collections;
 import java.util.List;
 import javax.swing.JButton;
@@ -32,6 +33,7 @@ import org.weasis.core.api.util.ResourceUtil.OtherIcon;
 import org.weasis.core.util.StringUtil;
 import org.weasis.dicom.explorer.*;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
+import org.weasis.dicom.explorer.library.StudyLibrary;
 import org.weasis.dicom.explorer.wado.LoadSeries;
 
 public class DicomDirImport extends AbstractItemDialogPage implements ImportDicom {
@@ -156,7 +158,7 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
             file = f;
           }
         } catch (Exception e) {
-          LOGGER.error("Cannot read {}", path);
+          LOGGER.error("Cannot read a DICOMDIR path");
         }
       }
     }
@@ -165,18 +167,19 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
       // Read straight off a CD/DVD, every image shown again goes back to the slow drive, and the
       // disc cannot come out: a disc is always copied into the viewer.
       boolean writeInCache = checkboxWriteInCache.isSelected() || DiscDrive.isOnDisc(file.toPath());
-      List<LoadSeries> loadSeries = loadDicomDir(file, dicomModel, writeInCache);
+      Opened opened = loadDicomDir(file, dicomModel, writeInCache);
+      List<LoadSeries> loadSeries = opened.series();
 
       if (loadSeries != null && !loadSeries.isEmpty()) {
         DicomModel.LOADING_EXECUTOR.execute(
             new LoadDicomDir(loadSeries, dicomModel, getOpeningViewer()));
       } else {
-        LOGGER.error("Cannot import DICOM from {}", file);
+        LOGGER.error("Cannot import the DICOM of a DICOMDIR");
 
         int response =
             JOptionPane.showConfirmDialog(
                 WinUtil.getValidComponent(this),
-                Messages.getString("DicomExplorer.mes_import_manual"),
+                manualImportQuestion(opened),
                 this.getTitle(),
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.WARNING_MESSAGE);
@@ -196,14 +199,46 @@ public class DicomDirImport extends AbstractItemDialogPage implements ImportDico
     }
   }
 
-  public static List<LoadSeries> loadDicomDir(
-      File file, DicomModel dicomModel, boolean writeInCache) {
-    List<LoadSeries> loadSeries = null;
-    if (file != null && file.canRead()) {
-      DicomDirLoader dirImport = new DicomDirLoader(file, dicomModel, writeInCache);
-      loadSeries = dirImport.readDicomDir();
+  /** Says first what is known to be missing, since the folder import cannot know of it. */
+  private static String manualImportQuestion(Opened opened) {
+    String question = Messages.getString("DicomExplorer.mes_import_manual");
+    return opened.unavailable() == 0
+        ? question
+        : MessageFormat.format(
+                Messages.getString("DicomDirImport.unavailable"),
+                opened.unavailable(),
+                opened.firstUnavailable())
+            + "\n\n"
+            + question;
+  }
+
+  /**
+   * What a DICOMDIR gave.
+   *
+   * @param series what can be opened; empty when nothing it lists could be found
+   * @param unavailable when nothing opened, how many images it listed that could not be found
+   * @param firstUnavailable its name, for the user only: it can name a patient
+   */
+  public record Opened(List<LoadSeries> series, int unavailable, String firstUnavailable) {}
+
+  public static Opened loadDicomDir(File file, DicomModel dicomModel, boolean writeInCache) {
+    if (file == null || !file.canRead()) {
+      return new Opened(List.of(), 0, null);
     }
-    return loadSeries;
+    DicomDirLoader dirImport = new DicomDirLoader(file, dicomModel, writeInCache);
+    List<LoadSeries> loadSeries = dirImport.readDicomDir();
+    List<File> referenced = dirImport.referencedFiles();
+    int unreadPart = dirImport.isIncomplete() ? 1 : 0;
+    if (loadSeries != null && !loadSeries.isEmpty()) {
+      // The study must outlast the disc: the viewer's copy is only for this session.
+      StudyLibrary.getInstance()
+          .retainReferenced(referenced, dicomModel, unreadPart, file.getName());
+      return new Opened(loadSeries, 0, null);
+    }
+    return new Opened(
+        List.of(),
+        referenced.size() + unreadPart,
+        referenced.isEmpty() ? file.getName() : referenced.getFirst().getName());
   }
 
   public static File getDcmDirFromMedia() {

@@ -64,7 +64,14 @@ final class SeamEditor extends JDialog {
   // the whole stitch with this seam replaced by the one given; null when there is none to show
   private final Function<Seam, Stitch> whole;
   private Seam seam;
-  private Seam result;
+  // how the seam shown was set, kept in step with it so that a saved project can make it again
+  private SeamRecipe recipe;
+  // the seam as its match left it: a hand move is judged against this, not against the last
+  // nudge, so many small moves cannot add up to a large one that still reads "check". Null while
+  // it is being made again for a seam that was opened already moved by hand.
+  private Seam anchor;
+  private int anchorGeneration;
+  private SeamRecipe.Made result;
   private final List<Rigid.Pair> pairs = new ArrayList<>();
   private double[] pendingUpper;
 
@@ -95,11 +102,11 @@ final class SeamEditor extends JDialog {
   private double[] upperBox;
   private double[] lowerBox;
 
-  SeamEditor(Window owner, int index, Piece upper, Piece lower, Seam seam, SeamMatcher.Band band) {
-    this(owner, index, upper, lower, seam, band, null);
-  }
-
   /**
+   * @param made the seam as it stands, with how it was set
+   * @param automatic how Automatic match again matches: exactly as Line up does for the leg and
+   *     band confirmed. When that is leg by leg (target leg Both), Refine automatically from here
+   *     and Fit to the points are checked leg by leg too
    * @param whole the whole stitch with seam {@code index} replaced by the seam given, drawn beside
    *     the overlap and redrawn after each move; null to show the overlap only
    */
@@ -108,8 +115,9 @@ final class SeamEditor extends JDialog {
       int index,
       Piece upper,
       Piece lower,
-      Seam seam,
+      SeamRecipe.Made made,
       SeamMatcher.Band band,
+      SeamRecipe automatic,
       Function<Seam, Stitch> whole) {
     super(
         owner,
@@ -119,7 +127,16 @@ final class SeamEditor extends JDialog {
     this.lower = lower;
     this.index = index;
     this.whole = whole;
+    Seam seam = made.seam();
     this.seam = seam;
+    this.recipe = made.recipe();
+    if (recipe.movedTo() == null || seam.status() == Seam.Status.FAILED) {
+      // A failed seam stays failed however it is moved, so it is its own anchor: a seam that
+      // reopening held failed is never judged afresh, and so never passed, by a hand move.
+      this.anchor = seam;
+    } else {
+      findAnchor(recipe);
+    }
     wholeTimer.setRepeats(false);
     if (seam.method() == Seam.Method.MANUAL) {
       pairs.addAll(seam.pairs());
@@ -146,24 +163,26 @@ final class SeamEditor extends JDialog {
     fit.addActionListener(
         e -> {
           if (!pairs.isEmpty()) {
-            setSeam(SeamMatcher.manual(pairs));
+            SeamRecipe fitted = automatic.fitTo(pairs);
+            setSeam(fitted, fitted.compute(upper.match(), lower.match()));
           }
         });
     JButton auto = new JButton(Messages.getString("SeamEditor.auto"));
     auto.addActionListener(
         e -> {
           auto.setEnabled(false);
+          SeamRecipe matched = automatic;
           new SwingWorker<Seam, Void>() {
             @Override
             protected Seam doInBackground() {
-              return SeamMatcher.match(upper.match(), lower.match(), band);
+              return matched.compute(upper.match(), lower.match());
             }
 
             @Override
             protected void done() {
               auto.setEnabled(true);
               try {
-                setSeam(get());
+                setSeam(matched, get());
               } catch (Exception ex) {
                 status.setText(String.valueOf(ex.getCause() == null ? ex : ex.getCause()));
               }
@@ -175,18 +194,18 @@ final class SeamEditor extends JDialog {
     refine.addActionListener(
         e -> {
           refine.setEnabled(false);
-          Rigid from = this.seam.transform();
+          SeamRecipe refined = automatic.refineFrom(band, this.seam.transform());
           new SwingWorker<Seam, Void>() {
             @Override
             protected Seam doInBackground() {
-              return SeamMatcher.refine(upper.match(), lower.match(), band, from);
+              return refined.compute(upper.match(), lower.match());
             }
 
             @Override
             protected void done() {
               refine.setEnabled(true);
               try {
-                setSeam(get());
+                setSeam(refined, get());
               } catch (Exception ex) {
                 status.setText(String.valueOf(ex.getCause() == null ? ex : ex.getCause()));
               }
@@ -199,7 +218,7 @@ final class SeamEditor extends JDialog {
     JButton apply = new JButton(Messages.getString("SeamEditor.apply"));
     apply.addActionListener(
         e -> {
-          result = this.seam;
+          result = new SeamRecipe.Made(this.recipe, this.seam);
           dispose();
         });
     JButton cancel = new JButton(Messages.getString("StitchDialog.cancel"));
@@ -272,12 +291,77 @@ final class SeamEditor extends JDialog {
     flickerTimer.stop();
     wholeTimer.stop();
     wholeGeneration++;
+    anchorGeneration++;
     super.dispose();
   }
 
-  /** The seam the user chose, empty when cancelled. */
-  Optional<Seam> result() {
+  /** Whether hand moves can be measured yet: false while the seam's match is made again. */
+  boolean anchorKnown() {
+    return anchor != null;
+  }
+
+  /** The seam the user chose and how it was set, empty when cancelled. */
+  Optional<SeamRecipe.Made> result() {
     return Optional.ofNullable(result);
+  }
+
+  private void setSeam(SeamRecipe how, Seam s) {
+    recipe = how;
+    if (how.movedTo() == null) {
+      anchor = s; // a fresh match: hand moves are measured from here
+      anchorGeneration++;
+    }
+    setSeam(s);
+  }
+
+  // the match behind a seam that was opened already moved by hand, made again off the interface
+  // thread; the seam shown is then judged against it
+  private void findAnchor(SeamRecipe moved) {
+    int generation = ++anchorGeneration;
+    SeamRecipe match = moved.moved(null);
+    new SwingWorker<Seam, Void>() {
+      @Override
+      protected Seam doInBackground() {
+        return match.compute(upper.match(), lower.match());
+      }
+
+      @Override
+      protected void done() {
+        if (generation != anchorGeneration || !isDisplayable()) {
+          return;
+        }
+        Seam shown = seam;
+        try {
+          anchor = get();
+        } catch (Exception ex) {
+          // Without its match no further hand move can be measured: every one fails the seam
+          // until a match is made again (Astra, 11 Nov 2026).
+          anchor =
+              Seam.failed(
+                  shown.transform(),
+                  shown.method(),
+                  List.of(
+                      "the match this seam was moved from could not be made again, so a further"
+                          + " move cannot be measured against it: press Refine automatically from"
+                          + " here, or Automatic match again"));
+          return;
+        }
+        // The seam as opened was not moved meanwhile (moving waits for this). Judged against its
+        // match it can only be lowered, never passed.
+        Seam judged = adjusted(anchor, recipe.movedTo());
+        if (judged.status() == Seam.Status.FAILED && shown.status() != Seam.Status.FAILED) {
+          setSeam(judged);
+        } else {
+          setSeam(shown); // shows the seam's own words again in place of the waiting note
+        }
+      }
+    }.execute();
+  }
+
+  private Seam adjusted(Seam from, Rigid to) {
+    double[] ref =
+        SeamRecipe.reference(upper.match(), lower.match(), from.transform(), from.pairs());
+    return from.adjusted(to, ref[0], ref[1]);
   }
 
   private void setSeam(Seam s) {
@@ -477,6 +561,14 @@ final class SeamEditor extends JDialog {
 
   // moves the lower piece in the upper piece's frame; turns about the overlap's centre
   private void move(double dx, double dy, double degrees) {
+    if (anchor == null) {
+      // The match this seam was moved from is being made again. Until it is known a move could
+      // not be measured against it, and nudges could add up unseen (Astra, 11 Nov 2026).
+      status.setText(
+          "Checking where the match put this seam; it can be moved in a moment.\n"
+              + seam.summary());
+      return;
+    }
     double[] box =
         SeamMatcher.overlap(upper.widthMm(), upper.heightMm(), seam.transform(), lower.match());
     double cx = (box[0] + box[2]) / 2;
@@ -485,7 +577,8 @@ final class SeamEditor extends JDialog {
         Rigid.shift(cx, cy)
             .after(new Rigid(Math.toRadians(degrees), 0, 0))
             .after(Rigid.shift(-cx, -cy));
-    setSeam(seam.adjusted(Rigid.shift(dx, dy).after(turn).after(seam.transform())));
+    Rigid to = Rigid.shift(dx, dy).after(turn).after(seam.transform());
+    setSeam(recipe.moved(to), adjusted(anchor, to));
   }
 
   private void bindKeys(JComponent root) {

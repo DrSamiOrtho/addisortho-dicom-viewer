@@ -61,7 +61,7 @@ public class StudyStore {
   }
 
   /**
-   * @param instance the stored image, or null unless the outcome is {@link Outcome#STORED}
+   * @param instance the stored image, or the copy already held; null on a {@link Outcome#CONFLICT}
    */
   public record Commit(Outcome outcome, StoredInstance instance) {}
 
@@ -149,6 +149,14 @@ public class StudyStore {
     return root;
   }
 
+  /**
+   * The documents of one kind this store keeps beside its studies, such as editable stitches. They
+   * are not images and live in a hidden folder that no walk over studies enters.
+   */
+  public ProjectDocuments projects(String kind) {
+    return new ProjectDocuments(root, kind);
+  }
+
   void setIncludeName(boolean includeName) {
     this.includeName = includeName;
   }
@@ -183,8 +191,13 @@ public class StudyStore {
 
   /** Also brings the incoming folder back if the storage folder was removed and has returned. */
   public boolean hasFreeSpace() throws IOException {
+    return hasFreeSpace(0);
+  }
+
+  /** Whether {@code bytes} more would still leave the margin free. */
+  public boolean hasFreeSpace(long bytes) throws IOException {
     Files.createDirectories(incoming);
-    return freeSpace.of(incoming) >= MIN_FREE_BYTES;
+    return freeSpace.of(incoming) - bytes >= MIN_FREE_BYTES;
   }
 
   public Path newTempFile() {
@@ -222,7 +235,8 @@ public class StudyStore {
       if (contentDigest(existing).equals(contentDigest(temp))) {
         folderFlush.flush(folder); // an earlier attempt may have failed at this very step
         Files.deleteIfExists(temp);
-        return new Commit(Outcome.ALREADY_HELD, null);
+        return new Commit(
+            Outcome.ALREADY_HELD, new StoredInstance(studyUid, seriesUid, sopUid, existing));
       }
       quarantine(temp);
       return new Commit(Outcome.CONFLICT, null);
@@ -275,7 +289,7 @@ public class StudyStore {
     }
   }
 
-  private static void flushFile(Path file) throws IOException {
+  static void flushFile(Path file) throws IOException {
     try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE)) {
       channel.force(true);
     }
@@ -458,9 +472,10 @@ public class StudyStore {
   }
 
   /**
-   * Saves an object made by this viewer, such as a stitch, into its study. When this returns, the
-   * file is on the disk under its real name, has been read back, and is in the catalog. A failure
-   * throws and leaves nothing behind.
+   * Saves an object made by this viewer, such as a stitch or a templating plan, into its study.
+   * When this returns, the file is on the disk under its real name, has been read back, and is in
+   * the catalog. The same object sent again (a retry after an unclear answer) returns the copy
+   * already held. A failure throws and leaves nothing behind.
    *
    * @return the stored object, and whether the catalog was saved as well
    */
@@ -484,12 +499,13 @@ public class StudyStore {
         throw new IOException("The file written is not a complete DICOM object");
       }
       Commit commit = commit(temp, header, studyUid, seriesUid, sopUid);
-      if (commit.outcome() != Outcome.STORED) {
+      if (commit.outcome() == Outcome.CONFLICT) {
         throw new IOException("It clashes with what the study holds and was not added");
       }
       Path stored = commit.instance().file();
       Attributes back = readHeader(stored);
-      if (Files.size(stored) != size
+      boolean fresh = commit.outcome() == Outcome.STORED; // a held copy matched by content
+      if ((fresh && Files.size(stored) != size)
           || back == null
           || !sopUid.equals(back.getString(Tag.SOPInstanceUID))) {
         throw new IOException("The saved file could not be read back");
@@ -722,7 +738,12 @@ public class StudyStore {
     return studies;
   }
 
-  /** Deletes a study folder. Only a folder directly in the storage folder and made here. */
+  /**
+   * Deletes a study folder, and the projects kept for that study beside it, such as editable
+   * stitches (Sami, 10 Nov 2026), found by the folder's study key. The projects go first: if they
+   * cannot be deleted the study is left whole. Only a folder directly in the storage folder and
+   * made here.
+   */
   public synchronized void deleteStudy(Path folder) throws IOException {
     Path normal = folder.toAbsolutePath().normalize();
     Optional<String> key =
@@ -731,6 +752,13 @@ public class StudyStore {
             : StoreNaming.studyKeyOfFolder(normal.getFileName().toString());
     if (!root.equals(normal.getParent()) || key.isEmpty() || Files.isSymbolicLink(normal)) {
       throw new IOException("Not a study folder of the storage folder");
+    }
+    try {
+      // first, so that a failure leaves the study whole and listed, to be deleted again
+      ProjectDocuments.deleteStudy(root, key.get());
+    } catch (IOException e) {
+      throw new IOException(
+          "The study was not deleted: its saved stitch projects could not be deleted", e);
     }
     folders.remove(key.get());
     imagesOfFolder.remove(normal);

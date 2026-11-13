@@ -9,8 +9,14 @@
 package com.addisortho.viewer.bones;
 
 import java.awt.AWTEvent;
+import java.awt.BasicStroke;
+import java.awt.Color;
 import java.awt.Component;
+import java.awt.Container;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
 import java.awt.Point;
+import java.awt.RenderingHints;
 import java.awt.Toolkit;
 import java.awt.event.AWTEventListener;
 import java.awt.event.InputEvent;
@@ -21,6 +27,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.DoubleSupplier;
+import javax.swing.JComponent;
 import javax.swing.SwingUtilities;
 import org.dcm4che3.data.Tag;
 import org.joml.Vector3d;
@@ -54,15 +62,23 @@ final class SeedPicker {
    * @param frameOfReferenceUID frame of reference of the MPR series it was taken on
    * @param plane the view it was taken in, for the user
    * @param additive Shift, Ctrl or Cmd was held: the click adds to what is selected
+   * @param normal unit normal of the slice the seed was taken on, in patient axes; {@code null} in
+   *     the 3D view
    */
-  record Seed(Vector3d lps, String frameOfReferenceUID, String plane, boolean additive) {
+  record Seed(
+      Vector3d lps, String frameOfReferenceUID, String plane, boolean additive, Vector3d normal) {
 
     Seed(Vector3d lps, String frameOfReferenceUID, String plane) {
-      this(lps, frameOfReferenceUID, plane, false);
+      this(lps, frameOfReferenceUID, plane, false, null);
     }
 
     Seed withAdditive(boolean add) {
-      return new Seed(lps, frameOfReferenceUID, plane, add);
+      return new Seed(lps, frameOfReferenceUID, plane, add, normal);
+    }
+
+    /** The seed with the unit normal of the slice it was taken on, in patient axes. */
+    Seed withNormal(Vector3d sliceNormal) {
+      return new Seed(lps, frameOfReferenceUID, plane, additive, sliceNormal);
     }
   }
 
@@ -74,6 +90,16 @@ final class SeedPicker {
   private List<Seed> stroke;
 
   private Point strokeLast;
+
+  /** Told the stroke so far each time a drag adds a point to it, or {@code null}. */
+  private Consumer<List<Seed>> strokeGrows;
+
+  private BooleanSupplier strokesOn = () -> false;
+
+  /** Radius of the brush in mm, or 0 when no brush is on: the ring drawn under the mouse. */
+  private DoubleSupplier ringMm = () -> 0;
+
+  private final BrushRing ring = new BrushRing();
 
   /** The press has moved beyond a click since it went down: a drag, even if it ends near it. */
   private boolean dragged;
@@ -90,24 +116,34 @@ final class SeedPicker {
    * rotation. A click in the 3D view that meets nothing is reported to {@code onMiss}.
    */
   void arm(Consumer<Seed> onPick, Consumer<String> onMiss) {
-    arm(onPick, null, () -> false, onMiss);
+    arm(onPick, null, null, () -> false, () -> 0, onMiss);
   }
 
   /**
    * As {@link #arm(Consumer, Consumer)}, and while {@code strokes} says so, a drag on a slice (an
    * MPR view or the 2D viewer) is handed to {@code onStroke} on release as the patient positions it
-   * passed through, in order. A drag in the 3D view stays a rotation.
+   * passed through, in order, and to {@code onStrokeGrows} each time it gains a point on the way. A
+   * drag in the 3D view stays a rotation. While {@code brushMm} gives a radius, a ring of that size
+   * follows the mouse over the slices: what a click there would work on.
    */
   void arm(
       Consumer<Seed> onPick,
       Consumer<List<Seed>> onStroke,
+      Consumer<List<Seed>> onStrokeGrows,
       BooleanSupplier strokes,
+      DoubleSupplier brushMm,
       Consumer<String> onMiss) {
     disarm();
+    strokeGrows = onStrokeGrows;
+    strokesOn = strokes;
+    ringMm = brushMm;
     listener =
         event -> {
-          if (!(event instanceof MouseEvent e)
-              || (e.getModifiersEx() & InputEvent.ALT_DOWN_MASK) != 0) {
+          if (!(event instanceof MouseEvent e)) {
+            return;
+          }
+          followRing(e);
+          if ((e.getModifiersEx() & InputEvent.ALT_DOWN_MASK) != 0) {
             return;
           }
           if (e.getID() == MouseEvent.MOUSE_DRAGGED) {
@@ -204,10 +240,35 @@ final class SeedPicker {
     }
     strokeLast = p;
     sliceSeed(pressedView, p).ifPresent(stroke::add);
+    if (dragged && strokeGrows != null && strokesOn.getAsBoolean()) {
+      strokeGrows.accept(List.copyOf(stroke));
+    }
   }
 
-  /** The patient position of a point of an MPR view or of a slice of the 2D viewer. */
+  /**
+   * The patient position of a point of an MPR view or of a slice of the 2D viewer, with the normal
+   * of the slice.
+   */
   private static Optional<Seed> sliceSeed(Component view, Point p) {
+    Optional<Seed> seed = slicePoint(view, p);
+    if (seed.isEmpty()) {
+      return seed;
+    }
+    Optional<Seed> right = slicePoint(view, new Point(p.x + PROBE, p.y));
+    Optional<Seed> down = slicePoint(view, new Point(p.x, p.y + PROBE));
+    if (right.isEmpty() || down.isEmpty()) {
+      return seed;
+    }
+    Vector3d normal =
+        right
+            .get()
+            .lps()
+            .sub(seed.get().lps(), new Vector3d())
+            .cross(down.get().lps().sub(seed.get().lps(), new Vector3d()));
+    return normal.lengthSquared() > 0 ? seed.map(s -> s.withNormal(normal.normalize())) : seed;
+  }
+
+  private static Optional<Seed> slicePoint(Component view, Point p) {
     if (view instanceof MprView mpr) {
       return fromClick(mpr, p);
     }
@@ -215,6 +276,110 @@ final class SeedPicker {
       return fromSliceClick(slice, p);
     }
     return Optional.empty();
+  }
+
+  /** Screen pixels between the points a slice's scale and normal are taken from. */
+  private static final int PROBE = 16;
+
+  /** Pixels of the view to a mm of the patient at the point, or 0 when it is not on a slice. */
+  private static double pixelsPerMm(Component view, Point p) {
+    Optional<Seed> here = slicePoint(view, p);
+    Optional<Seed> right = slicePoint(view, new Point(p.x + PROBE, p.y));
+    if (here.isEmpty() || right.isEmpty()) {
+      return 0;
+    }
+    double mm = here.get().lps().distance(right.get().lps());
+    return mm > 0 ? PROBE / mm : 0;
+  }
+
+  /** Keeps the brush's ring under the mouse while it is over a slice and a brush is on. */
+  private void followRing(MouseEvent e) {
+    int id = e.getID();
+    if (id != MouseEvent.MOUSE_MOVED
+        && id != MouseEvent.MOUSE_DRAGGED
+        && id != MouseEvent.MOUSE_ENTERED
+        && id != MouseEvent.MOUSE_EXITED) {
+      return;
+    }
+    double mm = ringMm.getAsDouble();
+    Component c = e.getComponent();
+    Component view = mprViewOf(c);
+    if (view == null) {
+      view = view2dOf(c);
+    }
+    if (mm <= 0 || id == MouseEvent.MOUSE_EXITED) {
+      if (mm <= 0 || view == null || view == ring.getParent()) {
+        ring.takeOff();
+      }
+      return;
+    }
+    if (!(view instanceof JComponent pane)) {
+      return;
+    }
+    Point p = SwingUtilities.convertPoint(c, e.getPoint(), view);
+    double scale = pixelsPerMm(view, p);
+    if (scale <= 0) {
+      ring.takeOff();
+      return;
+    }
+    ring.show(pane, p, (int) Math.round(mm * scale));
+  }
+
+  /** Takes the brush's ring off the slices, as when the brush is put down. */
+  void hideRing() {
+    ring.takeOff();
+  }
+
+  /**
+   * The outline of the brush on a slice: a ring that follows the mouse. It lies over the view as a
+   * component that takes no mouse event, so the view below works as before.
+   */
+  private static final class BrushRing extends JComponent {
+
+    private static final Color RING = new Color(0xA8FF30);
+    private static final int PAD = 3;
+
+    BrushRing() {
+      setOpaque(false);
+    }
+
+    void show(JComponent view, Point centre, int radius) {
+      int r = Math.max(2, radius);
+      if (getParent() != view) {
+        takeOff();
+        view.add(this, 0);
+      }
+      setBounds(centre.x - r - PAD, centre.y - r - PAD, 2 * (r + PAD) + 1, 2 * (r + PAD) + 1);
+      repaint();
+    }
+
+    void takeOff() {
+      Container parent = getParent();
+      if (parent != null) {
+        java.awt.Rectangle was = getBounds();
+        parent.remove(this);
+        parent.repaint(was.x, was.y, was.width, was.height);
+      }
+    }
+
+    @Override
+    public boolean contains(int x, int y) {
+      return false; // every mouse event is the view's
+    }
+
+    @Override
+    protected void paintComponent(Graphics g) {
+      Graphics2D g2 = (Graphics2D) g.create();
+      g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+      int d = getWidth() - 2 * PAD - 1;
+      g2.setColor(Color.BLACK);
+      g2.setStroke(new BasicStroke(3f));
+      g2.drawOval(PAD, PAD, d, d);
+      g2.setColor(RING);
+      g2.setStroke(new BasicStroke(1.4f));
+      g2.drawOval(PAD, PAD, d, d);
+      g2.dispose();
+    }
   }
 
   /** The surface the 3D view shows under the point, through the view's own picking. */
@@ -261,6 +426,7 @@ final class SeedPicker {
     stroke = null;
     strokeLast = null;
     dragged = false;
+    ring.takeOff();
   }
 
   private static MprView mprViewOf(Component component) {

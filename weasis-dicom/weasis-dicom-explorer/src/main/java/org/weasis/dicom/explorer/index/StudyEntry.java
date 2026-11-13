@@ -19,6 +19,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import org.weasis.dicom.explorer.library.CatalogStudy;
+import org.weasis.dicom.explorer.library.PictureIdentity;
+import org.weasis.dicom.explorer.library.PictureLibrary;
 
 /**
  * One study found on the computer, gathered from its instances wherever they are: the same study in
@@ -116,6 +118,39 @@ public record StudyEntry(
         List.of(folder),
         List.of(folder),
         false);
+  }
+
+  /**
+   * A picture that is not DICOM. It has no study identifiers, so its row carries its local one, and
+   * the description says that a person, not a scanner, stated the patient and the date.
+   *
+   * @param unknown shown where nothing was stated
+   */
+  public static StudyEntry of(
+      PictureLibrary.LocalPicture p, String unknown, String description, String kind) {
+    PictureIdentity who = p.identity();
+    return new StudyEntry(
+        p.localId(),
+        who.patientName().isEmpty() ? unknown : who.patientName(),
+        who.patientId().isEmpty() ? unknown : who.patientId(),
+        "",
+        "",
+        who.dateTaken() == null
+            ? unknown
+            : who.dateTaken().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE),
+        description,
+        "",
+        kind,
+        1,
+        1,
+        List.of(p.file().toString()),
+        List.of(p.file().getParent().toString()),
+        false);
+  }
+
+  /** A row for a picture that is not DICOM: it opens differently and cannot be sent as a study. */
+  public boolean isLocalPicture() {
+    return studyUid.startsWith(PictureLibrary.ID_PREFIX);
   }
 
   /**

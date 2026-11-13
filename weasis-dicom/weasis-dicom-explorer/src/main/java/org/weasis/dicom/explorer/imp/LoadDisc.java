@@ -12,6 +12,7 @@ package org.weasis.dicom.explorer.imp;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.BooleanSupplier;
@@ -36,10 +37,22 @@ public class LoadDisc extends LoadLocalDicom {
   private static final Logger LOGGER = LoggerFactory.getLogger(LoadDisc.class);
 
   private final Path disc;
+  private final int unavailable;
+  private final String firstUnavailable;
 
   public LoadDisc(Path disc, DicomModel dicomModel) {
+    this(disc, dicomModel, 0, null);
+  }
+
+  /**
+   * @param unavailable images the disc's DICOMDIR lists but that could not be found
+   * @param firstUnavailable its name, for the user only
+   */
+  public LoadDisc(Path disc, DicomModel dicomModel, int unavailable, String firstUnavailable) {
     super(new File[0], true, dicomModel, OpeningViewer.ALL_PATIENTS);
     this.disc = disc;
+    this.unavailable = unavailable;
+    this.firstUnavailable = firstUnavailable;
   }
 
   @Override
@@ -48,26 +61,52 @@ public class LoadDisc extends LoadLocalDicom {
         FileUtil.createTempDir(
             AppProperties.buildAccessibleTempDirectory("tmp", "disc")); // NON-NLS
     long start = System.nanoTime();
-    copy(
-        disc,
-        dir,
-        percent -> showProgress(Messages.getString("LoadDisc.copying"), percent),
-        this::isCancelled);
+    Copied copied =
+        copyReportingFailure(
+            disc,
+            dir,
+            percent -> showProgress(Messages.getString("LoadDisc.copying"), percent),
+            this::isCancelled);
     LOGGER.info("Copied the disc in {} ms", (System.nanoTime() - start) / 1_000_000);
     if (!isCancelled()) {
       // Kept in the library too, so the study outlasts this temporary copy and the disc.
-      StudyLibrary.getInstance().importAndReport(List.of(dir.toFile()), true, null);
+      StudyLibrary.getInstance()
+          .retainDisc(
+              dir.toFile(),
+              dicomModel,
+              copied.failed() + unavailable,
+              copied.firstFailed() != null ? copied.firstFailed() : firstUnavailable);
     }
     return new File[] {dir.toFile()};
   }
 
+  /** A disc that cannot even be listed, or is ejected meanwhile, is a result to report. */
+  static Copied copyReportingFailure(
+      Path disc, Path dir, IntConsumer progress, BooleanSupplier cancelled) {
+    try {
+      return copy(disc, dir, progress, cancelled);
+    } catch (IOException | RuntimeException e) {
+      LOGGER.warn("Cannot read the disc: {}", e.getClass().getSimpleName());
+      return new Copied(1, Messages.getString("LoadDisc.unreadable"));
+    }
+  }
+
   /** Copies the files of {@code disc} that can be images into {@code dir}, in name order. */
-  static void copy(Path disc, Path dir, IntConsumer progress, BooleanSupplier cancelled)
+  static Copied copy(Path disc, Path dir, IntConsumer progress, BooleanSupplier cancelled)
       throws IOException {
+    int failed = 0;
+    String firstFailed = null;
     List<Path> files;
     try (Stream<Path> walk = Files.walk(disc)) {
+      List<Path> all = walk.toList();
+      // A link could lead off the disc, so it is reported and never followed.
+      for (Path link : all.stream().filter(Files::isSymbolicLink).toList()) {
+        failed++;
+        firstFailed = firstFailed == null ? link.getFileName().toString() : firstFailed;
+      }
       files =
-          walk.filter(Files::isRegularFile)
+          all.stream()
+              .filter(f -> Files.isRegularFile(f, LinkOption.NOFOLLOW_LINKS))
               .filter(f -> !isSkipped(disc.relativize(f).toString()))
               .sorted()
               .toList();
@@ -77,7 +116,7 @@ public class LoadDisc extends LoadLocalDicom {
     progress.accept(0);
     for (Path file : files) {
       if (cancelled.getAsBoolean()) {
-        return;
+        return new Copied(failed, firstFailed);
       }
       Path target = dir.resolve(disc.relativize(file).toString());
       Files.createDirectories(target.getParent());
@@ -86,6 +125,10 @@ public class LoadDisc extends LoadLocalDicom {
       } catch (IOException e) {
         // A scratched sector loses one file, not the disc.
         LOGGER.warn("Cannot copy a file from the disc: {}", e.getClass().getSimpleName());
+        failed++;
+        if (firstFailed == null) {
+          firstFailed = file.getFileName().toString();
+        }
       }
       long before = done;
       done += size(file);
@@ -93,7 +136,15 @@ public class LoadDisc extends LoadLocalDicom {
         progress.accept((int) (done * 100 / total));
       }
     }
+    return new Copied(failed, firstFailed);
   }
+
+  /**
+   * What a disc copy could not bring across, so that the result reported to the user says so.
+   *
+   * @param firstFailed for the user only: it can name a patient, so it is never logged
+   */
+  record Copied(int failed, String firstFailed) {}
 
   /** Never images: the bundled viewer and the disc's own DICOMDIR (already found unreadable). */
   static boolean isSkipped(String relativePath) {

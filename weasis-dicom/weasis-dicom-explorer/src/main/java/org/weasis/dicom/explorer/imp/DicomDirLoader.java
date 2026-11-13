@@ -13,9 +13,14 @@ package org.weasis.dicom.explorer.imp;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.BulkData;
 import org.dcm4che3.data.Fragments;
@@ -63,6 +68,8 @@ public class DicomDirLoader {
 
   private final DicomModel dicomModel;
   private final ArrayList<LoadSeries> seriesList;
+  private final Set<File> referencedFiles = new LinkedHashSet<>();
+  private boolean incomplete;
   private final WadoParameters wadoParameters;
   private final boolean writeInCache;
   private final File dcmDirFile;
@@ -88,6 +95,19 @@ public class DicomDirLoader {
     seriesList = new ArrayList<>();
   }
 
+  /**
+   * Every file the DICOMDIR read so far refers to, including one that is missing: the library copy
+   * reports that one instead of passing over it.
+   */
+  public List<File> referencedFiles() {
+    return List.copyOf(referencedFiles);
+  }
+
+  /** Whether part of the DICOMDIR could not be read, so that more images may exist than listed. */
+  public boolean isIncomplete() {
+    return incomplete;
+  }
+
   public List<LoadSeries> readDicomDir() {
     Attributes dcmPatient;
     MediaSeriesGroup patient = null;
@@ -102,7 +122,8 @@ public class DicomDirLoader {
         dcmPatient = findNextSiblingRecord(dcmPatient, reader);
       }
     } catch (IOException e) {
-      LOGGER.error("Cannot read DICOMDIR !", e);
+      LOGGER.error("Cannot read DICOMDIR ! {}", e.getClass().getSimpleName());
+      incomplete = true;
     }
 
     if (patient != null) {
@@ -145,7 +166,7 @@ public class DicomDirLoader {
       }
       parseStudy(patient, dcmPatient, reader);
     } catch (Exception e) {
-      LOGGER.error("Cannot read DICOMDIR !", e);
+      LOGGER.error("Cannot read DICOMDIR ! {}", e.getClass().getSimpleName());
     }
     return patient;
   }
@@ -213,8 +234,13 @@ public class DicomDirLoader {
             Integer frame =
                 DicomUtils.getIntegerFromDicomElement(instance, Tag.InstanceNumber, null);
             SopInstance sop = seriesInstanceList.getSopInstance(sopInstanceUID, frame);
+            // Listed even when the series already has it: the disc may have come out during the
+            // first copy, and putting it back must be able to finish the job.
+            File file = toFileName(instance, reader);
+            if (file != null) {
+              referencedFiles.add(file);
+            }
             if (sop == null) {
-              File file = toFileName(instance, reader);
               if (file != null) {
                 if (file.exists()) {
                   sop = new SopInstance(sopInstanceUID, frame);
@@ -226,7 +252,7 @@ public class DicomDirLoader {
                     iconInstance = instance.getNestedDataset(Tag.IconImageSequence);
                   }
                 } else {
-                  LOGGER.error("Missing DICOMDIR entry: {}", file.getPath());
+                  LOGGER.error("Missing a DICOMDIR entry");
                 }
               }
             }
@@ -329,7 +355,7 @@ public class DicomDirLoader {
           }
         }
       } catch (Exception e) {
-        LOGGER.error("Cannot read Icon in DICOMDIR!", e);
+        LOGGER.error("Cannot read Icon in DICOMDIR! {}", e.getClass().getSimpleName());
       } finally {
         reader.dispose();
       }
@@ -341,7 +367,8 @@ public class DicomDirLoader {
     try {
       return reader.findLowerDirectoryRecordInUse(dcmObject, true);
     } catch (IOException e) {
-      LOGGER.error("Cannot read first DICOMDIR entry!", e);
+      LOGGER.error("Cannot read first DICOMDIR entry! {}", e.getClass().getSimpleName());
+      incomplete = true;
     }
     return null;
   }
@@ -350,7 +377,8 @@ public class DicomDirLoader {
     try {
       return reader.findNextDirectoryRecordInUse(dcmObject, true);
     } catch (IOException e) {
-      LOGGER.error("Cannot read next DICOMDIR entry!", e);
+      LOGGER.error("Cannot read next DICOMDIR entry! {}", e.getClass().getSimpleName());
+      incomplete = true;
     }
     return null;
   }
@@ -359,12 +387,41 @@ public class DicomDirLoader {
     try {
       return reader.findFirstRootDirectoryRecordInUse(true);
     } catch (IOException e) {
-      LOGGER.error("Cannot find Patient in DICOMDIR !", e);
+      LOGGER.error("Cannot find Patient in DICOMDIR ! {}", e.getClass().getSimpleName());
+      incomplete = true;
     }
     return null;
   }
 
+  /**
+   * A DICOMDIR names files below its own folder only. A name made to climb out is refused, and so
+   * is a link inside the folder that leads out of it. A file that does not exist is left to be
+   * reported as missing.
+   */
+  static boolean isInside(File folder, File file) {
+    try {
+      Path base = folder.toPath().toAbsolutePath().normalize();
+      Path target = file.toPath().toAbsolutePath().normalize();
+      if (!target.startsWith(base)) {
+        return false;
+      }
+      return !Files.exists(target) || target.toRealPath().startsWith(base.toRealPath());
+    } catch (IOException | InvalidPathException e) {
+      return false;
+    }
+  }
+
   private File toFileName(Attributes dcmObject, DicomDirReader reader) {
+    File found = locate(dcmObject, reader);
+    if (found != null && !isInside(reader.getFile().getAbsoluteFile().getParentFile(), found)) {
+      LOGGER.warn("Ignoring a DICOMDIR entry that points outside its folder");
+      incomplete = true; // an image it lists is left out, so the result must not read as complete
+      return null;
+    }
+    return found;
+  }
+
+  private File locate(Attributes dcmObject, DicomDirReader reader) {
     String[] fileID = dcmObject.getStrings(Tag.ReferencedFileID);
     if (fileID == null || fileID.length == 0) {
       return null;

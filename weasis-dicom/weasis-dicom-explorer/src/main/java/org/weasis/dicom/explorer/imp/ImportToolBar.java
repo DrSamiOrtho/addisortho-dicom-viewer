@@ -86,16 +86,21 @@ public class ImportToolBar extends WtoolBar {
         showAction(parent, model, Messages.getString("DicomDirImport.dicomdir"), false);
       }
     } else {
-      List<LoadSeries> loadSeries = DicomDirImport.loadDicomDir(file, model, true);
+      DicomDirImport.Opened opened = DicomDirImport.loadDicomDir(file, model, true);
+      List<LoadSeries> loadSeries = opened.series();
       if (loadSeries != null && !loadSeries.isEmpty()) {
         DicomModel.LOADING_EXECUTOR.execute(
             new LoadDicomDir(loadSeries, model, OpeningViewer.ALL_PATIENTS));
       } else if (DiscDrive.isOnDisc(file.toPath())) {
-        LOGGER.warn("Unreadable DICOMDIR {}, copying the whole disc", file);
+        LOGGER.warn("Unreadable DICOMDIR, copying the whole disc");
         DicomModel.LOADING_EXECUTOR.execute(
-            new LoadDisc(DiscDrive.mountPoint(file.toPath()), model));
+            new LoadDisc(
+                DiscDrive.mountPoint(file.toPath()),
+                model,
+                opened.unavailable(),
+                opened.firstUnavailable()));
       } else {
-        LOGGER.error("Cannot import DICOM from {}", file);
+        LOGGER.error("Cannot import the DICOM of a DICOMDIR");
 
         int response =
             JOptionPane.showConfirmDialog(

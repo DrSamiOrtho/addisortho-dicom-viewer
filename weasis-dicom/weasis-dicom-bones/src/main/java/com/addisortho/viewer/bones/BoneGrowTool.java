@@ -70,12 +70,16 @@ import javax.swing.SwingWorker.StateValue;
 import javax.swing.UIManager;
 import javax.swing.event.ListDataEvent;
 import javax.swing.event.ListDataListener;
+import org.joml.Vector3d;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.weasis.core.api.explorer.ObservableEvent;
 import org.weasis.core.api.gui.Insertable;
 import org.weasis.core.api.gui.util.ActionW;
 import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.gui.util.WinUtil;
+import org.weasis.core.api.media.data.MediaSeries;
+import org.weasis.core.api.media.data.TagW;
 import org.weasis.core.api.util.ResourceUtil;
 import org.weasis.core.api.util.ResourceUtil.OtherIcon;
 import org.weasis.core.ui.docking.PluginTool;
@@ -87,6 +91,7 @@ import org.weasis.core.ui.editor.image.ViewCanvas;
 import org.weasis.core.ui.editor.image.ViewerPlugin;
 import org.weasis.core.util.StringUtil;
 import org.weasis.dicom.codec.DicomImageElement;
+import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.viewer3d.ActionVol;
 import org.weasis.dicom.viewer3d.EventManager;
 import org.weasis.dicom.viewer3d.View3DContainer;
@@ -132,9 +137,6 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   /** A region above this volume has most likely leaked out of the bone. */
   private static final double LARGE_CM3 = 1500;
 
-  /** How far from a bone, in voxels, a click on its surface still counts as on it. */
-  private static final int NEAR_BONE_VOXELS = 3;
-
   /** Separate makes no part smaller than this, in mm³: two clicks on one spot make nothing. */
   private static final double MIN_PIECE_MM3 = 20;
 
@@ -163,6 +165,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     PAINT("BoneGrowTool.paint", "BoneGrowTool.paint.hint"),
     /** A brush: the bone's voxels around the click are taken out of it. */
     RUB("BoneGrowTool.rub", "BoneGrowTool.rub.hint"),
+    /** A line drawn across a bone on a slice cuts it in two, straight through. */
+    CUT("BoneGrowTool.cut", "BoneGrowTool.cut.hint"),
     NEW("BoneGrowTool.new", "BoneGrowTool.new.hint"),
     ERASE("BoneGrowTool.erase", "BoneGrowTool.erase.hint");
 
@@ -211,14 +215,24 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       new SpinnerNumberModel(0, 0, GrowOptions.MAX_RADIUS, 1);
   private static final SpinnerNumberModel MIN_PIECE = new SpinnerNumberModel(100, 0, 1_000_000, 50);
 
-  /** Size of the brush of Add here and Take out here, mm. */
-  private static final SpinnerNumberModel BRUSH = new SpinnerNumberModel(5, 1, 40, 1);
+  /** Width of the brush of Add here and Take out here, mm: the ring shown on the slice. */
+  private static final SpinnerNumberModel BRUSH = new SpinnerNumberModel(6, 1, 60, 1);
+
+  /** The brush works on the slice it is drawn on only, not as a ball through the slices. */
+  private static final ToggleButtonModel THIN = new ToggleButtonModel();
+
+  /** Add here takes only what looks like bone under the brush. */
+  private static final ToggleButtonModel DENSE = new ToggleButtonModel();
 
   private static final ToggleButtonModel FILL = new ToggleButtonModel();
   private static final ToggleButtonModel CROP = new ToggleButtonModel();
   private static final ToggleButtonModel PREVIEW = new ToggleButtonModel();
   private static final ToggleButtonModel MORE = new ToggleButtonModel();
   private static final ToggleButtonModel NATURAL = new ToggleButtonModel();
+
+  /** The bones are drawn as solid surfaces in their colours, not as the CT shows them. */
+  private static final ToggleButtonModel SOLID = new ToggleButtonModel();
+
   private static final Map<Tool, ToggleButtonModel> TOOLS = new EnumMap<>(Tool.class);
   private static final DefaultBoundedRangeModel PROGRESS =
       new DefaultBoundedRangeModel(0, 0, 0, 100);
@@ -226,7 +240,11 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   private static final List<WeakReference<BoneGrowTool>> PANELS = new ArrayList<>();
   private static final SeedPicker PICKER = new SeedPicker();
   private static final SegExplorer EXPLORER = new SegExplorer();
-  private static final Map<String, GrowSession> SESSIONS = new HashMap<>();
+  private static final BoneSessions<MediaSeries<DicomImageElement>> SESSIONS = new BoneSessions<>();
+
+  /** The explorers already asked to tell when a CT is closed. */
+  private static final Set<DicomModel> WATCHED =
+      java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
 
   /** Sessions to write once the running write is done, with their CT. */
   private static final Map<GrowSession, CtSource> TO_WRITE = new LinkedHashMap<>();
@@ -236,6 +254,10 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   private static SwingWorker<?, ?> worker;
   private static SegWriteWorker writer;
   private static View3d lastView;
+
+  /** The 3D view of the CT whose slice was clicked last, while another 3D view is selected. */
+  private static View3d sliceView;
+
   private static String statusHtml = " ";
   private static boolean indeterminate;
   private static boolean previewShown;
@@ -246,6 +268,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   static {
     FILL.setSelected(true);
     CROP.setSelected(true);
+    DENSE.setSelected(true);
     for (Tool t : Tool.values()) {
       ToggleButtonModel model = new ToggleButtonModel();
       // Once on the model: every panel's button shares it, so this runs once per click.
@@ -258,8 +281,78 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     BONE.addListDataListener(onSelection(BoneGrowTool::applyPreset));
     LOWER.addChangeListener(_ -> updatePreview());
     PREVIEW.addActionListener(_ -> updatePreview());
-    NATURAL.addActionListener(_ -> showDisplayType());
+    NATURAL.addActionListener(
+        _ -> {
+          if (NATURAL.isSelected()) {
+            SOLID.setSelected(false);
+          }
+          showDisplayType();
+        });
+    SOLID.addActionListener(
+        _ -> {
+          if (SOLID.isSelected()) {
+            NATURAL.setSelected(false);
+          }
+          showDisplayType();
+        });
     View3d.addBoneIsolatedListener(BoneGrowTool::boneIsolated);
+    java.awt.Toolkit.getDefaultToolkit()
+        .addAWTEventListener(BoneGrowTool::keyOnSlice, java.awt.AWTEvent.KEY_EVENT_MASK);
+  }
+
+  /** Takes back or does again the last step of the 3D view in use; says so when there is none. */
+  private static void undoOrRedo(boolean redo) {
+    putBack(endLiveStroke());
+    Optional<View3d> view = selectedView();
+    if (view.isEmpty()) {
+      warn(Messages.getString("BoneGrowTool.noCt"));
+      return;
+    }
+    if (view.get().isCutRunning()) {
+      status(Messages.getString("BoneGrowTool.notWrittenYet"));
+      return;
+    }
+    boolean done = redo ? view.get().redoEdit() : view.get().undoEdit();
+    if (!done) {
+      status(Messages.getString(redo ? "BoneGrowTool.noRedo" : "BoneGrowTool.noUndo"));
+    }
+  }
+
+  /**
+   * Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z on a slice (an MPR view or the 2D viewer) undo and redo the
+   * bone steps, as they do in the 3D view: the slices have no undo of their own.
+   */
+  private static void keyOnSlice(java.awt.AWTEvent event) {
+    if (!(event instanceof java.awt.event.KeyEvent e)
+        || e.getID() != java.awt.event.KeyEvent.KEY_PRESSED
+        || e.isConsumed()
+        || (e.getModifiersEx()
+                & (java.awt.event.InputEvent.CTRL_DOWN_MASK
+                    | java.awt.event.InputEvent.META_DOWN_MASK))
+            == 0
+        || (e.getKeyCode() != java.awt.event.KeyEvent.VK_Z
+            && e.getKeyCode() != java.awt.event.KeyEvent.VK_Y)) {
+      return;
+    }
+    Component c = e.getComponent();
+    boolean onSlice =
+        c instanceof org.weasis.dicom.viewer2d.View2d
+            || javax.swing.SwingUtilities.getAncestorOfClass(
+                    org.weasis.dicom.viewer2d.View2d.class, c)
+                != null;
+    if (!onSlice || currentSource().map(BoneGrowTool::session).filter(s -> hasSteps()).isEmpty()) {
+      return;
+    }
+    e.consume();
+    undoOrRedo(e.getKeyCode() == java.awt.event.KeyEvent.VK_Y || e.isShiftDown());
+  }
+
+  /** Whether the 3D view in use has a step to take back or do again. */
+  private static boolean hasSteps() {
+    return selectedView()
+        .map(View3d::getEditHistory)
+        .filter(h -> h.canUndo() || h.canRedo())
+        .isPresent();
   }
 
   /** Runs {@code action} when the selected item of a combo box model changes. */
@@ -309,6 +402,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       small(new JToggleButton(Messages.getString("BoneGrowTool.paint")));
   private final JToggleButton rubButton =
       small(new JToggleButton(Messages.getString("BoneGrowTool.rub")));
+  private final JToggleButton cutButton =
+      small(new JToggleButton(Messages.getString("BoneGrowTool.cut")));
   private final JButton smoothButton =
       small(new JButton(Messages.getString("BoneGrowTool.smooth")));
   private final JButton findButton = new JButton(Messages.getString("BoneGrowTool.find"));
@@ -332,11 +427,35 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       PICKER.arm(
           BoneGrowTool::picked,
           BoneGrowTool::stroked,
+          BoneGrowTool::strokeGrows,
           BoneGrowTool::isBrushOnSlices,
+          BoneGrowTool::ringMm,
           BoneGrowTool::missed);
     }
     showState();
     viewChanged();
+    SelfCheck.start();
+  }
+
+  // ---- For the self-check of test builds ----
+
+  static void selfFind(View3d view) {
+    lastView = view;
+    findBones(view);
+  }
+
+  static boolean selfIdle(View3d view) {
+    return worker == null && bonesFound(view);
+  }
+
+  static void selfLook(boolean solid, boolean natural) {
+    SOLID.setSelected(solid);
+    NATURAL.setSelected(natural);
+    showDisplayType();
+  }
+
+  static String selfStatus() {
+    return statusHtml;
   }
 
   @Override
@@ -377,6 +496,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     rubButton.setModel(TOOLS.get(Tool.RUB));
     paintButton.setToolTipText(Messages.getString("BoneGrowTool.paint.tip"));
     rubButton.setToolTipText(Messages.getString("BoneGrowTool.rub.tip"));
+    cutButton.setModel(TOOLS.get(Tool.CUT));
+    cutButton.setToolTipText(Messages.getString("BoneGrowTool.cut.tip"));
     smoothButton.setToolTipText(Messages.getString("BoneGrowTool.smooth.tip"));
     smoothButton.addActionListener(_ -> onSelected(BoneGrowTool::smoothSelected));
     hideButton.addActionListener(_ -> onSelected(BoneGrowTool::hideSelected));
@@ -394,15 +515,25 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     brushSpinner.setToolTipText(Messages.getString("BoneGrowTool.brush.tip"));
     panel.add(
         GuiUtils.getFlowLayoutPanel(
-            new JLabel(Messages.getString("BoneGrowTool.edge")), paintButton, rubButton));
+            new JLabel(Messages.getString("BoneGrowTool.edge")),
+            paintButton,
+            rubButton,
+            cutButton));
     panel.add(
         GuiUtils.getFlowLayoutPanel(
             new JLabel(Messages.getString("BoneGrowTool.brush") + StringUtil.COLON),
             brushSpinner,
             smoothButton));
+    JCheckBox thinBox = checkBox("BoneGrowTool.thin", THIN);
+    thinBox.setToolTipText(Messages.getString("BoneGrowTool.thin.tip"));
+    JCheckBox denseBox = checkBox("BoneGrowTool.dense", DENSE);
+    denseBox.setToolTipText(Messages.getString("BoneGrowTool.dense.tip"));
+    panel.add(GuiUtils.getFlowLayoutPanel(thinBox, denseBox));
     JCheckBox naturalBox = checkBox("BoneGrowTool.natural", NATURAL);
     naturalBox.setToolTipText(Messages.getString("BoneGrowTool.natural.tip"));
-    panel.add(GuiUtils.getFlowLayoutPanel(naturalBox));
+    JCheckBox solidBox = checkBox("BoneGrowTool.solid", SOLID);
+    solidBox.setToolTipText(Messages.getString("BoneGrowTool.solid.tip"));
+    panel.add(GuiUtils.getFlowLayoutPanel(solidBox, naturalBox));
     panel.add(GuiUtils.boxVerticalStrut(gap));
 
     JLabel listTitle = new JLabel(Messages.getString("BoneGrowTool.list"));
@@ -414,8 +545,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     undoButton.setToolTipText(Messages.getString("BoneGrowTool.undo.tip"));
     redoButton.setToolTipText(Messages.getString("BoneGrowTool.redo.tip"));
     wholeButton.setToolTipText(Messages.getString("BoneGrowTool.whole.tip"));
-    undoButton.addActionListener(_ -> selectedView().ifPresent(View3d::undoEdit));
-    redoButton.addActionListener(_ -> selectedView().ifPresent(View3d::redoEdit));
+    undoButton.addActionListener(_ -> undoOrRedo(false));
+    redoButton.addActionListener(_ -> undoOrRedo(true));
     wholeButton.addActionListener(_ -> selectedView().ifPresent(View3d::restoreVolume));
     panel.add(GuiUtils.getFlowLayoutPanel(undoButton, redoButton, wholeButton));
     panel.add(GuiUtils.boxVerticalStrut(gap));
@@ -545,9 +676,11 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     takeButton.setEnabled(bones > 0);
     paintButton.setEnabled(bones > 0);
     rubButton.setEnabled(bones > 0);
+    cutButton.setEnabled(bones > 0);
     smoothButton.setEnabled(selected > 0 && !running);
     nameButton.setEnabled(selected == 1);
     deleteButton.setEnabled(selected > 0);
+    followHistory();
     revalidate();
   }
 
@@ -629,13 +762,22 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
    * beside the MPR when no 3D view was selected yet.
    */
   private static Optional<View3d> selectedView() {
+    View3d ofSlice = sliceView;
+    if (ofSlice != null) {
+      if (ofSlice.getVolTexture() != null && open3dViews().contains(ofSlice)) {
+        lastView = ofSlice;
+        return Optional.of(ofSlice);
+      }
+      sliceView = null;
+    }
     if (EventManager.getInstance().getSelectedViewPane() instanceof View3d view
         && view.getVolTexture() != null) {
       lastView = view;
       return Optional.of(view);
     }
     View3d last = lastView;
-    if (last != null && last.getVolTexture() != null && last.isShowing()) {
+    if (last != null && last.getVolTexture() != null && open3dViews().contains(last)) {
+      // Also when the MPR lies over it as a tab: the bones and their undo history are its own.
       return Optional.of(last);
     }
     Optional<View3d> open = openView();
@@ -643,23 +785,60 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     return open;
   }
 
-  /** A 3D view on screen showing a volume, if any. */
+  /** A 3D view holding a volume, if any: one on screen before one in a tab behind. */
   private static Optional<View3d> openView() {
+    List<View3d> views = open3dViews();
+    return views.stream()
+        .filter(View3d::isShowing)
+        .findFirst()
+        .or(() -> views.stream().findFirst());
+  }
+
+  /** The 3D views of the open viewers that hold a volume, on screen or in a tab behind. */
+  private static List<View3d> open3dViews() {
     List<ViewerPlugin<?>> plugins = GuiUtils.getUICore().getViewerPlugins();
     List<ViewerPlugin<?>> copy;
     synchronized (plugins) {
       copy = List.copyOf(plugins);
     }
+    List<View3d> views = new ArrayList<>();
     for (ViewerPlugin<?> plugin : copy) {
       if (plugin instanceof View3DContainer container) {
         for (ViewCanvas<DicomImageElement> canvas : container.getImagePanels()) {
-          if (canvas instanceof View3d view && view.getVolTexture() != null && view.isShowing()) {
-            return Optional.of(view);
+          if (canvas instanceof View3d view && view.getVolTexture() != null) {
+            views.add(view);
           }
         }
       }
     }
-    return Optional.empty();
+    return views;
+  }
+
+  /**
+   * Works on the 3D view of the CT a slice was clicked on, when several CTs are open in 3D and the
+   * one in use is another.
+   */
+  private static void followSlice(Seed seed) {
+    String frame = seed.frameOfReferenceUID();
+    if (frame == null || "3D".equals(seed.plane())) { // NON-NLS
+      return;
+    }
+    Optional<View3d> now = selectedView();
+    if (now.isPresent() && frame.equals(frameOf(now.get()))) {
+      return;
+    }
+    open3dViews().stream()
+        .filter(v -> frame.equals(frameOf(v)))
+        .findFirst()
+        .ifPresent(
+            v -> {
+              sliceView = v;
+              panels().forEach(BoneGrowTool::viewChanged);
+            });
+  }
+
+  private static String frameOf(View3d view) {
+    return SeedPicker.frameOfReferenceOf(view.getVolTexture().getVolume());
   }
 
   /** The CT of the view, read again only when the view shows another volume. */
@@ -683,7 +862,63 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   }
 
   private static GrowSession session(CtSource ct) {
-    return SESSIONS.computeIfAbsent(ct.seriesUID(), GrowSession::new);
+    watch(ct.series());
+    GrowSession session = SESSIONS.of(ct.seriesUID(), ct.series());
+    session.voxelSize(ct.grid().columnSpacing(), ct.grid().rowSpacing(), ct.grid().sliceSpacing());
+    return session;
+  }
+
+  // ---- Letting go of a closed CT ----
+
+  /**
+   * Has the explorer of the series tell when something is closed. The explorer announces a removal
+   * before it takes the series out, so the sessions are looked through once it is done.
+   */
+  private static void watch(MediaSeries<DicomImageElement> series) {
+    if (series.getTagValue(TagW.ExplorerModel) instanceof DicomModel model && WATCHED.add(model)) {
+      model.addPropertyChangeListener(
+          evt -> {
+            if (evt instanceof ObservableEvent e
+                && e.getActionCommand() == ObservableEvent.BasicAction.REMOVE) {
+              javax.swing.SwingUtilities.invokeLater(BoneGrowTool::releaseClosed);
+            }
+          });
+    }
+  }
+
+  /** Whether the series has left its explorer: its CT is closed. */
+  private static boolean isClosed(MediaSeries<DicomImageElement> series) {
+    return series.getTagValue(TagW.ExplorerModel) instanceof DicomModel model
+        && model.getParent(series, DicomModel.patient) == null;
+  }
+
+  /**
+   * Frees the bones of every CT that was closed: the session with its masks and history, the label
+   * volume the views drew them from, and a write still waiting. The DICOM SEG files already written
+   * stay (review of 11 Nov 2026, B7: none of this was ever let go).
+   */
+  private static void releaseClosed() {
+    List<GrowSession> closed = SESSIONS.releaseIf(BoneGrowTool::isClosed);
+    for (GrowSession session : closed) {
+      LiveBones.release(session);
+      WRITE_LATER.remove(session);
+      TO_WRITE.remove(session);
+      if (session.sopInstanceUID() != null) {
+        View3d.setSegmentStyles(session.sopInstanceUID(), Map.of());
+      }
+    }
+    if (source != null && isClosed(source.series())) {
+      source = null; // it holds the CT's volume
+      splitStart = null;
+    }
+    View3d last = lastView;
+    if (last != null && last.getVolTexture() == null) {
+      lastView = null;
+    }
+    if (!closed.isEmpty()) {
+      LOGGER.info("Bones of {} closed CT(s) released", closed.size());
+      refreshLists();
+    }
   }
 
   // ---- Finding the bones ----
@@ -721,7 +956,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   /** Shows the bones on the 3D view, in colour or with the natural look, as chosen. */
   private static void showBones(View3d view) {
-    view.setSegType(displayType());
+    look(view);
     EventManager.getInstance()
         .getAction(ActionVol.SEG_TYPE)
         .ifPresent(a -> a.setSelectedItemWithoutTriggerAction(displayType()));
@@ -761,26 +996,34 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       return;
     }
     List<Bone> bones = new ArrayList<>();
+    List<Color> colours = done.colours();
     for (AutoSplit.Piece piece : result.pieces()) {
       int id = session.newId();
       bones.add(
           new Bone(
               id,
               String.format(Messages.getString("BoneGrowTool.autoName"), bones.size() + 1),
-              session.colorOf(id),
+              colours.get(bones.size()),
               piece.mask(),
               piece.anchor(),
               "Found automatically; not reviewed")); // NON-NLS
     }
     session.selected().clear();
-    apply(ct, session, bones);
+    if (!apply(ct, session, bones)) {
+      return; // refused and said why: not followed by a message of success
+    }
     selectedView()
         .filter(v -> v.getVolTexture().getVolume() == ct.volume())
-        .ifPresent(v -> v.setSegType(displayType()));
+        .ifPresent(BoneGrowTool::look);
     String text = String.format(Messages.getString("BoneGrowTool.found"), bones.size());
     if (result.fragments() > 0) {
       String fragments = Messages.getString("BoneGrowTool.foundFragments");
       text += " " + String.format(fragments, result.fragments());
+    }
+    if (result.jointsSkipped()) {
+      // Said in the warning colour: bones may be missing from the list for it.
+      warn(text + " " + Messages.getString("BoneGrowTool.foundJointsSkipped"));
+      return;
     }
     status(text);
   }
@@ -790,9 +1033,18 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
    * bone preset) inside the bones still shown. Hidden bones stay hidden either way.
    */
   static SegmentationTool.Type displayType() {
+    if (SOLID.isSelected()) {
+      return SegmentationTool.Type.SEG_ONLY;
+    }
     return NATURAL.isSelected()
         ? SegmentationTool.Type.SEG_MASK_INCLUDE
         : SegmentationTool.Type.BONES;
+  }
+
+  /** Puts the chosen look on a view: the display type, and solid bones when chosen. */
+  private static void look(View3d view) {
+    view.setSegSolid(SOLID.isSelected());
+    view.setSegType(displayType());
   }
 
   /** Puts the chosen look on the 3D view and on the Segmentation panel's display choice. */
@@ -800,7 +1052,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     selectedView()
         .ifPresent(
             v -> {
-              v.setSegType(displayType());
+              look(v);
               EventManager.getInstance()
                   .getAction(ActionVol.SEG_TYPE)
                   .ifPresent(a -> a.setSelectedItemWithoutTriggerAction(displayType()));
@@ -815,8 +1067,13 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     SegmentationTool.Type type = view.getSegType();
     if (type == SegmentationTool.Type.BONES) {
       NATURAL.setSelected(false);
+      SOLID.setSelected(false);
     } else if (type == SegmentationTool.Type.SEG_MASK_INCLUDE) {
       NATURAL.setSelected(true);
+      SOLID.setSelected(false);
+    } else if (type == SegmentationTool.Type.SEG_ONLY && view.isSegSolid()) {
+      SOLID.setSelected(true);
+      NATURAL.setSelected(false);
     }
   }
 
@@ -833,12 +1090,25 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       leaveClickTool();
     }
     brushOnSlices(isBrush());
+    if (ringMm() <= 0) {
+      PICKER.hideRing();
+    }
     showStateEverywhere();
   }
 
-  /** Add here or Take out here is on. */
+  /** A tool drawn on the slices is on: Add here, Take out here or Cut line. */
   private static boolean isBrush() {
-    return tool == Tool.PAINT || tool == Tool.RUB;
+    return tool == Tool.PAINT || tool == Tool.RUB || tool == Tool.CUT;
+  }
+
+  /** Radius of the ring shown under the mouse on the slices, in mm; 0 when no brush paints. */
+  private static double ringMm() {
+    return (tool == Tool.PAINT || tool == Tool.RUB) && isBrushOnSlices() ? brushMm() : 0;
+  }
+
+  /** Radius of the brush, in mm. */
+  private static double brushMm() {
+    return ((Number) BRUSH.getValue()).doubleValue() / 2;
   }
 
   /**
@@ -910,6 +1180,16 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   /** A click on a 3D or MPR view, as a patient position. */
   private static void picked(Seed seed) {
+    LiveStroke shown = endLiveStroke();
+    try {
+      pickedNow(seed);
+    } finally {
+      putBack(shown);
+    }
+  }
+
+  private static void pickedNow(Seed seed) {
+    followSlice(seed);
     if (tool == Tool.SELECT && CLICK_TOOLS.contains(leftTool())) {
       return; // the click is the 3D tool's: keep only this, remove this, a length...
     }
@@ -944,12 +1224,20 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
           seed.plane(),
           java.util.Arrays.toString(voxel),
           seed.additive(),
-          session.boneNear(voxel, NEAR_BONE_VOXELS).map(f -> f.bone().label()).orElse("no bone"));
+          session.boneNearClick(voxel).map(f -> f.bone().label()).orElse("no bone"));
       switch (tool) {
         case SELECT, ADD, TAKE -> clickToSelect(session, voxel, pickOf(seed.additive()));
-        case PAINT ->
-            paint(ct, session, voxel, MaskEdit.brush(voxel, brushRadius(ct), gridBox(ct)));
-        case RUB -> rub(ct, session, voxel, MaskEdit.brush(voxel, brushRadius(ct), gridBox(ct)));
+        case PAINT, RUB -> {
+          if (seed.additive()) {
+            // Shift, Ctrl or Cmd with the brush on: the click chooses the bone it works on.
+            clickToSelect(session, voxel, Pick.ONE);
+          } else if (tool == Tool.PAINT) {
+            paint(ct, session, voxel, brushOf(ct, List.of(voxel), seed));
+          } else {
+            rub(ct, session, voxel, brushOf(ct, List.of(voxel), seed));
+          }
+        }
+        case CUT -> status(Messages.getString("BoneGrowTool.cut.hint"));
         case SPLIT -> clickToSplit(view.get(), ct, session, voxel, seed);
         case NEW -> {
           view.get().setSeedMarker(seed.lps());
@@ -965,8 +1253,185 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
+  // ---- A stroke shown as it is drawn ----
+
+  /** How often a stroke being drawn is shown, in ms. */
+  private static final int STROKE_SHOW_MS = 40;
+
+  /**
+   * A stroke being drawn on a slice: the bones as they were before it and the bone it works on.
+   * While the mouse is down the bones are shown with the stroke so far, worked out afresh from
+   * {@code before} each time; on release they are put back and the whole stroke is applied as one
+   * step, so Undo and the written file see one change.
+   */
+  private record LiveStroke(CtSource ct, GrowSession session, List<Bone> before, Bone bone) {}
+
+  private static LiveStroke liveStroke;
+  private static List<Seed> strokeSoFar;
+
+  private static final javax.swing.Timer STROKE_TIMER =
+      new javax.swing.Timer(STROKE_SHOW_MS, _ -> showStroke());
+
+  static {
+    STROKE_TIMER.setRepeats(false);
+  }
+
+  /** A drag gained a point: the stroke is shown at the next tick, however many points came. */
+  private static void strokeGrows(List<Seed> seeds) {
+    if (!isBrushOnSlices() || worker != null) {
+      return;
+    }
+    strokeSoFar = seeds;
+    if (!STROKE_TIMER.isRunning()) {
+      STROKE_TIMER.start();
+    }
+  }
+
+  private static void showStroke() {
+    List<Seed> seeds = strokeSoFar;
+    if (seeds == null || seeds.isEmpty() || worker != null) {
+      return;
+    }
+    try {
+      LiveStroke s = liveStroke;
+      if (s == null) {
+        Optional<View3d> view = selectedView();
+        if (view.isEmpty()) {
+          return;
+        }
+        CtSource ct = source(view.get());
+        GrowSession session = session(ct);
+        List<int[]> voxels = strokeVoxels(ct, seeds);
+        Optional<Bone> target;
+        if (voxels.isEmpty()) {
+          target = Optional.empty();
+        } else if (tool == Tool.CUT) {
+          target = cutTarget(session, voxels);
+        } else {
+          target = brushTarget(ct, session, voxels.getFirst());
+        }
+        if (target.isEmpty()) {
+          return; // said on release
+        }
+        s = new LiveStroke(ct, session, session.bones(), target.get());
+        liveStroke = s;
+      }
+      List<int[]> voxels = strokeVoxels(s.ct(), seeds);
+      BoxMask brush;
+      if (voxels.isEmpty()) {
+        brush = null;
+      } else if (tool == Tool.CUT) {
+        brush = cutLine(s.ct(), voxels, seeds.getFirst());
+      } else {
+        brush = brushOf(s.ct(), voxels, seeds.getFirst());
+      }
+      List<Bone> after =
+          brush == null
+              ? null
+              : tool == Tool.PAINT
+                  ? painted(s.ct(), s.before(), s.bone(), brush)
+                  : rubbed(s.before(), s.bone(), brush);
+      if (after != null) {
+        s.session().set(after);
+        showLive(s.ct(), s.session());
+      }
+    } catch (Problem e) {
+      // said on release, when the stroke is applied
+    }
+  }
+
+  /** The voxels of the stroke's points that lie on the CT, in order. */
+  private static List<int[]> strokeVoxels(CtSource ct, List<Seed> seeds) {
+    List<int[]> voxels = new ArrayList<>();
+    for (Seed seed : seeds) {
+      if (seed.frameOfReferenceUID() == null
+          || ct.frameOfReferenceUID() == null
+          || Objects.equals(seed.frameOfReferenceUID(), ct.frameOfReferenceUID())) {
+        ct.voxelOf(seed.lps()).ifPresent(voxels::add);
+      }
+    }
+    return voxels;
+  }
+
+  /** Ends the showing of a stroke and puts the bones back as they were before it. */
+  private static LiveStroke endLiveStroke() {
+    STROKE_TIMER.stop();
+    strokeSoFar = null;
+    LiveStroke s = liveStroke;
+    liveStroke = null;
+    if (s != null) {
+      s.session().set(s.before());
+    }
+    return s;
+  }
+
+  /** Shows the bones as they were when the stroke that was shown came to nothing. */
+  private static void putBack(LiveStroke shown) {
+    if (shown != null && shown.session().bones() == shown.before()) {
+      showLive(shown.ct(), shown.session());
+    }
+  }
+
+  /** The bones after Add here on {@code bone} within the brush; null when it adds nothing. */
+  private static List<Bone> painted(CtSource ct, List<Bone> bones, Bone bone, BoxMask brush) {
+    BoxMask dense = underBrush(ct, brush);
+    if (dense == null) {
+      return null;
+    }
+    BoxMask grown = MaskEdit.plus(bone.mask(), dense);
+    return grown == bone.mask() ? null : withPainted(bones, bone, grown, dense);
+  }
+
+  /** What Add here takes of the brush: all of it, or only what looks like bone, as chosen. */
+  private static BoxMask underBrush(CtSource ct, BoxMask brush) {
+    if (brush == null || !DENSE.isSelected()) {
+      return brush;
+    }
+    GrowOptions o = options(ct);
+    return MaskEdit.dense(brush, ct.huSource(), o.lowerHu(), o.upperHu());
+  }
+
+  /**
+   * The bones after Take out here on {@code bone} within the brush; null when it changes nothing.
+   */
+  private static List<Bone> rubbed(List<Bone> bones, Bone bone, BoxMask brush) {
+    BoxMask left = bone.mask().minus(List.of(brush));
+    if (left == null || left == bone.mask()) {
+      return null;
+    }
+    return bones.stream().map(b -> b.id() == bone.id() ? b.withMask(left) : b).toList();
+  }
+
+  /**
+   * The list with {@code bone} grown to {@code grown} and {@code dense} out of every other bone.
+   */
+  private static List<Bone> withPainted(List<Bone> bones, Bone bone, BoxMask grown, BoxMask dense) {
+    List<Bone> after = new ArrayList<>();
+    for (Bone b : bones) {
+      if (b.id() == bone.id()) {
+        after.add(b.withMask(grown));
+        continue;
+      }
+      BoxMask left = b.mask().minus(List.of(dense));
+      if (left != null) {
+        after.add(left == b.mask() ? b : b.withMask(left));
+      }
+      // A bone wholly within the brush is painted into the target and leaves the list.
+    }
+    return after;
+  }
+
   /** A drag on a slice with the brush on: one Add here or Take out here along the whole stroke. */
   private static void stroked(List<Seed> seeds) {
+    LiveStroke shown = endLiveStroke();
+    try {
+      strokedNow(seeds);
+    } finally {
+      putBack(shown);
+    }
+  }
+
+  private static void strokedNow(List<Seed> seeds) {
     if (!isBrushOnSlices() || seeds.isEmpty()) {
       return;
     }
@@ -974,6 +1439,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       status(Messages.getString("BoneGrowTool.busy"));
       return;
     }
+    followSlice(seeds.getFirst());
     Optional<View3d> view = selectedView();
     if (view.isEmpty()) {
       warn(Messages.getString("BoneGrowTool.noCt"));
@@ -994,8 +1460,12 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         throw new Problem(Messages.getString("BoneGrowTool.seedOutside"));
       }
       GrowSession session = session(ct);
-      BoxMask brush = MaskEdit.stroke(voxels, brushRadius(ct), gridBox(ct));
       LOGGER.debug("Bones stroke {} of {} points in {}", tool, voxels.size(), seeds.get(0).plane());
+      if (tool == Tool.CUT) {
+        cutAlong(ct, session, voxels, seeds.getFirst());
+        return;
+      }
+      BoxMask brush = brushOf(ct, voxels, seeds.getFirst());
       if (tool == Tool.PAINT) {
         paint(ct, session, voxels.getFirst(), brush);
       } else {
@@ -1007,7 +1477,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   }
 
   private static void clickToSelect(GrowSession session, int[] voxel, Pick pick) {
-    Optional<Found> found = session.boneNear(voxel, NEAR_BONE_VOXELS);
+    Optional<Found> found = session.boneNearClick(voxel);
     if (found.isEmpty()) {
       if (!session.bones().isEmpty()) {
         select(session, null, pick);
@@ -1024,6 +1494,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
    */
   private static void select(GrowSession session, Bone bone, Pick pick) {
     Set<Integer> selected = session.selected();
+    Set<Integer> before = Set.copyOf(selected);
     if (bone == null) {
       if (pick != Pick.ONE || selected.isEmpty()) {
         return;
@@ -1045,6 +1516,38 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       }
     }
     showBonesIfPlain();
+    if (pick != Pick.ONE && !before.equals(selected)) {
+      // A selection built click by click is a step each: Undo takes back the last click only.
+      Set<Integer> after = Set.copyOf(selected);
+      selectedView()
+          .ifPresent(
+              v ->
+                  v.pushEdit(
+                      new EditHistory.Edit() {
+                        @Override
+                        public boolean undo() {
+                          showSelection(session, before);
+                          return true;
+                        }
+
+                        @Override
+                        public boolean redo() {
+                          showSelection(session, after);
+                          return true;
+                        }
+                      }));
+    }
+    selectionChanged(session);
+  }
+
+  /** Makes {@code ids} the selection, as an undo or redo of a selection click does. */
+  private static void showSelection(GrowSession session, Set<Integer> ids) {
+    session.selected().clear();
+    session.bones().stream().map(Bone::id).filter(ids::contains).forEach(session.selected()::add);
+    selectionChanged(session);
+  }
+
+  private static void selectionChanged(GrowSession session) {
     List<Bone> now = session.selectedBones();
     if (now.size() == 1) {
       status(String.format(Messages.getString("BoneGrowTool.selected"), now.getFirst().label()));
@@ -1059,26 +1562,182 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   // ---- The brush ----
 
-  /** The brush as voxel radii per axis: its size in mm over the voxel spacing. */
+  /** The brush as voxel radii per axis: its radius in mm over the voxel spacing. */
   private static double[] brushRadius(CtSource ct) {
-    double mm = ((Number) BRUSH.getValue()).doubleValue();
+    double mm = brushMm();
+    double[] voxel = spacing(ct);
+    return new double[] {mm / voxel[0], mm / voxel[1], mm / voxel[2]};
+  }
+
+  /** The voxel size along the grid's x, y and z, in mm. */
+  private static double[] spacing(CtSource ct) {
     return new double[] {
-      mm / ct.grid().columnSpacing(), mm / ct.grid().rowSpacing(), mm / ct.grid().sliceSpacing()
+      ct.grid().columnSpacing(), ct.grid().rowSpacing(), Math.abs(ct.grid().sliceSpacing())
     };
+  }
+
+  /**
+   * The normal of the slice a seed was taken on along the grid's axes, or {@code null} for a seed
+   * of the 3D view.
+   */
+  private static double[] gridNormal(CtSource ct, Seed seed) {
+    Vector3d n = seed.normal();
+    if (n == null) {
+      return null;
+    }
+    double[] row = ct.grid().rowDirection();
+    double[] column = ct.grid().columnDirection();
+    double[] slice = ct.grid().normal();
+    // The slices may run against their normal.
+    double way = ct.grid().sliceSpacing() < 0 ? -1 : 1;
+    double[] g = {
+      n.x * row[0] + n.y * row[1] + n.z * row[2],
+      n.x * column[0] + n.y * column[1] + n.z * column[2],
+      way * (n.x * slice[0] + n.y * slice[1] + n.z * slice[2])
+    };
+    double length = Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+    if (!(length > 0)) {
+      return null;
+    }
+    return new double[] {g[0] / length, g[1] / length, g[2] / length};
+  }
+
+  /** How thick one layer of voxels is across a slice with this normal, in mm. */
+  private static double layerMm(double[] normal, double[] voxel) {
+    return Math.abs(normal[0]) * voxel[0]
+        + Math.abs(normal[1]) * voxel[1]
+        + Math.abs(normal[2]) * voxel[2];
+  }
+
+  /**
+   * The voxels the brush works on along a click or a drag: a ball around each point, or, with This
+   * slice only, a disc one layer of voxels thick in the slice it was drawn on.
+   */
+  private static BoxMask brushOf(CtSource ct, List<int[]> voxels, Seed seed) {
+    double[] normal = THIN.isSelected() ? gridNormal(ct, seed) : null;
+    if (normal == null) {
+      return MaskEdit.stroke(voxels, brushRadius(ct), gridBox(ct));
+    }
+    double depth = Math.min(1, 0.6 * layerMm(normal, spacing(ct)) / brushMm());
+    return MaskEdit.stroke(voxels, brushRadius(ct), gridBox(ct), normal, depth);
+  }
+
+  /**
+   * The line of Cut line as it is drawn: a thin mark on its slice, shown rubbed out of the bone.
+   */
+  private static BoxMask cutLine(CtSource ct, List<int[]> voxels, Seed seed) {
+    double[] normal = gridNormal(ct, seed);
+    double[] voxel = spacing(ct);
+    double mm = 0.75 * Math.max(voxel[0], Math.max(voxel[1], voxel[2]));
+    double[] radius = {mm / voxel[0], mm / voxel[1], mm / voxel[2]};
+    if (normal == null) {
+      return MaskEdit.stroke(voxels, radius, gridBox(ct));
+    }
+    double depth = Math.min(1, 0.6 * layerMm(normal, voxel) / mm);
+    return MaskEdit.stroke(voxels, radius, gridBox(ct), normal, depth);
+  }
+
+  /**
+   * The bone a drawn line cuts: the one selected when the line meets it, else the first it meets.
+   */
+  private static Optional<Bone> cutTarget(GrowSession session, List<int[]> voxels) {
+    List<Bone> selected = session.selectedBones();
+    if (selected.size() == 1) {
+      BoxMask mask = selected.getFirst().mask();
+      if (voxels.stream().anyMatch(v -> mask.contains(v[0], v[1], v[2]))) {
+        return Optional.of(selected.getFirst());
+      }
+    }
+    for (int[] v : voxels) {
+      for (Bone b : session.bones()) {
+        if (!b.hidden() && b.mask().contains(v[0], v[1], v[2])) {
+          return Optional.of(b);
+        }
+      }
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * Cut line: the bone is cut in two along the line drawn on the slice, carried straight through
+   * the bone; the part that comes away becomes a bone of its own.
+   */
+  private static void cutAlong(CtSource ct, GrowSession session, List<int[]> voxels, Seed seed) {
+    double[] normal = gridNormal(ct, seed);
+    Optional<Bone> target = cutTarget(session, voxels);
+    if (normal == null || target.isEmpty()) {
+      warn(Messages.getString("BoneGrowTool.cutNoBone"));
+      return;
+    }
+    Bone bone = target.get();
+    MaskEdit.Cut cut;
+    try {
+      long crumb = Math.round(MIN_PIECE_MM3 / ct.grid().voxelVolumeMm3());
+      cut = MaskEdit.cut(bone.mask(), voxels, spacing(ct), normal, crumb);
+    } catch (OutOfMemoryError e) {
+      warn(Messages.getString("BoneGrowTool.memory"));
+      return;
+    }
+    if (cut == null) {
+      warn(String.format(Messages.getString("BoneGrowTool.cutNot"), bone.label()));
+      return;
+    }
+    int id = session.newId();
+    String name = String.format(Messages.getString("BoneGrowTool.pieceName"), bone.label(), id);
+    Bone kept = bone.withMask(cut.kept());
+    kept =
+        new Bone(
+            kept.id(),
+            kept.label(),
+            kept.color(),
+            kept.mask(),
+            MaskEdit.anchorIn(kept.mask(), kept.anchor()),
+            kept.description(),
+            kept.hidden());
+    Bone piece =
+        new Bone(
+            id,
+            name,
+            session.colorOf(id, cut.piece()),
+            cut.piece(),
+            MaskEdit.anchorIn(cut.piece(), voxels.getLast()),
+            "Cut from " + bone.label() + " along a drawn line; not reviewed"); // NON-NLS
+    if (!apply(ct, session, session.replaced(bone.id(), kept, piece))) {
+      return; // refused and said why: not followed by a message of success
+    }
+    session.selected().clear();
+    session.selected().add(id);
+    styleViews(session);
+    refreshLists();
+    double mm3 = ct.grid().voxelVolumeMm3();
+    status(
+        String.format(
+            Messages.getString("BoneGrowTool.cutDone"),
+            name,
+            cut.piece().count() * mm3 / 1000.0,
+            bone.label(),
+            cut.kept().count() * mm3 / 1000.0));
   }
 
   private static VoxelBox gridBox(CtSource ct) {
     return VoxelBox.of(ct.grid().columns(), ct.grid().rows(), ct.grid().sliceCount());
   }
 
-  /** The bone a brush click works on: the one selected, else the one under the click. */
-  private static Optional<Bone> brushTarget(GrowSession session, int[] voxel) {
+  /**
+   * The bone a brush click works on: the one selected, else the one under the click, else the
+   * nearest one the brush reaches.
+   */
+  private static Optional<Bone> brushTarget(CtSource ct, GrowSession session, int[] voxel) {
     List<Bone> selected = session.selectedBones();
     if (selected.size() == 1) {
       return Optional.of(selected.getFirst());
     }
     if (selected.isEmpty()) {
-      return session.boneNear(voxel, NEAR_BONE_VOXELS).map(Found::bone);
+      double[] mm = spacing(ct);
+      return session
+          .boneNearClick(voxel)
+          .or(() -> session.boneNear(voxel, brushMm(), mm[0], mm[1], mm[2]))
+          .map(Found::bone);
     }
     return Optional.empty();
   }
@@ -1088,17 +1747,15 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
    * was in.
    */
   private static void paint(CtSource ct, GrowSession session, int[] voxel, BoxMask brush) {
-    Optional<Bone> target = brushTarget(session, voxel);
+    Optional<Bone> target = brushTarget(ct, session, voxel);
     if (target.isEmpty()) {
       status(Messages.getString("BoneGrowTool.brushWhich"));
       return;
     }
     Bone bone = target.get();
-    GrowOptions o = options(ct);
-    BoxMask dense =
-        brush == null ? null : MaskEdit.dense(brush, ct.huSource(), o.lowerHu(), o.upperHu());
+    BoxMask dense = underBrush(ct, brush);
     if (dense == null) {
-      warn(String.format(Messages.getString("BoneGrowTool.paintNothing"), o.lowerHu()));
+      warn(String.format(Messages.getString("BoneGrowTool.paintNothing"), options(ct).lowerHu()));
       return;
     }
     BoxMask grown = MaskEdit.plus(bone.mask(), dense);
@@ -1106,28 +1763,19 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       status(String.format(Messages.getString("BoneGrowTool.paintAlready"), bone.label()));
       return;
     }
-    List<Bone> after = new ArrayList<>();
-    for (Bone b : session.bones()) {
-      if (b.id() == bone.id()) {
-        after.add(b.withMask(grown));
-        continue;
-      }
-      BoxMask left = b.mask().minus(List.of(dense));
-      if (left != null) {
-        after.add(left == b.mask() ? b : b.withMask(left));
-      }
-      // A bone wholly within the brush is painted into the target and leaves the list.
-    }
+    List<Bone> after = withPainted(session.bones(), bone, grown, dense);
     session.selected().clear();
     session.selected().add(bone.id());
-    apply(ct, session, after);
+    if (!apply(ct, session, after)) {
+      return; // refused and said why: not followed by a message of success
+    }
     double mm3 = (grown.count() - bone.mask().count()) * ct.grid().voxelVolumeMm3();
     status(String.format(Messages.getString("BoneGrowTool.painted"), mm3, bone.label()));
   }
 
   /** Take out here: the bone's voxels within the brush leave it. */
   private static void rub(CtSource ct, GrowSession session, int[] voxel, BoxMask brush) {
-    Optional<Bone> target = brushTarget(session, voxel);
+    Optional<Bone> target = brushTarget(ct, session, voxel);
     if (target.isEmpty()) {
       status(Messages.getString("BoneGrowTool.brushWhich"));
       return;
@@ -1144,7 +1792,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
     session.selected().clear();
     session.selected().add(bone.id());
-    apply(ct, session, session.replaced(bone.id(), bone.withMask(left), null));
+    if (!apply(ct, session, session.replaced(bone.id(), bone.withMask(left), null))) {
+      return; // refused and said why: not followed by a message of success
+    }
     double mm3 = (bone.mask().count() - left.count()) * ct.grid().voxelVolumeMm3();
     status(String.format(Messages.getString("BoneGrowTool.rubbed"), mm3, bone.label()));
   }
@@ -1184,7 +1834,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         }
       }
     }
-    apply(ct.get(), session, after);
+    if (!apply(ct.get(), session, after)) {
+      return; // refused and said why: not followed by a message of success
+    }
     if (result.size() == 1) {
       status(
           String.format(
@@ -1196,7 +1848,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   private static void clickToSplit(
       View3d view, CtSource ct, GrowSession session, int[] voxel, Seed seed) {
-    Optional<Found> found = session.boneNear(voxel, NEAR_BONE_VOXELS);
+    Optional<Found> found = session.boneNearClick(voxel);
     if (found.isEmpty()) {
       warn(
           Messages.getString(
@@ -1224,7 +1876,8 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
             found.get().bone(),
             found.get().voxel(),
             mm,
-            ct.huSource()));
+            ct.huSource(),
+            session.bones()));
   }
 
   private static void startGrow(View3d view, CtSource ct, GrowSession session, int[] voxel)
@@ -1236,18 +1889,22 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
       return;
     }
     VoxelBox crop = CROP.isSelected() ? ct.cropBox(view).orElse(null) : null;
-    start(new BoneGrowWorker(ct, new Request(voxel, crop, options(ct)), session.masksExcept(-1)));
+    start(
+        new BoneGrowWorker(
+            ct, new Request(voxel, crop, options(ct)), session.masksExcept(-1), session.bones()));
   }
 
   private static void startErase(GrowSession session, int[] voxel) {
-    Optional<Found> found = session.boneNear(voxel, NEAR_BONE_VOXELS);
+    Optional<Found> found = session.boneNearClick(voxel);
     if (found.isEmpty()) {
       warn(
           Messages.getString(
               session.bones().isEmpty() ? "BoneGrowTool.noBoneYet" : "BoneGrowTool.noBoneThere"));
       return;
     }
-    start(new SplitWorker(SplitWorker.Kind.ERASE, found.get().bone(), found.get().voxel()));
+    start(
+        new SplitWorker(
+            SplitWorker.Kind.ERASE, found.get().bone(), found.get().voxel(), session.voxelSize()));
   }
 
   private static void start(SwingWorker<?, ?> w) {
@@ -1332,6 +1989,13 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
   }
 
+  // The colour the worker found for a new bone; worked out here only if the bones changed since.
+  private static Color colour(
+      int id, BoxMask mask, List<Color> taken, List<Bone> looked, GrowSession session) {
+    Color c = BoneColors.pick(id, taken, looked, session.bones());
+    return c != null ? c : session.colorOf(id, mask);
+  }
+
   private static void grown(BoneGrowWorker done, Result result) {
     CtSource ct = done.ct();
     GrowSession session = session(ct);
@@ -1352,11 +2016,13 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         new Bone(
             id,
             name,
-            session.colorOf(id),
+            colour(id, mask, done.takenColours(), done.others(), session),
             mask,
             result.seed(),
             BoneGrowWorker.description(done.request().options(), result));
-    apply(ct, session, session.with(bone));
+    if (!apply(ct, session, session.with(bone))) {
+      return; // refused and said why: not followed by a message of success
+    }
     double cm3 = bone.volumeCm3(ct.grid().voxelVolumeMm3());
     StringBuilder text =
         new StringBuilder(String.format(Messages.getString("BoneGrowTool.done"), name, cm3));
@@ -1391,7 +2057,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     double cm3 = split.cut().count() * voxelMm3 / 1000.0;
     if (done.kind() == SplitWorker.Kind.ERASE) {
       Bone kept = session.bone(bone.id()).get().withMask(split.kept());
-      apply(ct.get(), session, session.replaced(bone.id(), kept, null));
+      if (!apply(ct.get(), session, session.replaced(bone.id(), kept, null))) {
+        return; // refused and said why: not followed by a message of success
+      }
       status(String.format(Messages.getString("BoneGrowTool.erased"), cm3, bone.label()));
       return;
     }
@@ -1419,7 +2087,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
           new Bone(
               fragmentId,
               fragmentName,
-              session.colorOf(fragmentId),
+              colour(fragmentId, split.cut(), done.takenColours(), done.others(), session),
               split.cut(),
               done.voxel(),
               "Separated from " + bone.label() + "; not reviewed"); // NON-NLS
@@ -1446,7 +2114,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
         String.format("%.2f", cm3), // NON-NLS
         neighbour.label(),
         String.format("%.2f", keptCm3)); // NON-NLS
-    apply(ct.get(), session, after);
+    if (!apply(ct.get(), session, after)) {
+      return; // refused and said why: not followed by a message of success
+    }
     session.selected().clear();
     session.selected().add(fragmentId);
     // One separation per press of Separate: the next click selects again.
@@ -1496,7 +2166,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   private static void hideSelected(CtSource ct, GrowSession session, List<Bone> selected) {
     List<Integer> ids = selected.stream().map(Bone::id).toList();
-    apply(ct, session, hidden(session, b -> ids.contains(b.id()) || b.hidden()));
+    if (!apply(ct, session, hidden(session, b -> ids.contains(b.id()) || b.hidden()))) {
+      return; // refused and said why: not followed by a message of success
+    }
     session.selected().clear();
     styleViews(session);
     refreshLists();
@@ -1537,7 +2209,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     }
     session.selected().clear();
     session.selected().add(first.id());
-    apply(ct, session, after);
+    if (!apply(ct, session, after)) {
+      return; // refused and said why: not followed by a message of success
+    }
     status(
         String.format(Messages.getString("BoneGrowTool.joined"), selected.size(), joined.label()));
   }
@@ -1550,7 +2224,9 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
 
   private static void deleteSelected(CtSource ct, GrowSession session, List<Bone> selected) {
     List<Integer> ids = selected.stream().map(Bone::id).toList();
-    apply(ct, session, session.bones().stream().filter(b -> !ids.contains(b.id())).toList());
+    if (!apply(ct, session, session.bones().stream().filter(b -> !ids.contains(b.id())).toList())) {
+      return; // refused and said why: not followed by a message of success
+    }
     status(
         String.format(
             Messages.getString("BoneGrowTool.deleted"),
@@ -1562,13 +2238,17 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   /**
    * Makes {@code after} the bones of the session as one undoable step of the 3D view, then shows
    * and, when their segments changed, writes them.
+   *
+   * @return false when the step was refused, with the reason shown: the caller must not then report
+   *     success (review of 11 Nov 2026: a search that finished while another CT's 3D view was
+   *     selected was thrown away under "Found N bones")
    */
-  private static void apply(CtSource ct, GrowSession session, List<Bone> after) {
+  private static boolean apply(CtSource ct, GrowSession session, List<Bone> after) {
     Optional<View3d> view = selectedView();
     if (view.isEmpty() || view.get().getVolTexture().getVolume() != ct.volume()) {
       // Without the 3D view of this CT the step could not be undone.
       warn(Messages.getString("BoneGrowTool.noCt"));
-      return;
+      return false;
     }
     List<Bone> before = session.bones();
     session.set(after);
@@ -1591,6 +2271,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
               }
             });
     bonesChanged(ct, session);
+    return true;
   }
 
   private static void bonesChanged(CtSource ct, GrowSession session) {
@@ -1700,6 +2381,11 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     GrowSession session = done.session();
     try {
       SegWriteWorker.Outcome outcome = done.get();
+      if (!SESSIONS.holds(session)) {
+        // The CT was closed during the write: the file is kept, nothing is left to show it on.
+        writeNext();
+        return;
+      }
       String oldSop = session.sopInstanceUID();
       session.written(done.bones(), done.version(), outcome.sopInstanceUID());
       if (oldSop != null && !oldSop.equals(outcome.sopInstanceUID())) {
@@ -1724,12 +2410,16 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
     if (session.version() != done.version()) {
       TO_WRITE.putIfAbsent(session, done.ct());
     }
+    writeNext();
+    refreshLists();
+  }
+
+  private static void writeNext() {
     if (!TO_WRITE.isEmpty()) {
       Map.Entry<GrowSession, CtSource> next = TO_WRITE.entrySet().iterator().next();
       TO_WRITE.remove(next.getKey());
       write(next.getValue(), next.getKey());
     }
-    refreshLists();
   }
 
   private static void refreshLists() {
@@ -1895,6 +2585,7 @@ public class BoneGrowTool extends PluginTool implements SeriesViewerListener {
   public void changingViewContentEvent(SeriesViewerEvent event) {
     EVENT e = event.getEventType();
     if (EVENT.SELECT_VIEW.equals(e) || EVENT.SELECT.equals(e)) {
+      sliceView = null; // a 3D view was selected: that one is in use again
       viewChanged();
     }
   }

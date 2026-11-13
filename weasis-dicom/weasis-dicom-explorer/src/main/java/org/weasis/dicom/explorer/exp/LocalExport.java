@@ -222,7 +222,17 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
     initGUI();
   }
 
+  /**
+   * Every export starts with the patient's name, MRN and image date on its labels. Leaving them out
+   * is decided for one export window at a time and is never remembered.
+   */
+  static void forgetIdentityOptOut(Properties preferences) {
+    preferences.remove(PATIENT_FOLDER);
+    preferences.remove(NAMED_FILES);
+  }
+
   public void initGUI() {
+    forgetIdentityOptOut(getPreferences());
     JLabel lblImportAFolder = new JLabel(Messages.getString("LocalExport.exp") + StringUtil.COLON);
     JButton btnNewButton = new JButton(Messages.getString("LocalExport.options"));
     btnNewButton.addActionListener(e -> showExportingOptions());
@@ -243,12 +253,7 @@ public class LocalExport extends AbstractItemDialogPage implements ExportDicom {
   protected List<JComponent> getAdditionalOption() {
     // Untick for an export leaving the hospital: the folder or zip is then not named.
     checkBoxPatientFolder.setToolTipText(Messages.getString("LocalExport.patient_folder_tip"));
-    checkBoxPatientFolder.setSelected(
-        Boolean.parseBoolean(getPreferences().getProperty(PATIENT_FOLDER, "true")));
-    checkBoxPatientFolder.addActionListener(
-        _ ->
-            getPreferences()
-                .setProperty(PATIENT_FOLDER, String.valueOf(checkBoxPatientFolder.isSelected())));
+    checkBoxPatientFolder.setSelected(true);
     return List.of(GuiUtils.boxHorizontalStrut(ITEM_SEPARATOR), checkBoxPatientFolder);
   }
 

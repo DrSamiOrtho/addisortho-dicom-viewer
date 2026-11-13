@@ -99,6 +99,7 @@ import org.weasis.dicom.codec.utils.SplittingRules;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.imp.DicomDirLoader;
 import org.weasis.dicom.explorer.imp.DicomZipMediaIO;
+import org.weasis.dicom.explorer.imp.LocalOpen;
 import org.weasis.dicom.explorer.main.SeriesPane;
 import org.weasis.dicom.explorer.rs.RsQueryParams;
 import org.weasis.dicom.explorer.wado.DicomManager;
@@ -1245,8 +1246,7 @@ public class DicomModel implements TreeModel, DataExplorerModel {
       for (int i = 0; i < files.length; i++) {
         files[i] = new File(largs.get(i));
       }
-      OpeningViewer openingViewer = OpeningViewer.ALL_PATIENTS;
-      LOADING_EXECUTOR.execute(new LoadLocalDicom(files, true, DicomModel.this, openingViewer));
+      LocalOpen.open(files, true, DicomModel.this);
     }
 
     if (opt.isSet("remote")) { // NON-NLS

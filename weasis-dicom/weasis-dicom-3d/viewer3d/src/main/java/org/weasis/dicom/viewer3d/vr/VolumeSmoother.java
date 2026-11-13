@@ -21,15 +21,20 @@ import java.util.stream.IntStream;
  * filtering the whole volume at once. The weights sum to one, so a signed volume shifted into the
  * unsigned range keeps its shift.
  *
- * <p>Extra memory: {@code (2 * radiusZ + 2) * width * height} floats.
+ * <p>With {@code keepThin} a voxel that lies on a thin plate, a ridge or an edge is not lowered by
+ * the filter: it keeps the mean of the line of three voxels through it, in its slice, along which
+ * it reads highest, when that is more than the Gaussian gives and never more than its own value.
+ * Thin cortex of weak bone, one voxel thick, then stays as dense as the scan shows it instead of
+ * being averaged with the soft tissue on both sides (to about two thirds of its contrast), which
+ * drew it soft and full of holes; a lone bright voxel still falls to a third.
+ *
+ * <p>Extra memory: {@code (2 * radiusZ + 2) * width * height} floats, twice that with {@code
+ * keepThin}.
  */
 public final class VolumeSmoother {
 
   /** Default in-plane sigma, in voxels. */
   public static final double SIGMA_XY = 0.6;
-
-  /** Smallest sigma across slices, in slices, so the steps between slices are always softened. */
-  public static final double MIN_SIGMA_Z = 0.6;
 
   private static final int PARALLEL_MIN_PIXELS = 64 * 64;
 
@@ -39,6 +44,7 @@ public final class VolumeSmoother {
   private final float[] kernelZ;
   private final float[][] ring;
   private final float[] rowPass;
+  private final boolean keepThin;
   private int received;
   private int emitted;
 
@@ -47,11 +53,22 @@ public final class VolumeSmoother {
    * @param sigmaZ standard deviation across slices in slices, 0 for none
    */
   public VolumeSmoother(int width, int height, double sigmaXY, double sigmaZ) {
+    this(width, height, sigmaXY, sigmaZ, false);
+  }
+
+  /**
+   * @param sigmaXY in-plane standard deviation in voxels, 0 for none
+   * @param sigmaZ standard deviation across slices in slices, 0 for none
+   * @param keepThin thin plates, ridges and edges are not lowered (see the class)
+   */
+  public VolumeSmoother(int width, int height, double sigmaXY, double sigmaZ, boolean keepThin) {
     if (width <= 0 || height <= 0) {
       throw new IllegalArgumentException("Empty slice");
     }
     this.width = width;
     this.height = height;
+    // -Daddisortho.smooth.plain=true gives the Gaussian alone, to compare the two on one scan.
+    this.keepThin = keepThin && !Boolean.getBoolean("addisortho.smooth.plain"); // NON-NLS
     this.kernelXY = gaussianKernel(sigmaXY);
     this.kernelZ = gaussianKernel(sigmaZ);
     this.ring = new float[kernelZ.length][];
@@ -59,15 +76,16 @@ public final class VolumeSmoother {
   }
 
   /**
-   * Sigma across slices for a given in-plane sigma, from the voxel spacing: the same physical
-   * width, but never below {@link #MIN_SIGMA_Z}.
+   * Sigma across slices for a given in-plane sigma, keeping the same physical width. A minimum in
+   * slice units would blur thick-slice scans over a much larger physical distance, reducing the
+   * contrast of thin structures and filling narrow gaps. Trilinear texture sampling still
+   * interpolates between slices; the pre-filter need not blur them to hide their spacing.
    */
   public static double sigmaZ(double sigmaXY, double spacingXY, double spacingZ) {
     if (sigmaXY <= 0) {
       return 0;
     }
-    double physical = spacingZ > 0 ? sigmaXY * spacingXY / spacingZ : sigmaXY;
-    return Math.max(physical, MIN_SIGMA_Z);
+    return spacingXY > 0 && spacingZ > 0 ? sigmaXY * spacingXY / spacingZ : sigmaXY;
   }
 
   /** Normalised Gaussian weights over [-r, r] with r = ceil(3 sigma); {1} when sigma is 0. */
@@ -87,6 +105,11 @@ public final class VolumeSmoother {
       k[i] = (float) (w[i] / sum);
     }
     return k;
+  }
+
+  /** Floats per voxel of a slice of {@link #filterInPlane(short[])}, for memory budgets. */
+  public int floatsPerVoxel() {
+    return keepThin ? 2 : 1;
   }
 
   public int getRadiusZ() {
@@ -124,7 +147,8 @@ public final class VolumeSmoother {
 
   /**
    * The in-plane pass alone, for a caller that keeps its own window of slices (see TextureField);
-   * the result then goes through {@link #combineTaps}. Not thread-safe.
+   * the result then goes through {@link #combineTaps} and is otherwise not to be read: with {@code
+   * keepThin} the slice is followed by what each voxel keeps at least. Not thread-safe.
    */
   public float[] filterInPlane(short[] src) {
     if (src.length != width * height) {
@@ -134,7 +158,8 @@ public final class VolumeSmoother {
   }
 
   private float[] filterInPlane(short[] src, float[] reuse) {
-    float[] dst = reuse != null ? reuse : new float[width * height];
+    int n = width * height;
+    float[] dst = reuse != null ? reuse : new float[n * floatsPerVoxel()];
     int r = kernelXY.length / 2;
     rows(
         y -> {
@@ -160,6 +185,25 @@ public final class VolumeSmoother {
             dst[off + x] = s;
           }
         });
+    if (keepThin) {
+      rows(
+          y -> {
+            int off = y * width;
+            int up = Math.max(y - 1, 0) * width;
+            int down = Math.min(y + 1, height - 1) * width;
+            for (int x = 0; x < width; x++) {
+              int left = Math.max(x - 1, 0);
+              int right = Math.min(x + 1, width - 1);
+              int v = src[off + x] & 0xFFFF;
+              int along = (src[off + left] & 0xFFFF) + (src[off + right] & 0xFFFF);
+              int across = (src[up + x] & 0xFFFF) + (src[down + x] & 0xFFFF);
+              int fall = (src[up + left] & 0xFFFF) + (src[down + right] & 0xFFFF);
+              int rise = (src[up + right] & 0xFFFF) + (src[down + left] & 0xFFFF);
+              int best = Math.max(Math.max(along, across), Math.max(fall, rise));
+              dst[n + off + x] = Math.min(v, (best + v) / 3f);
+            }
+          });
+    }
     return dst;
   }
 
@@ -182,7 +226,9 @@ public final class VolumeSmoother {
     if (taps.length != kernelZ.length) {
       throw new IllegalArgumentException("Expected " + kernelZ.length + " slices");
     }
-    short[] out = new short[width * height];
+    int n = width * height;
+    short[] out = new short[n];
+    float[] own = taps[taps.length / 2];
     rows(
         y -> {
           int off = y * width;
@@ -190,6 +236,9 @@ public final class VolumeSmoother {
             float s = 0;
             for (int k = 0; k < taps.length; k++) {
               s += kernelZ[k] * taps[k][i];
+            }
+            if (keepThin) {
+              s = Math.max(s, own[n + i]);
             }
             out[i] = (short) Math.clamp(Math.round(s), 0, 0xFFFF);
           }

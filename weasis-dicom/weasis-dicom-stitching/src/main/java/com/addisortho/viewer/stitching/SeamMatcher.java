@@ -135,12 +135,18 @@ final class SeamMatcher {
       fines.add(fine(upper, lower, band, Rigid.shift(c.dx, c.dy)));
     }
     Fine chosen = fines.get(0);
+    // the rough peak the chosen fine match started from: a failed seam is left at this one, not at
+    // the best rough peak when the fine match rejected that for another position (review of 11 Nov
+    // 2026)
+    Coarse chosenRough = coarse;
     // a candidate that lands on the same seam as the best rough peak is the same answer, not a
     // better one; only a different position with more agreeing points replaces it
-    for (Fine f : fines) {
+    for (int i = 0; i < fines.size(); i++) {
+      Fine f = fines.get(i);
       if (f.inliers.size() > chosen.inliers.size()
           && (chosen.inliers.size() < 2 || differs(chosen.fit, f.fit, upper, lower) > RIVAL_MM)) {
         chosen = f;
+        chosenRough = peaks.get(i);
       }
     }
     int rivalPoints = 0;
@@ -192,7 +198,7 @@ final class SeamMatcher {
         lower,
         band,
         chosen,
-        levelShift(upper, lower, band, coarse),
+        levelShift(upper, lower, band, chosenRough),
         coarse.uniqueness,
         fail,
         check,
@@ -205,8 +211,9 @@ final class SeamMatcher {
   /**
    * The rough position refined by shift alone: the 1 mm intensity of the overlap correlated at
    * every whole-millimetre shift within {@link #LEVEL_MM} of the 2 mm rough peak, then the peak
-   * read to a fraction of a millimetre. No rotation. This is where a failed automatic seam is left
-   * (case LL-001, 7 Nov 2026: the 2 mm grid alone put the femoral cortex 1.6 mm off).
+   * read to a fraction of a millimetre. No rotation. A failed automatic seam with fewer than {@link
+   * #MIN_INLIERS} matched points is left here (case LL-001, 7 Nov 2026: the 2 mm grid alone put the
+   * femoral cortex 1.6 mm off); with more it is left at {@link #meanShift} (stitch 0.6).
    */
   static Rigid levelShift(MatchImage upper, MatchImage lower, Band band, Coarse coarse) {
     Gray u = upper.fine();
@@ -273,10 +280,12 @@ final class SeamMatcher {
   }
 
   /**
-   * The gates on a fine match. {@code rough} is where a failed seam is left: the rough position
-   * refined by shift only, or the position set by hand, never the failed fit. A fit the gates
-   * refused must not tilt the picture: on case LL-001 (7 Nov 2026) a -1.17 deg fit, parallax
-   * absorbed as rotation, failed its hold-out and still turned the tibiae in the saved image.
+   * The gates on a fine match. {@code rough} is the rough position refined by shift only, or the
+   * position set by hand. A failed seam is left there, except an automatic one with at least {@link
+   * #MIN_INLIERS} matched points, which is left at their {@link #meanShift} (stitch 0.6, 10 Nov
+   * 2026); never at the failed fit. A fit the gates refused must not tilt the picture: on case
+   * LL-001 (7 Nov 2026) a -1.17 deg fit, parallax absorbed as rotation, failed its hold-out and
+   * still turned the tibiae in the saved image.
    */
   private static Seam judge(
       MatchImage upper,
@@ -406,6 +415,10 @@ final class SeamMatcher {
               quarterHeld,
               worstHeld));
     }
+    String halves = halvesDisagree(upper, band, fit, inliers);
+    if (halves != null) {
+      fail.add(halves);
+    }
     if (Math.abs(scale - 1) > SCALE_TOLERANCE) {
       check.add(
           String.format(
@@ -418,6 +431,13 @@ final class SeamMatcher {
     check.add("ruler and skin are not yet excluded from the match automatically");
     boolean failed = !fail.isEmpty();
     if (failed) {
+      // An automatic seam with enough agreeing points is left where those points agree, by shift
+      // alone: the rough position's shift-only search over a long overlap trades a small turn of
+      // the leg for a vertical error along a slanted shaft (real case, 10 Nov 2026: the knee-to-
+      // ankle seam left 7 mm above where the matched points, every band of the overlap and the
+      // machine's own stitch put it). Still no rotation, and still failed.
+      boolean onPoints = method == Seam.Method.AUTOMATIC && inliers.size() >= MIN_INLIERS;
+      Rigid placed = onPoints ? meanShift(inliers) : rough;
       check.add(
           0,
           String.format(
@@ -425,16 +445,18 @@ final class SeamMatcher {
               "placed at the %s (shift %.1f, %.1f mm, rotation %.2f deg) without the failed fit"
                   + " (%d points, rotation %.2f deg, residual %.2f mm): a match the gates refuse"
                   + " keeps no fitted rotation",
-              method == Seam.Method.AUTOMATIC
-                  ? "rough position refined by shift only"
-                  : "position set by hand",
-              rough.tx(),
-              rough.ty(),
-              rough.degrees(),
+              onPoints
+                  ? "average shift of the matched points"
+                  : method == Seam.Method.AUTOMATIC
+                      ? "rough position refined by shift only"
+                      : "position set by hand",
+              placed.tx(),
+              placed.ty(),
+              placed.degrees(),
               inliers.size(),
               fit.degrees(),
               rms));
-      fit = rough;
+      fit = placed;
       rms = Double.NaN;
       sigma = new double[] {Double.NaN, Double.NaN};
       scale = Double.NaN;
@@ -455,6 +477,183 @@ final class SeamMatcher {
         reasons);
   }
 
+  /** Matched points this far apart sideways, with none between, are two separate groups. */
+  static final double SIDE_GAP_MM = 40;
+
+  /**
+   * On a band that spans both halves of the image: do the matched points on the two sides share one
+   * seam? Two legs that moved differently between the exposures (parallax) each keep their own
+   * seam, and one rigid fit of both turns that difference into a tilt that passes every other gate:
+   * on a phantom with the right leg 3 mm higher in the lower piece the whole width passed at -0.77
+   * deg, and at 4 mm at -1.05 deg, where each leg alone is level (review of 11 Nov 2026; case
+   * LL-001 showed the same on its knee seam). A film that truly turned shows the same rotation on
+   * each side.
+   *
+   * <p>The points are parted at their widest sideways gap when it is {@link #SIDE_GAP_MM} or more
+   * (two legs wherever they lie on the film), else at the middle of the image. Each side is fitted
+   * on its own and fails the seam when its rotation is fixed as well as a whole seam's must be
+   * ({@link #MAX_ROTATION_SIGMA_DEG}) and differs from the fit of all by more than {@link
+   * #MAX_LEG_DISAGREE_DEG} and three times its own uncertainty; two sides that are both fixed must
+   * also put the middle between them within {@link #MAX_LEG_DISAGREE_MM} of each other. And when
+   * two separate groups are both too small or too narrow to fix a rotation, a rotation beyond
+   * {@link #MAX_LEG_DISAGREE_DEG} rests on the difference between the groups alone, which is
+   * exactly what parallax between two legs looks like: five points on each leg 4 mm apart fit a 1.1
+   * deg turn with 0.1 mm residual (Astra, 11 Nov 2026). That fails too; missing evidence is not
+   * agreement. A single leg, one group, is not parted by a handful of points on one side.
+   *
+   * <p>A side that is fixed must also carry the other side's points to within {@link
+   * #MAX_LEG_DISAGREE_MM} of where they matched, allowing for its own uncertainty over the distance
+   * between the two, whether or not the other side fixes a rotation of its own. The cost of all
+   * this is known: a film that truly turned, matched on two small separate groups only, is refused
+   * as well and needs matching points or one half of the image.
+   *
+   * @return the reason the seam fails, or null
+   */
+  static String halvesDisagree(MatchImage upper, Band band, Rigid fit, List<Rigid.Pair> inliers) {
+    if (band.from() >= 0.5 || band.to() <= 0.5 || inliers.size() < 4) {
+      return null;
+    }
+    double[] xs = inliers.stream().mapToDouble(Rigid.Pair::tx).sorted().toArray();
+    double gap = 0;
+    double split = upper.widthMm() / 2;
+    for (int i = 1; i < xs.length; i++) {
+      if (xs[i] - xs[i - 1] > gap) {
+        gap = xs[i] - xs[i - 1];
+      }
+    }
+    boolean separate = gap >= SIDE_GAP_MM;
+    if (separate) {
+      for (int i = 1; i < xs.length; i++) {
+        if (xs[i] - xs[i - 1] == gap) {
+          split = (xs[i] + xs[i - 1]) / 2;
+          break;
+        }
+      }
+    }
+    double at = split;
+    List<Rigid.Pair> left = inliers.stream().filter(q -> q.tx() < at).toList();
+    List<Rigid.Pair> right = inliers.stream().filter(q -> q.tx() >= at).toList();
+    if (left.size() < 2 || right.size() < 2) {
+      return null;
+    }
+    Rigid[] own = new Rigid[2];
+    boolean[] fixed = new boolean[2];
+    String worst = null;
+    double worstDeg = MAX_LEG_DISAGREE_DEG;
+    for (int s = 0; s < 2; s++) {
+      List<Rigid.Pair> part = s == 0 ? left : right;
+      if (part.size() < MIN_INLIERS) {
+        continue;
+      }
+      own[s] = Rigid.fit(part);
+      double sigma = Rigid.uncertainty(own[s], part)[0];
+      fixed[s] = sigma <= MAX_ROTATION_SIGMA_DEG;
+      double deg = Math.abs(own[s].degrees() - fit.degrees());
+      if (fixed[s] && deg > Math.max(worstDeg, 3 * sigma)) {
+        worstDeg = deg;
+        worst =
+            String.format(
+                Locale.ROOT,
+                "the %d matched points on the %s side of the image, fitted on their own, turn"
+                    + " %.2f deg where the fit of all %d points turns %.2f deg: the two sides do"
+                    + " not share one seam (two legs that moved differently between the"
+                    + " exposures, parallax). Choose one target leg and match on its half of the"
+                    + " image",
+                part.size(),
+                s == 0 ? "left" : "right",
+                own[s].degrees(),
+                inliers.size(),
+                fit.degrees());
+      }
+    }
+    if (worst != null) {
+      return worst;
+    }
+    // A side that is fixed says where the other side's points should lie. When they lie further
+    // off than the limit, and than that side's own rotation can account for over the distance
+    // between the two, the other side has moved on its own, whether or not it has points enough
+    // to fix a rotation itself: six level points on one leg and five on the other, 2 mm lower and
+    // 400 mm away, fit a turn of 0.29 deg that every other gate passes (Astra, 11 Nov 2026).
+    for (int s = 0; s < 2; s++) {
+      if (!fixed[s]) {
+        continue;
+      }
+      List<Rigid.Pair> mine = s == 0 ? left : right;
+      List<Rigid.Pair> others = s == 0 ? right : left;
+      double ox = others.stream().mapToDouble(Rigid.Pair::fx).average().orElse(0);
+      double oy = others.stream().mapToDouble(Rigid.Pair::fy).average().orElse(0);
+      double tx = others.stream().mapToDouble(Rigid.Pair::tx).average().orElse(0);
+      double ty = others.stream().mapToDouble(Rigid.Pair::ty).average().orElse(0);
+      double mx = mine.stream().mapToDouble(Rigid.Pair::fx).average().orElse(0);
+      double my = mine.stream().mapToDouble(Rigid.Pair::fy).average().orElse(0);
+      double[] put = own[s].apply(ox, oy);
+      double off = Math.hypot(put[0] - tx, put[1] - ty);
+      double lever = Math.hypot(ox - mx, oy - my);
+      double sigma = Math.toRadians(Rigid.uncertainty(own[s], mine)[0]);
+      if (off > MAX_LEG_DISAGREE_MM + 3 * sigma * lever) {
+        return String.format(
+            Locale.ROOT,
+            "the %d matched points on the %s side of the image lie %.1f mm from where the seam of"
+                + " the %d points on the %s side puts them: the two sides do not share one seam"
+                + " (two legs that moved differently between the exposures, parallax). Choose one"
+                + " target leg and match on its half of the image",
+            others.size(),
+            s == 0 ? "right" : "left",
+            off,
+            mine.size(),
+            s == 0 ? "left" : "right");
+      }
+    }
+    if (fixed[0] && fixed[1]) {
+      // where the two sides meet, in the lower piece's mm: half way between their centres
+      double fx = inliers.stream().mapToDouble(Rigid.Pair::fx).average().orElse(0);
+      double fy = inliers.stream().mapToDouble(Rigid.Pair::fy).average().orElse(0);
+      double[] a = own[0].apply(fx, fy);
+      double[] b = own[1].apply(fx, fy);
+      double mm = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      if (mm > MAX_LEG_DISAGREE_MM) {
+        return String.format(
+            Locale.ROOT,
+            "the matched points on the left and on the right side of the image, fitted one side at"
+                + " a time, put the middle of the overlap %.1f mm apart: the two sides do not"
+                + " share one seam (two legs that moved differently between the exposures,"
+                + " parallax). Choose one target leg and match on its half of the image",
+            mm);
+      }
+    } else if (separate
+        && !fixed[0]
+        && !fixed[1]
+        && Math.abs(fit.degrees()) > MAX_LEG_DISAGREE_DEG) {
+      return String.format(
+          Locale.ROOT,
+          "the rotation of %.2f deg rests only on the difference between two separate groups of"
+              + " matched points (%d on the left, %d on the right, %.0f mm apart), and neither"
+              + " group fixes a rotation on its own: a film that turned cannot be told from two"
+              + " legs that moved differently between the exposures (parallax), so the two sides"
+              + " do not share one seam that is known. Choose one target leg and match on its"
+              + " half of the image, or pick matching points",
+          fit.degrees(),
+          left.size(),
+          right.size(),
+          gap);
+    }
+    return null;
+  }
+
+  /**
+   * The shift alone that best carries the matched points of the lower piece onto the upper one:
+   * their average displacement, which is right at their centre whatever small turn the fit found.
+   */
+  static Rigid meanShift(List<Rigid.Pair> pairs) {
+    double dx = 0;
+    double dy = 0;
+    for (Rigid.Pair q : pairs) {
+      dx += q.tx() - q.fx();
+      dy += q.ty() - q.fy();
+    }
+    return Rigid.shift(dx / pairs.size(), dy / pairs.size());
+  }
+
   /** Two legs' seams may differ by this much at the overlap's centre and still be one seam. */
   static final double MAX_LEG_DISAGREE_MM = 1.5;
 
@@ -468,20 +667,68 @@ final class SeamMatcher {
    * smaller uncertainty is used and the other half's agreement is stated.
    */
   static Seam matchBothLegs(MatchImage upper, MatchImage lower) {
-    Seam whole = match(upper, lower, Band.WHOLE);
-    Seam left = match(upper, lower, Band.LEFT_HALF);
-    Seam right = match(upper, lower, Band.RIGHT_HALF);
+    return bothLegs(
+        upper,
+        lower,
+        match(upper, lower, Band.WHOLE),
+        match(upper, lower, Band.LEFT_HALF),
+        match(upper, lower, Band.RIGHT_HALF),
+        ", or line the seam up by hand");
+  }
+
+  /**
+   * Target leg "Both", refined from a position set by hand (Sami, 10 Nov 2026): {@link #refine} on
+   * the whole width and on each half from that position, judged exactly as {@link #matchBothLegs}
+   * judges, so a hand-set seam on a film of both legs cannot become "check" on one leg's evidence.
+   * A seam this refuses stays where the user put it, without the refused fit.
+   */
+  static Seam refineBothLegs(MatchImage upper, MatchImage lower, Rigid start) {
+    Seam judged =
+        bothLegs(
+            upper,
+            lower,
+            refine(upper, lower, Band.WHOLE, start),
+            refine(upper, lower, Band.LEFT_HALF, start),
+            refine(upper, lower, Band.RIGHT_HALF, start),
+            ", or fit matching points picked on both legs");
+    if (judged.status() == Seam.Status.FAILED && !judged.transform().equals(start)) {
+      return new Seam(
+          start,
+          judged.method(),
+          Seam.Status.FAILED,
+          Double.NaN,
+          Double.NaN,
+          Double.NaN,
+          Double.NaN,
+          judged.uniqueness(),
+          Double.NaN,
+          List.of(),
+          judged.reasons());
+    }
+    return judged;
+  }
+
+  /**
+   * @param otherwise what else the user can do when the legs cannot be confirmed, after "choose one
+   *     target leg and match on its half of the image"
+   */
+  private static Seam bothLegs(
+      MatchImage upper, MatchImage lower, Seam whole, Seam left, Seam right, String otherwise) {
     // Both needs both legs matched on their own, agreeing, and the whole-width match passing;
     // a failure of any of these fails the seam (Kimi, second review: a passing whole-width seam
     // must not stand in for a leg that failed, and two halves must not erase a whole-width failure)
     if (left.status() == Seam.Status.FAILED || right.status() == Seam.Status.FAILED) {
+      // Not confirmed for both legs, but nothing here says the whole-width fit is wrong: it passed
+      // its own gates, the two halves' rotations among them, so it stays where it is. On the real
+      // case of 7 Nov 2026 the knee-to-ankle seam is refused this way (the right half alone fails
+      // its hold-out) and its whole-width fit is the machine's own within 0.04 deg and 0.4 mm.
       return withReason(
           whole,
           Seam.Status.FAILED,
           "the legs could not be matched one at a time to check that they agree: %s leg failed;"
                   .formatted(left.status() == Seam.Status.FAILED ? "the left" : "the right")
-              + " choose one target leg and match on its half of the image, or line the seam up"
-              + " by hand");
+              + " choose one target leg and match on its half of the image"
+              + otherwise);
     }
     Rigid base = whole.status() == Seam.Status.CHECK ? whole.transform() : left.transform();
     double[] box = overlap(upper.widthMm(), upper.heightMm(), base, lower);
@@ -497,9 +744,8 @@ final class SeamMatcher {
             mm,
             deg);
     if (mm > MAX_LEG_DISAGREE_MM || deg > MAX_LEG_DISAGREE_DEG) {
-      return withReason(
+      return refused(
           whole,
-          Seam.Status.FAILED,
           words
               + ": parallax or movement between the exposures. Choose one target leg and match"
               + " on its half of the image");
@@ -507,12 +753,82 @@ final class SeamMatcher {
     if (whole.status() == Seam.Status.CHECK) {
       return withReason(whole, Seam.Status.CHECK, words + ", within the limits");
     }
-    return withReason(
+    return refused(
         whole,
-        Seam.Status.FAILED,
         words
             + ", within the limits, but the match on the whole width failed; choose one target"
-            + " leg and match on its half of the image, or line the seam up by hand");
+            + " leg and match on its half of the image"
+            + otherwise);
+  }
+
+  /**
+   * Target leg "Both", from the user's point pairs (Sami, 10 Nov 2026): {@link #manual}, and the
+   * pairs must lie on both legs, at least one in each half of the upper piece as shown. The
+   * left-out check then holds each leg's points against the fit of the others, so pairs picked on
+   * one leg alone cannot confirm a seam for both.
+   */
+  static Seam manualBothLegs(List<Rigid.Pair> pairs, double upperWidthMm) {
+    Seam seam = manual(pairs);
+    long onLeft = pairs.stream().filter(p -> p.tx() < upperWidthMm / 2).count();
+    if (pairs.isEmpty()) {
+      return seam;
+    }
+    if (onLeft == 0 || onLeft == pairs.size()) {
+      return withReason(
+          seam,
+          Seam.Status.FAILED,
+          "target leg Both, but every point pair is on the %s half of the image: pick at least"
+                  .formatted(onLeft == 0 ? "right" : "left")
+              + " one pair on the other leg too, so that both legs are held to one seam; or"
+              + " choose one target leg");
+    }
+    return seam.status() == Seam.Status.CHECK
+        ? withReason(seam, Seam.Status.CHECK, "the point pairs lie on both legs")
+        : seam;
+  }
+
+  /**
+   * The whole-width seam refused because the two legs, matched one at a time, disagree, or because
+   * the whole width itself failed. One that had passed on its own still carries its fitted rotation
+   * and residual, and the legs' disagreement is the evidence against that rotation: it is left at
+   * the average shift of its matched points instead, with no figures, as {@link #judge} leaves any
+   * refused fit (review of 11 Nov 2026: with the legs 3 mm apart the refused seam was saved turned
+   * -0.77 deg, the fault stitch 0.4 removed from a single band).
+   */
+  private static Seam refused(Seam whole, String reason) {
+    if (whole.status() == Seam.Status.FAILED) {
+      return withReason(whole, Seam.Status.FAILED, reason);
+    }
+    Rigid placed =
+        whole.pairs().isEmpty()
+            ? Rigid.shift(whole.transform().tx(), whole.transform().ty())
+            : meanShift(whole.pairs());
+    List<String> reasons = new ArrayList<>();
+    reasons.add(reason);
+    reasons.add(
+        String.format(
+            Locale.ROOT,
+            "placed at the average shift of the matched points (shift %.1f, %.1f mm, rotation"
+                + " 0.00 deg) without the refused fit (%d points, rotation %.2f deg, residual"
+                + " %.2f mm): a match the gates refuse keeps no fitted rotation",
+            placed.tx(),
+            placed.ty(),
+            whole.pairs().size(),
+            whole.transform().degrees(),
+            whole.rmsMm()));
+    reasons.addAll(whole.reasons());
+    return new Seam(
+        placed,
+        whole.method(),
+        Seam.Status.FAILED,
+        Double.NaN,
+        Double.NaN,
+        Double.NaN,
+        Double.NaN,
+        whole.uniqueness(),
+        whole.holdoutMm(),
+        whole.pairs(),
+        reasons);
   }
 
   private static Seam withReason(Seam s, Seam.Status status, String reason) {

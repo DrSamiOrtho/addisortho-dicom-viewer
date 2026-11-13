@@ -868,6 +868,8 @@ public class View3d extends VolumeCanvas
                 isSegMode()
                     ? (volumePreset.getColorMin() + volumePreset.getColorMax()) / 2f
                     : renderingLayer.getWindowCenter()));
+    program.allocateUniform(
+        gl, "isoLevel", (g, loc) -> g.glUniform1f(loc, volumePreset.getIsoLevel())); // NON-NLS
 
     if (!useComputeShader) {
       // The FBO shader uses voxelUniforms410.glsl which has no default for ditherRay
@@ -1507,7 +1509,7 @@ public class View3d extends VolumeCanvas
     SegVolumeTexture svt = segVolumeTexture;
     if (svt != null && svt.getSegVolume() == live.volume()) {
       if (!segBuildRunning) {
-        svt.setPendingColorLut(live.volume().buildSegmentColorLUT());
+        svt.setPendingColorLut(liveColorLut(live));
         display();
       }
       return;
@@ -1543,7 +1545,7 @@ public class View3d extends VolumeCanvas
       return;
     }
     this.renderedSegs = List.of();
-    newSvt.setPendingColorLut(live.volume().buildSegmentColorLUT());
+    newSvt.setPendingColorLut(liveColorLut(live));
     newSvt.setOccupancyListener(this::display);
     newSvt.setSmoothSurfaces(segSmooth);
     SegVolumeTexture old = this.segVolumeTexture;
@@ -1578,7 +1580,7 @@ public class View3d extends VolumeCanvas
     if (z0 <= z1) {
       svt.markDirtySlices(z0, z1);
     }
-    svt.setPendingColorLut(live.get().volume().buildSegmentColorLUT());
+    svt.setPendingColorLut(liveColorLut(live.get()));
     display();
   }
 
@@ -1853,6 +1855,40 @@ public class View3d extends VolumeCanvas
   /** Returns this view's segmentation display mode (never {@code null}). */
   public Type getSegType() {
     return segType;
+  }
+
+  /** Whether the live bones are drawn as solid surfaces in the segments-only display. */
+  private volatile boolean segSolid;
+
+  /**
+   * Draws the live bones of the Bones panel as solid surfaces while the display shows the segments
+   * only (Addis Ortho): each bone fully opaque in its colour, whatever opacity its region has for
+   * the slices. Thin or weak bone then shows no hole wherever the bone itself was found.
+   */
+  public void setSegSolid(boolean solid) {
+    if (solid != segSolid) {
+      this.segSolid = solid;
+      if (segType.requiresSegTexture()) {
+        refreshSegColorLUT();
+      }
+    }
+  }
+
+  public boolean isSegSolid() {
+    return segSolid;
+  }
+
+  /** The colour table of the live labels, opaque where shown when they are drawn solid. */
+  private byte[] liveColorLut(LiveSegmentation live) {
+    byte[] lut = live.volume().buildSegmentColorLUT();
+    if (segSolid && segType == Type.SEG_ONLY) {
+      for (int i = 3; i < lut.length; i += 4) {
+        if (lut[i] != 0) {
+          lut[i] = (byte) 0xFF;
+        }
+      }
+    }
+    return lut;
   }
 
   /** Applies a new segmentation display mode to this view and rebuilds/destroys its texture. */

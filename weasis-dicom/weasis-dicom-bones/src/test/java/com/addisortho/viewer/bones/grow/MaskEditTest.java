@@ -154,4 +154,149 @@ class MaskEditTest {
     assertEquals(MaskEdit.brush(new int[] {10, 10, 10}, r, GRID).count(), one.count());
     assertNull(MaskEdit.stroke(List.of(new int[] {-20, -20, -20}), r, GRID));
   }
+
+  /**
+   * A stroke is every voxel within the brush of the line drawn, exactly: balls set along the line
+   * left a scalloped edge, and a slanted line a ragged one.
+   */
+  @Test
+  void aStrokeHasAnEvenEdgeAlongASlantedLine() {
+    double[] r = {3, 3, 1.5};
+    int[] a = {6, 8, 20};
+    int[] b = {31, 19, 22};
+    BoxMask line = MaskEdit.stroke(List.of(a, b), r, GRID);
+    double ux = (b[0] - a[0]) / r[0];
+    double uy = (b[1] - a[1]) / r[1];
+    double uz = (b[2] - a[2]) / r[2];
+    double length2 = ux * ux + uy * uy + uz * uz;
+    for (int z = 14; z <= 28; z++) {
+      for (int y = 0; y <= 30; y++) {
+        for (int x = 0; x <= 39; x++) {
+          double px = (x - a[0]) / r[0];
+          double py = (y - a[1]) / r[1];
+          double pz = (z - a[2]) / r[2];
+          double t = Math.clamp((px * ux + py * uy + pz * uz) / length2, 0.0, 1.0);
+          double d2 =
+              (px - t * ux) * (px - t * ux)
+                  + (py - t * uy) * (py - t * uy)
+                  + (pz - t * uz) * (pz - t * uz);
+          assertEquals(d2 <= 1.0, line.contains(x, y, z), "voxel " + x + ", " + y + ", " + z);
+        }
+      }
+    }
+    // Drawn through a point on the way, the same line gives the same voxels or more, never a gap.
+    BoxMask bent = MaskEdit.stroke(List.of(a, new int[] {18, 13, 21}, b), r, GRID);
+    assertTrue(bent.count() >= line.count() - line.count() / 50);
+  }
+
+  @Test
+  void strokeOfThisSliceOnlyIsADiscInTheSlice() {
+    double[] r = {3, 3, 3};
+    double[] axial = {0, 0, 1};
+    BoxMask disc = MaskEdit.stroke(List.of(new int[] {20, 20, 20}), r, GRID, axial, 0.6 / 3);
+    assertNotNull(disc);
+    assertEquals(20, disc.box().z0(), "one slice");
+    assertEquals(20, disc.box().z1(), "one slice");
+    assertTrue(disc.contains(23, 20, 20), "as wide as the brush in the slice");
+    assertFalse(disc.contains(24, 20, 20));
+    assertFalse(disc.contains(20, 20, 21), "the slice behind is not touched");
+
+    // A sagittal slice: the disc lies in y and z.
+    BoxMask side =
+        MaskEdit.stroke(
+            List.of(new int[] {20, 10, 20}, new int[] {20, 30, 20}),
+            r,
+            GRID,
+            new double[] {1, 0, 0},
+            0.6 / 3);
+    assertEquals(20, side.box().x0());
+    assertEquals(20, side.box().x1());
+    assertTrue(side.contains(20, 20, 23));
+    assertFalse(side.contains(21, 20, 20));
+
+    // An oblique slice: no voxel further from it than one layer.
+    double h = Math.sqrt(0.5);
+    BoxMask oblique =
+        MaskEdit.stroke(
+            List.of(new int[] {20, 20, 20}), r, GRID, new double[] {h, 0, h}, 0.6 * 2 * h / 3);
+    assertTrue(oblique.contains(21, 20, 19), "in the slice");
+    assertFalse(oblique.contains(22, 20, 22), "two layers off the slice");
+  }
+
+  @Test
+  void cutPartsABoneAlongALineDrawnOnASlice() {
+    // A bar 30 long along x, 8 x 8 across; the line is drawn across it on the slice z = 20.
+    BoxMask bar = block(new VoxelBox(5, 34, 16, 23, 16, 23));
+    double[] mm = {1, 1, 1};
+    double[] axial = {0, 0, 1};
+    List<int[]> line = List.of(new int[] {25, 12, 20}, new int[] {25, 27, 20});
+    MaskEdit.Cut cut = MaskEdit.cut(bar, line, mm, axial, 5);
+    assertNotNull(cut, "a line right across the bar cuts it");
+    assertEquals(bar.count(), cut.kept().count() + cut.piece().count(), "no voxel is lost");
+    assertTrue(cut.kept().contains(10, 20, 20), "the longer side is kept");
+    assertTrue(cut.piece().contains(30, 20, 20), "the shorter side comes away");
+    assertTrue(cut.piece().contains(30, 17, 16), "through every slice of the bone");
+    assertFalse(cut.piece().contains(23, 20, 20));
+    assertFalse(cut.kept().contains(27, 20, 23));
+    long expected = 9L * 8 * 8;
+    assertTrue(
+        Math.abs(cut.piece().count() - expected) <= 2L * 8 * 8,
+        "the cut lies at the line, within the wall: " + cut.piece().count());
+  }
+
+  @Test
+  void cutOnADiagonalLineLeavesNoBridge() {
+    BoxMask slab = block(new VoxelBox(5, 34, 5, 34, 18, 21));
+    List<int[]> line = List.of(new int[] {2, 2, 20}, new int[] {37, 37, 20});
+    MaskEdit.Cut cut = MaskEdit.cut(slab, line, new double[] {1, 1, 1}, new double[] {0, 0, 1}, 5);
+    assertNotNull(cut);
+    assertEquals(slab.count(), cut.kept().count() + cut.piece().count());
+    assertTrue(cut.kept().contains(30, 8, 20) != cut.piece().contains(30, 8, 20));
+    assertTrue(
+        cut.kept().contains(30, 8, 20) != cut.kept().contains(8, 30, 20),
+        "the two corners are on different sides");
+  }
+
+  @Test
+  void cutIsRefusedWhenTheLineDoesNotPartTheBone() {
+    BoxMask bar = block(new VoxelBox(5, 34, 16, 23, 16, 23));
+    double[] mm = {1, 1, 1};
+    double[] axial = {0, 0, 1};
+    // Half way across only.
+    assertNull(
+        MaskEdit.cut(bar, List.of(new int[] {25, 12, 20}, new int[] {25, 19, 20}), mm, axial, 5));
+    // Beside the bone.
+    assertNull(
+        MaskEdit.cut(bar, List.of(new int[] {2, 2, 20}, new int[] {2, 30, 20}), mm, axial, 5));
+    // One point is no line.
+    assertNull(MaskEdit.cut(bar, List.of(new int[] {25, 20, 20}), mm, axial, 5));
+    // A corner crumb under the smallest piece is no cut.
+    assertNull(
+        MaskEdit.cut(bar, List.of(new int[] {32, 14, 20}, new int[] {36, 18, 20}), mm, axial, 200));
+  }
+
+  @Test
+  void cutLeavesAnIslandTheLineDoesNotReachWithTheKeptPart() {
+    BoxMask bar = block(new VoxelBox(5, 34, 16, 23, 16, 23));
+    BoxMask island = block(new VoxelBox(30, 33, 30, 33, 18, 21));
+    BoxMask both = BoxMask.union(List.of(bar, island));
+    List<int[]> line = List.of(new int[] {25, 12, 20}, new int[] {25, 27, 20});
+    MaskEdit.Cut cut = MaskEdit.cut(both, line, new double[] {1, 1, 1}, new double[] {0, 0, 1}, 5);
+    assertNotNull(cut);
+    assertTrue(cut.kept().contains(31, 31, 20), "the island was not met by the line");
+    assertTrue(cut.piece().contains(30, 20, 20));
+  }
+
+  @Test
+  void cutFollowsTheVoxelSizeOnThickSlices() {
+    // 3 mm slices: a line on a coronal slice (normal along y) cuts between slices cleanly.
+    BoxMask bar = block(new VoxelBox(10, 17, 10, 17, 2, 31));
+    List<int[]> line = List.of(new int[] {6, 13, 20}, new int[] {21, 13, 20});
+    MaskEdit.Cut cut =
+        MaskEdit.cut(bar, line, new double[] {0.5, 0.5, 3}, new double[] {0, 1, 0}, 5);
+    assertNotNull(cut);
+    assertEquals(bar.count(), cut.kept().count() + cut.piece().count());
+    assertTrue(cut.kept().contains(13, 13, 5));
+    assertTrue(cut.piece().contains(13, 13, 28));
+  }
 }

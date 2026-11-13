@@ -332,7 +332,17 @@ Design: `DESIGN-2026-10-14-templating-3d.md`. All outputs say draft, semi-automa
     Find the bones (or Show the bones, once found) finds every bone at once (`grow/AutoSplit`, run by `FindWorker`): bone at 200 HU closed and marrow-filled, dense bone at 300 HU, a Euclidean distance
     transform in mm, and a watershed that keeps two parts apart only where the neck is under 0.45 of the thinner part's
     depth, at least 1 mm shallower, with 0.2 cm³ above it; pieces under 1 cm³ join the bone they touch most or lie
-    within 10 mm of. A CT over 16 M voxels in the crop is worked on a 2x (or coarser) grid. The 3D view then shows
+    within 10 mm of. A CT over 16 M voxels in the crop is worked on a 2x (or coarser) grid. Since 11 Nov 2026 the
+    joint lines of small joints are opened first (`AutoSplit.openJointLines`): a carpal, tarsal or finger joint is
+    narrower than the scanner resolves and reads above 300 HU, only darker than the plate on each side, so the dense
+    read held the two bones as one. A voxel under 900 HU is a joint line when bone of 600 HU or more, and 250 HU
+    brighter than it, lies within 1.6 mm on both sides along one direction and along none square to it (a sheet; a
+    marrow canal is a valley all round), it is no ridge (a weak spot in a cortex), five neighbours share its
+    direction, and its group of touching voxels comes out of the bone (the marrow gaps shut inside do not). Those
+    voxels leave the dense read; on a coarse grid each coarse voxel a line crosses is opened. No voxel is lost: the
+    line goes to one bone or the other. Not looked for when the block holding the bone is over 64 M voxels. Checked
+    on four real CTs by an offline harness only (see `review-3d-bones-2026-11-11/NOTES.md`), not validated.
+    The 3D view then shows
     Bones in colour (`SegmentationTool.Type.BONES`: the CT itself, only inside visible segments, tinted with the
     segment colour, `segTint` in `vrFunctions.glsl`). A click on a bone in 3D, on an MPR or plain 2D slice (`SeedPicker.fromSliceClick`: the slice's own
     geometry, as the cross-hair) or in the list selects it
@@ -432,6 +442,74 @@ automatic, semi-automatic or manual, and not reviewed.
   stays only in the seam editor's difference view. The header gains Manufacturer and LossyImageCompression, and a
   calibration description that fits in 64 characters. Hovering a seam's notes shows every reason. Not yet tested on
   the real study or in the running viewer; the templating page still does not read the seam data.
+- 10 Nov 2026, editable stitch projects (branch `addisortho/stitch-edit-fable-52`; built and tested with synthetic
+  pieces only, not run in the installed viewer). A saved stitch can be kept as a project and reopened: `StitchProject`
+  is one version (schema 1, JSON written by `StitchProjectIO` in a fixed order with a checksum; the class comment gives
+  the coordinates and says which fields are source facts, decisions and results). Sources are named by SOP Instance UID
+  and proved by a SHA-256 of the pixels the stitch uses (`Piece.pixelHash`); there is no patient name, file name or
+  path in it. `SeamRecipe` is how a seam was set (automatic match on a band, both legs, refine from a hand position,
+  picked points, then a hand move) and makes the seam again through the same `SeamMatcher` calls, so reopening
+  (`StitchResume`) checks every seam afresh: a seam that does not come out as saved is held as failed where it was
+  saved, never passed. Reopening is refused unless every piece is open, once, unchanged; nothing is put in a missing
+  piece's place. An edit is a new version naming its parent (`StitchProjects`); no version and no saved picture is
+  written over. The flattened Secondary Capture and its private seam data are never read as editing state.
+  Storage is the `ProjectStore` interface (write-once documents by study and version id; its comment states what an
+  implementation must guarantee). **No implementation ships yet**: `StitchService.projectStore()` is empty, so the
+  window saves the picture only and shows no **Edit stitch...** button. Once the study library supplies a store there,
+  Save also keeps a version and Edit stitch lists the study's versions. `StitchDialogEditTest` drives the real window
+  against a store in a temporary folder (`FolderProjectStore`, test code only); it is skipped where there is no display.
+  After Kimi's review of the branch (10 Nov 2026): changing the target leg now discards the seams, as changing the
+  band does, so seams matched for one leg are never saved under another; **Automatic match again** in the seam window
+  matches as Line up does for the leg and band (Both on the whole width: each leg on its own as well); Edit stitch asks
+  before it replaces a stitch that is not saved (save it first, discard it, or cancel), and the window changes only
+  once the chosen version has been checked, so a refused or cancelled reopen leaves it as it was; and the save checks
+  the version and its parent before the picture is written, and refuses an ordinary save of a failed seam, so a refused
+  stitch leaves no picture. A project-store failure after the picture is written still leaves the picture alone, and
+  the user is told. Then, at Sami's word the same day, target leg Both is held on the hand paths too:
+  **Refine automatically from here** refines the whole width and each half from the hand-set position and is judged
+  as Line up's Both match is (`SeamMatcher.refineBothLegs`; a refused seam stays where the user put it), and **Fit to
+  the points** needs a point pair on each leg, so the left-out check holds one leg's points against the other's
+  (`manualBothLegs`). Both only add refusals: on a synthetic film whose legs sit 3 mm apart, the plain whole-width
+  refine gave "check" and the leg-by-leg one fails. The limits are Line up's (1.5 mm, 0.3 deg) and are not validated
+  on real films.
+  Changing the target leg, the band, a tick or the order still discards the seams, but when they hold hand work that
+  is not saved (a seam moved, refined or fitted, or a cut dragged) the window asks first; Keep them also puts the
+  choice back. A plain Line up result still goes without a question. Pressing **Line up** again over such hand work
+  asks the same question before any matching starts.
+- 10 Nov 2026, the project store (branch `addisortho/stitch-store-opus`, on `addisortho/stitch-edit-fable-52`).
+  `StitchService.projectStore()` now returns `LibraryProjectStore`, so Save keeps a version and **Edit stitch...**
+  appears. Versions live in the study library at `<root>/.projects/stitch/<Study Instance UID>/<version>.json`
+  (`ProjectDocuments`, explorer): named by UIDs only, never by the patient. The walks of the library over its studies
+  (study list and counts, catalog reconcile, patient index, deletion) pass over hidden folders, and export and send take
+  only the chosen images, so a project is never counted, listed, exported or sent. A write goes to a hidden temporary
+  file, forced and read back before it is named, then gets its name by a hard link (refused by the file system if the
+  name exists), under a process lock and a file lock on `.projects/<kind>/.lock`, which is never deleted; only a file
+  system without hard links falls back to a move under the same locks. Every folder up to the library root is flushed on
+  every write. Guarantee on macOS/Linux local disks; on Windows only the file is forced and NTFS's journal relied on
+  (untested with a power cut); network and synced folders give none. After Codex's review (10 Nov 2026) each of its six
+  findings has a test that fails on the earlier code. Deleting a study from the library deletes its projects
+  with it (Sami, 10 Nov 2026): `StudyStore.deleteStudy` finds them by the folder's study key, deletes them first under
+  the write locks, and leaves the study whole and listed if that fails; other studies' projects are untouched. No
+  screen offers study deletion at this commit (`ReceiveService.deleteStudies` has no caller). Projects never leave the
+  computer: ZIP, disc and DICOM send carry the stitched pictures only (Sami, 10 Nov 2026). Tested on synthetic data in unit tests, including
+  two threads and two processes. Installed-app round trip, 10 Nov 2026, on the Latest Full build (ec3a72bf8) with
+  only the explorer and stitching bundles swapped, three synthetic CR pieces: the bundle resolves with its Jackson
+  imports; Line up and Save keep version 1; after a quit and restart Edit stitch lists and reopens it with pieces,
+  confirmations and seams; a seam moved by hand and refined saves version 2 under it; both reopen; version 1 and its
+  picture stay byte for byte; refused with a message and nothing substituted: a missing piece, a piece whose pixels
+  changed, a truncated project, a schema 99 project, a store failing during Save (the picture stands and the user is
+  told), and a reopen cancelled part way; after a hard kill a half-written leftover is not listed and the next save
+  removes it. The study folder and catalog hold only the images, and the export dialog lists only images.
+  Synthetic films only; not tested on Windows.
+- 10 Nov 2026, stitch 0.6 (at Sami's word, same branch). A refused automatic seam with at least 6 matched points is
+  now left at the matched points' average shift (no rotation, still failed), not at the rough 2 mm peak refined by
+  shift within 2 mm. On the real four-piece film matched on the left leg's half, the knee-to-ankle seam had been left
+  at 78.0 mm while that leg's matched points, every quarter of the overlap correlated on its own and the machine's
+  stitch put it at 84 to 85 mm (the leg turned about 0.6 deg between exposures; a shift-only search over a slanted
+  shaft turned that into a vertical error); it now lands at 83.7. The femur-to-knee seam on the same half moved from
+  305.8 to 303.9 mm, where that leg's own structure agrees (303 to 304); the machine's 306.9 is a compromise between
+  the two legs, which differ by about 4 mm there. Gates and thresholds unchanged. Reopened versions saved by 0.5 say
+  they were checked by a newer matcher, and a failed seam that now computes elsewhere is held where it was saved.
 
 ## Shortcuts (6 Nov 2026)
 

@@ -77,7 +77,7 @@ public final class TextureField implements VoxelSampler {
     }
     double sigmaXY = VolumeSmoother.SIGMA_XY;
     return new VolumeSmoother(
-        width, height, sigmaXY, VolumeSmoother.sigmaZ(sigmaXY, texelX, texelZ));
+        width, height, sigmaXY, VolumeSmoother.sigmaZ(sigmaXY, texelX, texelZ), true);
   }
 
   public Vector3i texture() {
@@ -97,9 +97,14 @@ public final class TextureField implements VoxelSampler {
   public long workingBytes() {
     long slice = 4L * texture.x * texture.y;
     long sourceSlice = 4L * source.width() * source.height();
-    return slice * (TEXTURE_CACHE + FILTERED_CACHE + SOURCE_CACHE)
+    return slice * (TEXTURE_CACHE + (long) FILTERED_CACHE * filteredFloats() + SOURCE_CACHE)
         + sourceSlice * SOURCE_CACHE
         + reconstructionBytes();
+  }
+
+  /** Floats per voxel of a cached in-plane filtered slice. */
+  private int filteredFloats() {
+    return smoother == null ? 1 : smoother.floatsPerVoxel();
   }
 
   /** The temporaries of reconstructing one texture slice, freed once it is cached. */
@@ -113,7 +118,7 @@ public final class TextureField implements VoxelSampler {
     long slice = 4L * texture.x * texture.y;
     long sourceSlice = 4L * source.width() * source.height();
     boolean scaledShared = source.width() == texture.x && source.height() == texture.y;
-    return slice * (textureSlices.size() + filteredSlices.size())
+    return slice * (textureSlices.size() + (long) filteredSlices.size() * filteredFloats())
         + (scaledShared ? 0 : slice * scaledSlices.size())
         + sourceSlice * sourceSlices.size();
   }

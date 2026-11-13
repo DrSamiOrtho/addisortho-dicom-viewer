@@ -113,7 +113,9 @@ public class IsoImageExport extends LocalExport {
       checkBoxAddJpeg.setSelected(Boolean.parseBoolean(pref.getProperty(ADD_JPEG, "false")));
       checkBoxAddWeasisViewer.setSelected(
           Boolean.parseBoolean(pref.getProperty(ADD_VIEWER, "false")));
-      checkBoxNameLabel.setSelected(Boolean.parseBoolean(pref.getProperty(NAME_LABEL, "true")));
+      // Always on to start with: leaving the name off is decided for one disc, never remembered.
+      pref.remove(NAME_LABEL);
+      checkBoxNameLabel.setSelected(true);
       checkBoxBurn.setSelected(
           DiscBurner.isSupported() && Boolean.parseBoolean(pref.getProperty(BURN, "true")));
     }
@@ -132,7 +134,6 @@ public class IsoImageExport extends LocalExport {
     Properties pref = getPreferences();
     pref.setProperty(ADD_JPEG, String.valueOf(checkBoxAddJpeg.isSelected()));
     pref.setProperty(ADD_VIEWER, String.valueOf(checkBoxAddWeasisViewer.isSelected()));
-    pref.setProperty(NAME_LABEL, String.valueOf(checkBoxNameLabel.isSelected()));
     pref.setProperty(BURN, String.valueOf(checkBoxBurn.isSelected()));
   }
 

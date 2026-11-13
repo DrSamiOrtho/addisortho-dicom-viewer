@@ -90,21 +90,142 @@ final class Stitch {
     this.rows = new Cut.Row[seams.size()];
   }
 
+  /** Where the user put the cut of seam i, in its upper piece's mm; NaN when it is automatic. */
+  double requestedCut(int i) {
+    return cuts[i];
+  }
+
   /** The cut of seam i: where the lower piece takes over from the upper, and why. */
   synchronized Cut.Row cut(int i) {
     if (rows[i] == null) {
-      Piece upper = pieces.get(i);
-      Piece lower = pieces.get(i + 1);
-      Rigid t = seams.get(i).transform();
-      if (!Double.isNaN(cuts[i])) {
-        double[] box = SeamMatcher.overlap(upper.widthMm(), upper.heightMm(), t, lower.match());
-        double y = Math.max(box[1] + FEATHER_MM, Math.min(upper.heightMm() - FEATHER_MM, cuts[i]));
-        rows[i] = new Cut.Row(y, "cut placed by hand", false);
-      } else {
-        rows[i] = Cut.find(upper.match(), lower.match(), upper.heightMm(), lower.widthMm(), t);
-      }
+      resolveCuts();
     }
     return rows[i];
+  }
+
+  /**
+   * Every seam's cut. A cut placed by hand stays inside its own overlap, and in order down the leg
+   * with its neighbours, {@link #FEATHER_MM} clear of each: the compositor takes piece i between
+   * cut i-1 and cut i, so two cuts out of order leave the piece between them out and average its
+   * neighbours there, which are lined up only through it (review of 11 Nov 2026: on three pieces
+   * that all overlap, seam 1's line dragged below seam 2's made the middle piece vanish in that
+   * band). An automatic cut stays where it is; a hand cut stops short of the cut above it and of
+   * every automatic cut below it, leaving room for the hand cuts between. Where its own overlap and
+   * its neighbours leave it no room at all, the hand position is given up and the cut is found
+   * automatically. {@link #cutsInOrder} tells whether all that left the cuts in order.
+   */
+  private void resolveCuts() {
+    int n = seams.size();
+    List<Rigid> poses = poses();
+    Cut.Row[] found = new Cut.Row[n];
+    double[] frame = new double[n];
+    for (int i = 0; i < n; i++) {
+      if (Double.isNaN(cuts[i])) {
+        found[i] = automaticCut(i);
+        frame[i] = onFrame(poses, i, found[i].yMm());
+      }
+    }
+    // The lowest each cut may lie so that every cut below it still has room: an automatic cut is
+    // where it is, a hand cut may go to the end of its own overlap, and each must stay a feather
+    // above the one below. Without this a hand cut could take the room the hand cut below it
+    // needed (Astra, 11 Nov 2026: a first cut at 280 left a second one, held to 190 by its short
+    // overlap, nowhere to go).
+    double[] ceiling = new double[n];
+    for (int i = n - 1; i >= 0; i--) {
+      if (Double.isNaN(cuts[i])) {
+        ceiling[i] = frame[i]; // not moved, even when the cuts below leave it too little room
+      } else {
+        double own = onFrame(poses, i, overlapRows(i)[1]);
+        ceiling[i] = i == n - 1 ? own : Math.min(own, ceiling[i + 1] - FEATHER_MM);
+      }
+    }
+    for (int i = 0; i < n; i++) {
+      if (!Double.isNaN(cuts[i])) {
+        double[] own = overlapRows(i);
+        double lo = onFrame(poses, i, own[0]);
+        double hi = ceiling[i];
+        boolean above = i > 0 && frame[i - 1] + FEATHER_MM > lo;
+        if (above) {
+          lo = frame[i - 1] + FEATHER_MM;
+        }
+        double asked = Math.max(own[0], Math.min(own[1], cuts[i]));
+        double at = onFrame(poses, i, asked);
+        if (lo > hi + 1e-9) {
+          found[i] = automaticCut(i);
+          found[i] =
+              new Cut.Row(
+                  found[i].yMm(),
+                  "no room for the hand position between the neighbouring cuts: " + found[i].note(),
+                  found[i].clean());
+        } else if (at < lo) {
+          // down the piece is down the frame: a film turns a few degrees at most
+          double y = asked + (lo - at) / Math.cos(poses.get(i).theta());
+          found[i] =
+              new Cut.Row(
+                  y,
+                  above
+                      ? "cut placed by hand, held clear of seam %d's cut".formatted(i)
+                      : "cut placed by hand",
+                  false);
+        } else if (at > hi) {
+          double y = asked + (hi - at) / Math.cos(poses.get(i).theta());
+          found[i] =
+              new Cut.Row(
+                  y, "cut placed by hand, held clear of seam %d's cut".formatted(i + 2), false);
+        } else {
+          found[i] = new Cut.Row(asked, "cut placed by hand", false);
+        }
+        frame[i] = onFrame(poses, i, found[i].yMm());
+      }
+    }
+    System.arraycopy(found, 0, rows, 0, n);
+  }
+
+  private Cut.Row automaticCut(int i) {
+    Piece upper = pieces.get(i);
+    Piece lower = pieces.get(i + 1);
+    return Cut.find(
+        upper.match(), lower.match(), upper.heightMm(), lower.widthMm(), seams.get(i).transform());
+  }
+
+  /** A row of piece i, in its mm, as a height on the stitch frame at the piece's middle. */
+  private double onFrame(List<Rigid> poses, int i, double yMm) {
+    return poses.get(i).apply(pieces.get(i).widthMm() / 2, yMm)[1];
+  }
+
+  /**
+   * The first and last row of seam i's upper piece a hand cut may take: inside the overlap, a
+   * feather from each of its ends. The overlap ends where the lower piece does when that comes
+   * before the upper piece's own end.
+   */
+  private double[] overlapRows(int i) {
+    Piece upper = pieces.get(i);
+    double[] box =
+        SeamMatcher.overlap(
+            upper.widthMm(), upper.heightMm(), seams.get(i).transform(), pieces.get(i + 1).match());
+    double end = Math.min(upper.heightMm(), box[3]);
+    double first = box[1] + FEATHER_MM;
+    double last = end - FEATHER_MM;
+    if (last < first) {
+      // an overlap shorter than two feathers: its middle, never a row outside it
+      first = (box[1] + end) / 2;
+      last = first;
+    }
+    return new double[] {first, last};
+  }
+
+  /**
+   * True when every seam's cut lies below the cut of the seam above it on the stitch frame, which
+   * the compositor needs. Hand cuts are held in order; automatic cuts of pieces that all overlap
+   * could still cross, and then no picture may be made of the stitch.
+   */
+  boolean cutsInOrder() {
+    for (int i = 1; i < seams.size(); i++) {
+      if (!(seamY(i) > seamY(i - 1))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   boolean anyFailed() {
@@ -113,6 +234,10 @@ final class Stitch {
 
   /** Automatic when every seam is, manual when every seam is, otherwise semi-automatic. */
   Seam.Method method() {
+    return method(seams);
+  }
+
+  static Seam.Method method(List<Seam> seams) {
     if (seams.stream().allMatch(s -> s.method() == Seam.Method.AUTOMATIC)) {
       return Seam.Method.AUTOMATIC;
     }

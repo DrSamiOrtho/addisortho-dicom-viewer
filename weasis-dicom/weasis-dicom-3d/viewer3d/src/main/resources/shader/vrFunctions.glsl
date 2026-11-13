@@ -401,6 +401,30 @@ vec3 refineSegSurface(vec3 outside, float occOut, vec3 inside, float occIn) {
     return mix(outside, inside, clamp((SEG_SURFACE_LEVEL - occOut) / max(occIn - occOut, 1e-4), 0.0, 1.0));
 }
 
+// Position of an iso-surface between the samples on either side of it. The coarse ray step only
+// finds the crossing; refining it keeps the rendered surface and its lighting normal from snapping
+// to the sample grid. Four secant steps are enough at the trilinear texture's sub-voxel precision.
+vec3 refineIsoSurface(vec3 outside, vec3 inside, float center) {
+    float outsideValue = getNormalizedWindowLevel(outside);
+    float insideValue = getNormalizedWindowLevel(inside);
+    for (int i = 0; i < 4; ++i) {
+        float delta = insideValue - outsideValue;
+        float t = abs(delta) > 1e-5 ? clamp((center - outsideValue) / delta, 0.0, 1.0) : 0.5;
+        vec3 p = mix(outside, inside, t);
+        float value = getNormalizedWindowLevel(p);
+        if (value > center) {
+            inside = p;
+            insideValue = value;
+        } else {
+            outside = p;
+            outsideValue = value;
+        }
+    }
+    float delta = insideValue - outsideValue;
+    float t = abs(delta) > 1e-5 ? clamp((center - outsideValue) / delta, 0.0, 1.0) : 0.5;
+    return mix(outside, inside, t);
+}
+
 // Colour of the visible segment at a point of the smoothed surface, whose nearest label voxel can
 // lie outside: the closest visible one among the eight label voxels around the point.
 vec4 segSurfaceColor(vec3 texCoord) {
@@ -770,46 +794,61 @@ vec4 rayCastingIsoSurface(Ray ray, float tmin, float tmax, vec2 uv) {
     vec3 texCoord = vec3(0.0);
     vec4 pxColor = vec4(0.0);
     float pix = 0.0;
-    float center = (windowCenter - outputLevelMin) / (outputLevelMax - outputLevelMin);
+    // The surface lies where the preset starts to show, in the same normalised range as the samples
+    // and the colour map, so the window/level tool moves it as it moves the composite picture.
+    float center = isoLevel;
 
-    bool prev_sign = pix < center;
+    bool hasPrevious = false;
+    vec3 previousCoord = vec3(0.0);
+    float previousValue = 0.0;
 
     // In "segmentation only" mode the anatomy volume raymarch is skipped entirely.
     for (int count = 0; count < sampleCount && !segOnly; count++) {
         rayPos += stepPos;
         texCoord = rayPos + ditheredRayStep;
-        if (isCrosshairCut(texCoord)) continue;
-        if (isCutAway(texCoord)) continue;
-        if (isSegMasked(texCoord)) continue;
+        if (isCrosshairCut(texCoord) || isCutAway(texCoord) || isSegMasked(texCoord)) {
+            // Never join samples across a cut: the surface on either side is not a crossing.
+            hasPrevious = false;
+            continue;
+        }
         pix = getNormalizedWindowLevel(texCoord);
-        vec4 pixel = applyVoxelColor(texCoord, pix);
-        if (segTint) pixel.rgb = tintBySegment(pixel.rgb, texCoord);
-        bool sign_cur = pix > center;
-        if (pixel.a > 0.0) {
-            if (sign_cur != prev_sign) {
-                vec3 normalPos = smoothShading ? smoothGradient(texCoord) : gradient(texCoord, stepSize);
-                vec4 diffuse = pixel;
-
+        bool inside = pix > center;
+        // A ray that enters the volume, a crop box, a cut or a segment already inside the surface
+        // hits the cut face there: the solid is capped instead of showing its hollow interior.
+        bool crossing = hasPrevious ? inside != (previousValue > center) : inside;
+        if (crossing) {
+            vec3 hit = texCoord;
+            if (hasPrevious) {
+                hit = inside
+                    ? refineIsoSurface(previousCoord, texCoord, center)
+                    : refineIsoSurface(texCoord, previousCoord, center);
+                pix = getNormalizedWindowLevel(hit);
+            }
+            // An isosurface is opaque wherever it exists: the preset gives its colour, not its alpha.
+            vec4 pixel = applyVoxelColor(hit, pix);
+            if (segTint) pixel.rgb = tintBySegment(pixel.rgb, hit);
+            if (shading) {
+                vec3 normalPos = smoothShading ? smoothGradient(hit) : gradient(hit, stepSize);
                 for (int i = 0; i < 4; ++i) {
                     if (lights[i].enabled) {
-                        vec3 V = normalize(vec3(viewMatrix * lights[i].position) - texCoord);
-                        vec3 L = normalize(lights[i].position.xyz - texCoord);
+                        vec3 V = normalize(vec3(viewMatrix * lights[i].position) - hit);
+                        vec3 L = normalize(lights[i].position.xyz - hit);
                         // double sided lighting
                         if (dot(L, normalPos) < 0.0) {
                             normalPos = -normalPos;
                         }
-
-                        pxColor.rgb = pxColor.rgb + blinnPhong(normalPos, V, L, i, pix, diffuse.rgb);
+                        pxColor.rgb += blinnPhong(normalPos, V, L, i, pix, pixel.rgb);
                     }
                 }
-                pxColor.a = diffuse.a;
-                break;
+            } else {
+                pxColor.rgb = pixel.rgb;
             }
-        }
-
-        if (pxColor.a >= 0.99) {
+            pxColor.a = 1.0;
             break;
         }
+        previousCoord = texCoord;
+        previousValue = pix;
+        hasPrevious = true;
     }
 
     if (pxColor.a >= 0.99) {

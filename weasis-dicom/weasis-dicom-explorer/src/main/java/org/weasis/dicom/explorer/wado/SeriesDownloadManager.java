@@ -134,8 +134,7 @@ public class SeriesDownloadManager {
    * @return true if download started successfully, false otherwise
    */
   public Boolean startDownload() {
-    MediaSeriesGroup patient = dicomModel.getParent(dicomSeries, DicomModel.patient);
-    LOGGER.info("Downloading series of {} [{}]", patient, dicomSeries);
+    LOGGER.info("Downloading a series");
 
     WadoParameters wado = (WadoParameters) dicomSeries.getTagValue(TagW.WadoParameters);
     if (wado == null) {

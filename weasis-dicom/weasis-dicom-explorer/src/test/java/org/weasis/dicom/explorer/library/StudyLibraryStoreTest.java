@@ -731,6 +731,16 @@ class StudyLibraryStoreTest {
   }
 
   @Test
+  void theSameDerivedObjectSavedTwiceIsKeptOnce() throws IOException {
+    StudyStore.SavedDerived first = store.saveDerived(this::derived);
+    StudyStore.SavedDerived again = store.saveDerived(this::derived);
+
+    assertEquals(first.instance().file(), again.instance().file());
+    assertEquals(1, catalog.studies().getFirst().imageCount());
+    assertEquals(0, quarantined());
+  }
+
+  @Test
   void aWriterThatFailsLeavesNothingAndIsNotSaved() throws IOException {
     org.junit.jupiter.api.Assertions.assertThrows(
         IOException.class,

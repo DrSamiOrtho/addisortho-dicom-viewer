@@ -613,6 +613,33 @@ public class Preset extends TextureData {
     return colorMax;
   }
 
+  /** The opacity at which a preset is taken to show a surface: AO Bone's at 200 HU. */
+  public static final double ISO_OPACITY = 0.4;
+
+  /**
+   * Level of the {@link RenderingType#ISO2} surface as a fraction of the colour range: the lowest
+   * intensity at which this preset's opacity reaches {@link #ISO_OPACITY}. The surface then lies
+   * where the composite rendering shows one, and the window/level tool moves both the same way. A
+   * preset that never gets that opaque takes its most opaque point; one with no opacity at all has
+   * no surface (the level is above the range).
+   */
+  public float getIsoLevel() {
+    double at =
+        PresetGroup.opacityCrossing(groups, ISO_OPACITY)
+            .orElseGet(
+                () ->
+                    groups.stream()
+                        .flatMap(g -> java.util.Arrays.stream(g.getPoints()))
+                        .filter(p -> p.getOpacity() > 0f)
+                        .max(java.util.Comparator.comparingDouble(p -> p.getOpacity()))
+                        .map(p -> (double) p.getIntensity())
+                        .orElse(Double.POSITIVE_INFINITY));
+    if (at == Double.POSITIVE_INFINITY) {
+      return 2f;
+    }
+    return (float) Math.clamp((at - colorMin) / getWidth(), 0.0, 1.0);
+  }
+
   public static Preset getDefaultPreset(Modality modality) {
     Preset defPreset = null;
     for (Preset p : basicPresets) {

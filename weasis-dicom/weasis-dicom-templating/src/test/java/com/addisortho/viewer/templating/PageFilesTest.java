@@ -183,7 +183,7 @@ class PageFilesTest {
     }
     // My cases and the patient on the result since 7 Nov 2026 (r44g)
     assertNotNull(p.get("cases.js"));
-    assertEquals("r46", p.release());
+    assertEquals("r50", p.release());
     // The live bipolar data since 7 Nov 2026 (r44h): catalogue codes, size 40 on 3181-22400, no
     // size 55
     assertTrue(lib.contains("\"code\":\"3181-22400\"") && !lib.contains("\"code\":\"3181-28400\""));

@@ -5,7 +5,7 @@
 // To change a shared fact: edit it HERE, bump SHARED_REV, run `node tests/sync_test.mjs`, rebuild (stage_quick_sync.py or
 // build_standalone.sh): both pages pick it up with a new ?v= stamp, so a phone never mixes an old page with a new shared.js.
 
-export const SHARED_REV = '2026-11-08.1';
+export const SHARED_REV = '2026-11-10.1';
 
 // ---- sides, scanner classes, makers' default families --------------------------------------------------------------------
 export const SIDE = { R: 'right', L: 'left' };
@@ -25,9 +25,14 @@ export const ktPairOf = types => new Set(types.flatMap(k => (k.fem ? [k.fem, k.t
 export const KT_PAIR = ktPairOf(KNEE_TYPES);
 
 // ---- diaphyseal (segmental) tumour types: Chunli, Segmental Bone Defect Prosthesis, slides 18-19 ---------------------------
+// r47 (10 Nov 2026): stem = the length in the bone, stemName = Chunli's letter for it, by Chunli's part sketches ('Specifications of
+// Long Segmental Bone Defect Reconstruction Prosthesis', Kevin via Sami, 10 Nov 2026; read by Addis Ortho, not confirmed in words).
+// It is L1 on every stem but Type VI's stem B: there L1 (10-130) is the body with its 10 mm collar and L2 (20-140) the stem in
+// the bone. r39-r46 listed that stem's L1 10-130 as its length in the bone. L1 stays, as Chunli's L1 on each part, so a page
+// file from before r47 still runs beside this one during an upload or a rollback (Fable r47 P3-5).
 export const DIA_TYPES = {
-  III: { defect: [40, 165], fix: 'split body joined by screws, no cross-lock', A: { model: 'SZ-A(III)', L1: [20, 200], phi: [9, 40] }, B: { model: 'SZ-B(I)', L1: [10, 130], phi: [9, 40] } },
-  VI: { defect: [50, 310], fix: 'tapered press-fit intercalary segments (JGD(I)), stem B cross-locked (LD(I) screw)', A: { model: 'SZ-A(IV)', L1: [20, 200], phi: [9, 39] }, B: { model: 'SZ-B(VI)', L1: [10, 130], phi: null } },
+  III: { defect: [40, 165], fix: 'split body joined by screws, no cross-lock', A: { model: 'SZ-A(III)', L1: [20, 200], stem: [20, 200], stemName: 'L1', phi: [9, 40] }, B: { model: 'SZ-B(I)', L1: [10, 130], stem: [10, 130], stemName: 'L1', phi: [9, 40] } },
+  VI: { defect: [50, 310], fix: 'tapered press-fit intercalary segments (JGD(I)), stem B cross-locked (LD(I) screw)', A: { model: 'SZ-A(IV)', L1: [20, 200], stem: [20, 200], stemName: 'L1', phi: [9, 39] }, B: { model: 'SZ-B(VI)', L1: [10, 130], stem: [20, 140], stemName: 'L2', phi: null } },
 };
 
 // ---- tumour lengths, to 0.01 mm with no trailing zeros (91.75, 134); the same words on both pages ----------------------------

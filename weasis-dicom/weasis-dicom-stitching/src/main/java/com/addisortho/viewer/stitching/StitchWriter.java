@@ -44,7 +44,7 @@ final class StitchWriter {
   // 0.2: gates measured against the bone, the two-legs check, padding 0 (7 Nov 2026)
   // 0.4: a failed seam keeps no fitted rotation; cuts pulled to the middle of the overlap (7 Nov)
   // 0.5: the tone blended over 60 mm at each seam, the detail still over 10 mm (7 Nov 2026)
-  static final String SOFTWARE = "Addis Ortho Viewer long-leg stitch 0.5 (draft)";
+  static final String SOFTWARE = "Addis Ortho Viewer long-leg stitch 0.6 (draft)";
   static final String PRIVATE_CREATOR = "ADDIS ORTHO STITCH 1";
   static final int PRIVATE_DATA = 0x00711001;
   static final int SERIES_NUMBER = 903;

@@ -10,6 +10,7 @@
 // Modified by Addis Ortho Trading PLC, 2026.
 package org.weasis.dicom.explorer.index;
 
+import java.awt.Desktop;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -140,10 +141,18 @@ public final class PatientIndexService {
   /** The studies of the managed library and of the searched folders, one row per study. */
   public List<StudyEntry> studies() {
     StudyLibrary library = StudyLibrary.getInstance();
-    List<StudyEntry> managed =
-        library.studies().stream()
-            .map(s -> StudyEntry.of(s, library.folderOf(s).toString()))
-            .toList();
+    List<StudyEntry> managed = new ArrayList<>();
+    library.studies().forEach(s -> managed.add(StudyEntry.of(s, library.folderOf(s).toString())));
+    library
+        .pictures()
+        .forEach(
+            p ->
+                managed.add(
+                    StudyEntry.of(
+                        p,
+                        Messages.getString("library.picture.unknown"),
+                        Messages.getString("library.picture.provenance"),
+                        Messages.getString("library.picture.kind"))));
     return StudyEntry.merge(managed, studies);
   }
 
@@ -259,6 +268,17 @@ public final class PatientIndexService {
         });
   }
 
+  /**
+   * A kept picture is not DICOM, so the system's picture viewer shows it; the copy is read-only.
+   */
+  private static void openPicture(StudyEntry picture) {
+    try {
+      Desktop.getDesktop().open(new File(picture.containers().getFirst()));
+    } catch (IOException | RuntimeException e) {
+      LOGGER.error("Cannot open a kept picture: {}", e.getClass().getSimpleName());
+    }
+  }
+
   /** Opens a study in the viewer: its files, or the archives that hold it. */
   public static void open(StudyEntry study, DicomModel model) {
     load(study, model, OpeningViewer.ALL_PATIENTS);
@@ -266,6 +286,10 @@ public final class PatientIndexService {
 
   /** Brings a study into the viewer's list, opening viewers as {@code opening} says. */
   public static void load(StudyEntry study, DicomModel model, OpeningViewer opening) {
+    if (study.isLocalPicture()) {
+      openPicture(study);
+      return;
+    }
     Set<File> files = new LinkedHashSet<>();
     for (String c : study.containers()) {
       File f = new File(c);

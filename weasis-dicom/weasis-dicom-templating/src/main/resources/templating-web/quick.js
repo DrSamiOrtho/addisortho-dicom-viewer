@@ -15,7 +15,8 @@
 // (index.html, app.js) is not changed by this page.
 // q6 (1 Nov 2026): a PFNA case (Sami: "template pfna from chunli pfna supplies for ti products and nebula for ss pfna"; then
 // "use the ones from bonesetter and medstrat from other brands to design something what chunli and nebula have"). The nail is
-// a GENERIC outline (build_pfna_generic.py: the makers' sizes and angle, the proximal shape of a DePuy Synthes TFN), said on the
+// a GENERIC outline (build_pfna_generic.py: the makers' sizes and angle, the proximal shape of a DePuy Synthes TFN; the Addis Ortho PFNA
+// from the supplier's own dimensioned drawing since 11 Nov 2026, outlineFrom), said on the
 // Sizes card. The nail goes in at the trochanter tip and turns about it; its blade slides along the nail's blade axis (drag the
 // blade) so its outer end sits at the lateral cortex; three taps on the femoral head give the tip-apex distance on this film
 // (the AP part only: the lateral film's part is not measured here). Design: DESIGN-2026-11-01-pfna.md.
@@ -922,7 +923,17 @@ function bladeHit(ip) {
 // a dragged point can make any circle: only a femoral head (15-40 mm radius) counts (Fable q6 P2)
 const headC = side => { const h = Q.hd && Q.hd[side], c = h && h.length === 3 && mmpp() ? G.circle3(h[0], h[1], h[2]) : null; return c && c.r * mmpp() >= 15 && c.r * mmpp() <= 40 ? c : null; };
 const nailMaker = f => (f.brand === 'Addis Ortho' ? 'the supplier' : f.maker);   // an Addis Ortho nail is called Addis Ortho on screen
-const angleWord = f => (f.angleAssumed ? `angle assumed (${nailMaker(f)} gives none)` : `angle from ${nailMaker(f)}'s catalogue`);
+const angleWord = f => (f.angleAssumed ? `angle assumed (${nailMaker(f)} gives none)` : f.outlineFrom === 'maker-drawing' ? `angle from ${nailMaker(f)}'s drawing, measured to the top part of the nail` : `angle from ${nailMaker(f)}'s catalogue`);
+// 11 Nov 2026: how the outline was made. The Addis Ortho PFNA (outlineFrom 'maker-drawing') is drawn from the dimensions of the supplier's
+// own PFNA drawing; any other nail is the generic outline with the top of a DePuy Synthes TFN (build_pfna_generic.py)
+const tibDatum = z => `Chunli (11 Nov 2026) described this length as starting at the top of the tray, without the insert; its sum of 10 Nov starts at the insert's surface, ${fmm(z.insertMm - 4)} mm higher. Asked; the joint line is kept here: if the tray top is meant, the stem collar and the osteotomy sit ${fmm(z.insertMm - 4)} mm lower than shown.`;   // r50
+const angTxt = it => { const z = sizeRec(it); return Number.isFinite(z.ccdShaftDeg) ? `${z.ccdDeg}° to the nail's top part (${z.ccdShaftDeg}° to the shaft)` : `${z.ccdDeg}°${Q.fam[it.fam].angleAssumed ? ' (assumed)' : ''}`; };
+// Fable P2-3: Quick keeps no outline id in a plan, so a PFNA plan saved before 11 Nov 2026 opens on the new outline without a word.
+// A plan now carries pfnaOutline 2; one without it that holds a nail drawn from the supplier's drawing says so when it opens.
+const OLD_NAIL_WARN = ' This plan was saved before the nail outline was redrawn from the supplier\'s own drawing (11 Nov 2026): the blade now leaves the nail higher and steeper, so check the blade length and the tip-apex distance again, and save the plan again.';
+const oldNailPlan = (o, fam) => o.joint === 'pfna' && o.pfnaOutline !== 2 && (o.films || []).some(pf => (pf.items || []).some(it => fam[it.fam] && fam[it.fam].outlineFrom === 'maker-drawing'));
+const nailFrom = f => (f.outlineFrom === 'maker-drawing' ? `an outline drawn from the dimensions of ${nailMaker(f)}'s own drawing, not traced (sizes from ${nailMaker(f)}'s list; ${angleWord(f)})`
+  : `a generic outline, not ${nailMaker(f)}'s drawing (shape of the top from a DePuy Synthes TFN template; sizes from ${nailMaker(f)}'s list; ${angleWord(f)})`);
 function armHead() { if (!mmpp()) return; Q.tool = 'head'; Q.tmp = []; msg(`The ${SIDE[Q.side]} femoral head (the side button at the top). ${HEAD_STEPS[0]}`); syncUI(); draw(); }
 // the blade on this film against the head: tip, apex, the tip-apex distance (mm), the tip's third of the head, in the head or not
 function pfnaInfo(it) {
@@ -941,7 +952,7 @@ function fitBlade(it) {
   it.blade = keep; return best;
 }
 // a long nail copied to the other side: that side's nail of the same diameter and length, else the nearest diameter that side
-// has at that length (Chunli lists 11 mm long left only and 12 mm right only), said in the message
+// has at that length (Chunli listed 11 mm long left only and 12 mm right only until 9 Nov 2026; both sides since), said in the message
 function sideNail(f, z, to) {
   if (!z || !z.side) return { size: z ? z.size : '' };
   const same = f.sizes.find(q => q.side === to && q.diameterMm === z.diameterMm && q.lengthMm === z.lengthMm); if (same) return { size: same.size };
@@ -953,7 +964,7 @@ const fracWord = s => (Q.joint === 'pfna' && Q.frac ? (s === Q.frac ? 'fracture'
 function pfnaText(it) {
   if (!it || kindOf(it) !== 'nail') return '';
   const b = bladeRec(it), i = pfnaInfo(it), z = sizeRec(it);
-  const head = `Nail ${z.label}, ${z.ccdDeg}°${Q.fam[it.fam].angleAssumed ? ' (assumed)' : ''}${b ? `, blade ${b.lengthMm} mm` : ''}.`;
+  const head = `Nail ${z.label}, ${angTxt(it)}${b ? `, blade ${b.lengthMm} mm` : ''}.`;
   if (!i || !i.apex) return `${head} Tap the femoral head (Add, or Measure) for the tip-apex distance.`;
   if (i.past || !i.inHead) return `${head} The blade tip is outside the head on this film: shorter blade, or move it.`;
   return `${head} Tip-apex on this film ${i.tad.toFixed(0)} mm (aim: the AP and lateral parts together under 25 mm); tip in the ${i.pos} of the head.`;
@@ -975,7 +986,7 @@ function pfnaSheet() {
     <label class="f">Template on</label><div class="choice wrap"><button data-on="frac" aria-pressed="${on === 'frac'}">The fracture side</button><button data-on="other" aria-pressed="${on === 'other'}">The normal side (${SIDE[other(fr)]}), then copy</button><button data-on="both" aria-pressed="${on === 'both'}">Both sides</button></div>
     <p class="note">${on === 'other' ? `Size the nail on the normal ${SIDE[other(fr)]} hip, then Copy ⇄ puts the same nail (a long nail: the ${SIDE[fr]} one of that size, or the nearest ${SIDE[fr]} size the maker lists) and blade on the ${SIDE[fr]} fracture side.` : on === 'both' ? `Template the ${SIDE[fr]} fracture side first; then the ${SIDE[other(fr)]} button at the top and Add, or Copy ⇄.` : `Template the ${SIDE[fr]} fracture side.`}</p>
     <label class="f">Nail</label><select id="c1">${opts('nail', nf.id)}</select>
-    <p class="warn">${esc(nf.label)}: a generic outline, not ${esc(nailMaker(nf))}'s drawing (shape of the top from a DePuy Synthes TFN template; sizes from ${esc(nailMaker(nf))}'s list; ${esc(angleWord(nf))}). Check it against the real nail.</p>
+    <p class="warn">${esc(nf.label)}: ${esc(nailFrom(nf))}. Check it against the real nail.</p>
     ${Q.orientHint && !Q.mirrored ? `<p class="warn">The ${esc(Q.orient)} suggest${/, /.test(Q.orient) ? '' : 's'} this film is mirrored (the patient's right on the image right), if it shows both hips. <button class="go alt" id="setMir">Set the film as mirrored</button></p>` : Q.orient ? `<p class="note">Film: ${esc(Q.orient)}; ${Q.mirrored ? 'set as mirrored' : 'standard (the patient\'s right on the image left)'}.</p>` : ''}
     ${Q.cal && Q.cal.method === 'ct' ? '<p class="note">Scale: the CT scanner\'s, from the scout\'s header (no ball).</p>' : ballField('sBallD')}
     <p class="note">A long nail needs a film of the whole femur, calibrated by its ball.</p>
@@ -1013,7 +1024,7 @@ function pfnaRows(sides, per, rows, systems, ready, warn) {
   if (Q.frac) rows.unshift(['Side', sides.map(s => (s === Q.frac ? 'fracture' : 'normal'))]);
   if (Q.frac && !(per[Q.frac] && per[Q.frac].nail)) warn.push(`No nail on the fracture side (${SIDE[Q.frac]}) yet: Copy ⇄ puts the normal side's nail and blade there.`);
   if (Q.frac && per.R && per.L && per.R.nail && per.L.nail && (per.R.nail.size.replace(/[RL]$/, '') !== per.L.nail.size.replace(/[RL]$/, '') || per.R.nail.blade !== per.L.nail.blade)) warn.push(`The two sides differ: the plan is the fracture side's (${SIDE[Q.frac]}).`);
-  rows.push(['Angle', its.map(it => (it ? `${sizeRec(it).ccdDeg}°${Q.fam[it.fam].angleAssumed ? ' (assumed)' : ''}` : '-'))]);
+  rows.push(['Angle', its.map(it => (it ? angTxt(it) : '-'))]);
   rows.push(['Blade', its.map(it => (it && bladeRec(it) ? `${bladeRec(it).lengthMm} mm` : '-'))]);
   const info = its.map(it => (it ? pfnaInfo(it) : null));
   if (info.some(i => i && i.apex)) {
@@ -1036,7 +1047,7 @@ function pfnaRows(sides, per, rows, systems, ready, warn) {
   }
   for (const id of [...new Set(its.filter(Boolean).map(it => (bladeFamOf(it) || {}).id).filter(Boolean))]) systems.push(`Blade: ${Q.fam[id].label}`);
   const fams = [...new Set(its.filter(Boolean).map(it => Q.fam[it.fam]))];
-  for (const f of fams) if (f.verified === false) warn.push(`${f.label}: generic outline, not ${nailMaker(f)}'s drawing (the top's shape from a DePuy Synthes TFN template; sizes from ${nailMaker(f)}'s list; ${angleWord(f)}). Check it against the real nail; measure the canal with the Length tool.`);
+  for (const f of fams) if (f.verified === false) warn.push(`${f.label}: ${nailFrom(f)}. Check it against the real nail; measure the canal with the Length tool.`);
   warn.push('Tip-apex distance: this film\'s part only. The full TAD adds the lateral film\'s part.');
 }
 
@@ -1270,12 +1281,12 @@ function tumRowsQ() {
     }
     const s = stemRec(it); R.push(['Stem', s ? `${stemWord(s)}: ${fmm(s.diameterMm)} mm, ${fmm((s.drawnLengthMm || 0) - (L.c || 0))} mm beyond its collar as drawn; check the canal with the Length tool` : 'not chosen: choose the universal stem', s ? '' : 'warn']);
     if (f.humHeads) R.push(['Head', it.head ? `${it.head} mm humeral head (which fits the tumour upper end is not confirmed by Chunli)` : 'not chosen', 'warn']);
-    if (z.lengthRule) R.push(['Taper junctions', `Chunli's rule (Kevin, 4 Nov 2026): the marked lengths minus ${fmm(z.lengthRule.perJunctionMm)} mm ${z.junctions > 1 ? `at each of its ${z.junctions} junctions` : 'at its one junction'}, from the top of the upper end; Chunli's joined gap of ${z.junctionGapMm} mm differs by about 0.3 mm a junction, so the stack can sit up to about ${fmm(z.junctions * 0.3)} mm longer or shorter; check with the trial`, 'warn']);   // r46: the PHR
-    else if (Number.isFinite(z.junctionGapMm)) R.push(['Taper junctions', `${z.junctions} junction${z.junctions > 1 ? 's' : ''} taken as ${z.junctionGapMm} mm open each after impaction${f.tumour === 'phr' ? " (Chunli's Ø24 figure, taken for this Ø22 system: not confirmed)" : ' (Chunli)'}: the stack can sit up to about ${fmm(z.junctions * 0.25)} mm longer or shorter; check with the trial`, 'warn']);
+    if (z.lengthRule) R.push(['Taper junctions', `Chunli's rule (Kevin, 4 Nov 2026): the marked lengths minus ${fmm(z.lengthRule.perJunctionMm)} mm ${z.junctions > 1 ? `at each of its ${z.junctions} junctions` : 'at its one junction'}, from the top of the upper end; the ${z.junctionGapMm} mm gap left at a joined taper is already inside this length, and the upper end's ${fmm(z.lengthRule.markedMm[0])} mm includes its 5 mm foot (Kevin, 11 Nov 2026); theoretical values, check with the trial`, 'warn']);   // r46: the PHR
+    else if (Number.isFinite(z.junctionGapMm)) R.push(['Taper junctions', `${z.insertMm && z.junctionGapMm >= 2.5 ? tibDatum(z) + ' ' : ''}${z.junctions} junction${z.junctions > 1 ? 's' : ''} taken as ${z.junctionGapMm} mm open each after impaction${f.tumour === 'phr' ? " (Chunli's Ø24 figure, taken for this Ø22 system: not confirmed)" : z.junctionGapMm >= 2.5 ? ` (Chunli, 10 Nov 2026${z.insertMm ? (z.extensionMm ? ", his figure for the tray's taper, and on 11 Nov 2026 the same between the extension and the stem" : '') : ", his figure for the tibial tray's taper, taken for the same Ø24 taper here"}: a theoretical value, actual parts have tolerances; he earlier said about 2 to 2.5 mm)` : ' (Chunli)'}: the stack can sit up to about ${z.junctionGapMm >= 2.5 ? `${fmm(z.junctions * 0.5)} mm shorter` : `${fmm(z.junctions * 0.25)} mm longer or shorter`}; check with the trial`, 'warn']);
     for (const a of f.assumptions || []) R.push(['Assumed (not confirmed by Chunli)', a, 'warn']);
   }
   const pt = Q.items.find(it => it.role === 'partner'), bd = tumBodies().find(it => !isGtBody(Q.fam[it.fam]));
-  if (pt) { const n1 = parseInt(pt.size, 10), n2 = bd ? parseInt(bd.size, 10) : n1; R.push([partName(pt), `${Q.fam[pt.fam].label}, ${sizeRec(pt).label || pt.size}${bd && n1 !== n2 ? ': a different size number from the body; Chunli lists them in pairs, check with Chunli' : ''}`, bd && n1 !== n2 ? 'warn' : '']); }
+  if (pt) { const n1 = parseInt(pt.size, 10), n2 = bd ? parseInt(bd.size, 10) : n1; R.push([partName(pt), `${Q.fam[pt.fam].label}, ${sizeRec(pt).label || pt.size}${bd && n1 !== n2 ? (bd.fam === 'chunli-ptr-tibia' ? ": not the pair in Chunli's order table (each femoral size has its own tray; Kevin, 10 Nov 2026): check with Chunli" : ': a different size number from the body; Chunli lists them in pairs, check with Chunli') : ''}`, bd && n1 !== n2 ? 'warn' : '']); }
   if (t.set === 'tf') {
     const P = tumBodies().find(it => roleOf(it) === 'p'), Dd = tumBodies().find(it => roleOf(it) === 'd'), LP = P && tumLevels(P, 'p'), LD = Dd && tumLevels(Dd, 'd');
     // as the full planner (llTfRows, Fable q5 P1): the body outlines only, never a stem or a collar (no stem enters bone at the
@@ -1557,7 +1568,7 @@ function syncSaveUI() {
 }
 function planFileOf(c) {   // the plan file's object: the content, each film's view and levels, the shared revision and the time
   const live = Q.films.filter(hasContent);
-  return { format: PLAN_FORMAT, v: PLAN_VERSION, shared: SHARED_REV, savedAt: new Date().toISOString(), ...c,
+  return { format: PLAN_FORMAT, v: PLAN_VERSION, shared: SHARED_REV, savedAt: new Date().toISOString(), ...(Q.joint === 'pfna' ? { pfnaOutline: 2 } : {}), ...c,
     films: c.films.map((fd, i) => ({ ...fd, view: live[i].view, lv: live[i].wl ? { c: live[i].wl.c, w: live[i].wl.w, inv: !!live[i].invertView } : null })) };
 }
 // My cases (r44g; Sami, 7 Nov 2026: "saving the case as data base locally in the surgeons computer for his cases"): Save keeps the
@@ -1597,7 +1608,7 @@ async function openCase(id) {
     }
     const ok = applyPlan(g.rec.plan, false);
     Q.pt = { ...(g.rec.patient || {}) }; Q.leaveOut = false; Q.caseId = id;
-    if (ok) msg(`Case opened${patientLine(Q.pt) ? `: ${patientLine(Q.pt)}` : ''}.`);
+    if (ok) msg(`Case opened${patientLine(Q.pt) ? `: ${patientLine(Q.pt)}` : ''}.${oldNailPlan(g.rec.plan, Q.fam) ? OLD_NAIL_WARN : ''}`);   // Fable recheck R1
   } catch (e) { $('open').hidden = !!Q.img; msg(`The case could not be opened: ${(e && e.message) || e}`); $('openErr').textContent = `The case could not be opened: ${(e && e.message) || e}`; }
   finally { Q.loading = false; syncUI(); draw(); }
 }
@@ -1652,7 +1663,7 @@ function applyPlan(o, draft) {
   if (draft) { Q.savedFp = ''; draftMine = true; } else Q.savedFp = fingerprint();   // a draft, even the copy kept at Save, reads "Not saved": the file may never have been kept (Fable, PR 7)   // a draft was never saved: it stays "Not saved"
   syncUI(); draw();
   const miss = o.films.length - hits.length;
-  msg(`${draft ? (o.saved ? 'The copy kept at Save restored from this phone; Save again if the file is not in your Downloads' : 'Unsaved plan restored from this phone; Save it to keep it') : 'Plan opened'}${dropped ? `; ${dropped} implant${dropped > 1 ? 's' : ''} left out (not in the ranges open to your account)` : ''}${miss ? `; ${miss} film${miss > 1 ? 's' : ''} in it did not match an open film${draft ? ' (open the other films to get them back too)' : ' and ' + (miss > 1 ? 'were' : 'was') + ' not loaded'}` : ''}. Check every implant on the X-ray.`);
+  msg(`${draft ? (o.saved ? 'The copy kept at Save restored from this phone; Save again if the file is not in your Downloads' : 'Unsaved plan restored from this phone; Save it to keep it') : 'Plan opened'}${dropped ? `; ${dropped} implant${dropped > 1 ? 's' : ''} left out (not in the ranges open to your account)` : ''}${miss ? `; ${miss} film${miss > 1 ? 's' : ''} in it did not match an open film${draft ? ' (open the other films to get them back too)' : ' and ' + (miss > 1 ? 'were' : 'was') + ' not loaded'}` : ''}. Check every implant on the X-ray.${oldNailPlan(o, Q.fam) ? OLD_NAIL_WARN : ''}`);
   return true;
 }
 

@@ -132,7 +132,7 @@ public class RsQueryResult extends AbstractQueryResult {
           applyAllFilters(studies);
         }
       } catch (Exception e) {
-        LOGGER.error("QIDO-RS with PatientID {}", patientID, e);
+        LOGGER.error("QIDO-RS by patient failed: {}", e.getClass().getSimpleName());
       }
     }
   }
@@ -552,7 +552,7 @@ public class RsQueryResult extends AbstractQueryResult {
       }
 
       model.addHierarchyNode(MediaSeriesGroupNode.rootNode, patient);
-      LOGGER.info("Adding new patient: {}", patient);
+      LOGGER.info("Adding a new patient");
     }
     return patient;
   }

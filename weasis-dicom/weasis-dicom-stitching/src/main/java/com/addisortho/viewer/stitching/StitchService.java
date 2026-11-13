@@ -13,9 +13,11 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 import javax.swing.SwingUtilities;
 import org.dcm4che3.data.Attributes;
@@ -84,7 +86,69 @@ final class StitchService {
         out.add(new Candidate(p, notes(p), fileName(image.getMediaReader().getUri())));
       }
     }
+    List<String> odd = orientationNotes(out.stream().map(c -> c.piece().header).toList());
+    for (int i = 0; i < out.size(); i++) {
+      if (odd.get(i) != null) {
+        Candidate c = out.get(i);
+        List<String> notes = new ArrayList<>(c.notes());
+        notes.add(0, odd.get(i));
+        out.set(i, new Candidate(c.piece(), notes, c.fileName()));
+      }
+    }
     return new Study(model, out, excluded);
+  }
+
+  /**
+   * For each image, a warning when its patient orientation or view position is not the one most of
+   * the others carry, else null: a piece stored mirrored or upside down, or a PA film among AP
+   * ones, was lined up and saved without a word (review of 11 Nov 2026; design section 3 promises
+   * the flag). A warning only: the study may hold other films than the long-leg pieces.
+   */
+  static List<String> orientationNotes(List<Attributes> headers) {
+    List<String> out = new ArrayList<>();
+    String usualWay = usual(headers, Tag.PatientOrientation);
+    String usualView = usual(headers, Tag.ViewPosition);
+    for (Attributes h : headers) {
+      String way = joined(h, Tag.PatientOrientation);
+      String view = joined(h, Tag.ViewPosition);
+      List<String> odd = new ArrayList<>();
+      if (!way.isEmpty() && usualWay != null && !way.equals(usualWay)) {
+        odd.add(
+            "patient orientation %s where most of the others have %s: this image may be stored"
+                    .formatted(way, usualWay)
+                + " mirrored or upside down");
+      }
+      if (!view.isEmpty() && usualView != null && !view.equals(usualView)) {
+        odd.add("view position %s where most of the others have %s".formatted(view, usualView));
+      }
+      out.add(odd.isEmpty() ? null : String.join("; ", odd) + ": check it before lining up");
+    }
+    return out;
+  }
+
+  // the value most of the images carry, when at least two carry one; ties go to the first seen
+  private static String usual(List<Attributes> headers, int tag) {
+    java.util.Map<String, Integer> count = new java.util.LinkedHashMap<>();
+    for (Attributes h : headers) {
+      String v = joined(h, tag);
+      if (!v.isEmpty()) {
+        count.merge(v, 1, Integer::sum);
+      }
+    }
+    String best = null;
+    int total = 0;
+    for (var e : count.entrySet()) {
+      total += e.getValue();
+      if (best == null || e.getValue() > count.get(best)) {
+        best = e.getKey();
+      }
+    }
+    return total >= 2 ? best : null;
+  }
+
+  private static String joined(Attributes h, int tag) {
+    String[] v = h.getStrings(tag);
+    return v == null ? "" : String.join("\\", v).trim().toUpperCase(Locale.ROOT);
   }
 
   /**
@@ -174,9 +238,18 @@ final class StitchService {
     }
   }
 
-  /** Saves the stitch for good in the study library of this computer. */
-  static StudyStore.SavedDerived save(Stitch s, Compositor.Progress progress) throws IOException {
-    return save(StudyLibrary.getInstance().store(), s, progress);
+  /**
+   * Saves the stitch for good in the study library of this computer and, where {@code projects} are
+   * kept, as an editable version.
+   */
+  static Saved save(
+      StitchProjects projects,
+      Stitch s,
+      List<SeamRecipe> recipes,
+      StitchResume.Lineage lineage,
+      Compositor.Progress progress)
+      throws IOException {
+    return save(StudyLibrary.getInstance().store(), projects, s, recipes, lineage, progress);
   }
 
   /**
@@ -186,6 +259,93 @@ final class StitchService {
   static StudyStore.SavedDerived save(StudyStore store, Stitch s, Compositor.Progress progress)
       throws IOException {
     return store.saveDerived(file -> writeComplete(s, file, progress));
+  }
+
+  /**
+   * Where editable stitch projects are kept: the study library of this computer, beside the
+   * pictures ({@link LibraryProjectStore}). Empty would switch editing off: the window then saves
+   * the picture only and offers no Edit stitch.
+   */
+  static Optional<ProjectStore> projectStore() {
+    return Optional.of(new LibraryProjectStore(() -> StudyLibrary.getInstance().store()));
+  }
+
+  /**
+   * What one save left: the picture, and the editable version saved with it.
+   *
+   * @param version null when no projects are kept, or when the version is not kept
+   * @param versionProblem what went wrong saving the version although the picture was saved, else
+   *     null. With {@code version} null it was not kept; with a version it is kept and can be
+   *     edited, but the store failed after writing it
+   */
+  record Saved(StudyStore.SavedDerived picture, StitchProject version, String versionProblem) {}
+
+  /**
+   * Saves the picture, then the stitch as a new version of its project so it can be edited later.
+   * Neither replaces anything saved before.
+   *
+   * <p>Everything that can be known beforehand is checked before a byte is written: a failed seam
+   * goes out only as an unverified draft, and where versions are kept the version must be one the
+   * project format accepts, under a parent that is saved. A stitch refused here leaves no picture.
+   * The two stores cannot be written as one, though: when the picture is written and the project
+   * store then fails, the picture stands on its own, as every stitch did before projects, and
+   * {@link Saved#versionProblem} says why it cannot be edited later.
+   *
+   * @param projects null to save the picture only
+   * @param recipes how each seam of {@code s} was set
+   * @throws IOException when nothing was saved
+   */
+  static Saved save(
+      StudyStore store,
+      StitchProjects projects,
+      Stitch s,
+      List<SeamRecipe> recipes,
+      StitchResume.Lineage lineage,
+      Compositor.Progress progress)
+      throws IOException {
+    if (s.anyFailed() && !s.unverified) {
+      throw new IOException(
+          "%s failed, so the stitch can only be saved as an unverified draft"
+              .formatted(s.failedSeams()));
+    }
+    if (!s.cutsInOrder()) {
+      // not even as a draft: the piece between two crossed cuts would be left out of the picture
+      throw new IOException(
+          "the cuts of two neighbouring seams cross, so a piece would be left out of the picture:"
+              + " drag the seam lines in the preview so that they follow each other down the leg");
+    }
+    StitchProject planned = null;
+    if (projects != null) {
+      planned =
+          StitchResume.capture(
+              s,
+              recipes,
+              lineage,
+              Instant.now(),
+              StitchProject.Output.PENDING,
+              StitchProject.Output.PENDING);
+      planned.check();
+      projects.checkLineage(planned);
+    }
+    StudyStore.SavedDerived picture = save(store, s, progress);
+    if (planned == null) {
+      return new Saved(picture, null, null);
+    }
+    StitchProject version = null;
+    try {
+      version = planned.withOutput(picture.instance().sopUid(), picture.instance().seriesUid());
+      projects.save(version);
+      return new Saved(picture, version, null);
+    } catch (IOException | RuntimeException e) {
+      // A store can fail after the version is whole; then it is kept, and is said to be.
+      boolean kept = version != null && projects.kept(version);
+      // Its message can hold a path: for the user, not for the log.
+      LOGGER.error(
+          "The stitch project was not saved cleanly (kept: {}): {}",
+          kept,
+          e.getClass().getSimpleName());
+      return new Saved(picture, kept ? version : null, String.valueOf(e.getMessage()));
+    }
   }
 
   private static void writeComplete(Stitch s, Path file, Compositor.Progress progress)
