@@ -42,7 +42,11 @@ import org.weasis.dicom.explorer.index.IndexStore;
 public final class StudyCatalog {
   private static final Logger LOGGER = LoggerFactory.getLogger(StudyCatalog.class);
   private static final String HEADER = "AO-STUDY-CATALOG\t1"; // NON-NLS
-  private static final int FIELDS = 16;
+  private static final int FIELDS = 17;
+
+  /** Rows written before the count of objects that are not images. */
+  private static final int FIELDS_BEFORE_OTHERS = 16;
+
   private static final String LIST_SEPARATOR = "\\";
 
   private final Path file;
@@ -77,9 +81,14 @@ public final class StudyCatalog {
       String line;
       while ((line = r.readLine()) != null) {
         String[] p = line.split("\t", -1);
-        if (p.length == FIELDS) {
+        if (p.length == FIELDS || p.length == FIELDS_BEFORE_OTHERS) {
           CatalogStudy row = parse(p);
-          byUid.put(row.studyUid(), row);
+          boolean uncounted =
+              p.length == FIELDS_BEFORE_OTHERS
+                  && row.modalities().stream().anyMatch(CatalogStudy.NOT_IMAGES::contains);
+          if (!uncounted) { // an older row holding marks is rebuilt from its files
+            byUid.put(row.studyUid(), row);
+          }
         }
       }
     } catch (IOException | RuntimeException e) {
@@ -105,7 +114,8 @@ public final class StudyCatalog {
         list(p[12]),
         Integer.parseInt(p[13]),
         Long.parseLong(p[14]),
-        Long.parseLong(p[15]));
+        Long.parseLong(p[15]),
+        p.length > FIELDS_BEFORE_OTHERS ? Integer.parseInt(p[16]) : 0);
   }
 
   private static String text(String field) {
@@ -160,7 +170,8 @@ public final class StudyCatalog {
         IndexStore.escape(String.join("|", s.series())),
         Integer.toString(s.imageCount()),
         Long.toString(s.firstStored()),
-        Long.toString(s.lastStored()));
+        Long.toString(s.lastStored()),
+        Integer.toString(s.otherCount()));
   }
 
   /** Adds one image that is already durable in {@code folder}. */
@@ -188,6 +199,7 @@ public final class StudyCatalog {
       modalities.add(modality);
     }
     series.add(d.getString(Tag.SeriesInstanceUID));
+    int other = modality != null && CatalogStudy.NOT_IMAGES.contains(modality) ? 1 : 0;
     if (row != null) {
       String date = row.imageDate() != null ? row.imageDate() : imageDate(d);
       return new CatalogStudy(
@@ -206,7 +218,8 @@ public final class StudyCatalog {
           series,
           row.imageCount() + 1,
           row.firstStored(),
-          Math.max(row.lastStored(), now));
+          Math.max(row.lastStored(), now),
+          row.otherCount() + other);
     }
     return new CatalogStudy(
         d.getString(Tag.StudyInstanceUID),
@@ -224,7 +237,8 @@ public final class StudyCatalog {
         series,
         1,
         now,
-        now);
+        now,
+        other);
   }
 
   private static String imageDate(Attributes d) {

@@ -69,7 +69,9 @@ public record StudyEntry(
     Set<String> containers = new TreeSet<>();
     Set<String> places = new TreeSet<>();
     for (IndexedFile f : files) {
-      sops.add(f.sopUid() == null || f.sopUid().isBlank() ? f.location() : f.sopUid());
+      if (!CatalogStudy.NOT_IMAGES.contains(f.modality())) {
+        sops.add(f.sopUid() == null || f.sopUid().isBlank() ? f.location() : f.sopUid());
+      }
       if (f.seriesUid() != null) {
         series.add(f.seriesUid());
       }
@@ -114,7 +116,7 @@ public record StudyEntry(
         s.accession(),
         String.join("/", s.modalities()),
         s.series().size(),
-        s.imageCount(),
+        s.pictureCount(),
         List.of(folder),
         List.of(folder),
         false);

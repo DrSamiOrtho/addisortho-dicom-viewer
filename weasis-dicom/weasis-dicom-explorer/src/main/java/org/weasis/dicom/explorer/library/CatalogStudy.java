@@ -19,6 +19,7 @@ import java.util.Set;
  * @param imageDate the image's date as labelled by the naming policy, or null when unknown
  * @param firstStored when the study first reached this computer, ms; never the image's date
  * @param lastStored when the latest image of it did, ms
+ * @param otherCount how many of {@code imageCount} are not images (marks, key objects, reports)
  */
 public record CatalogStudy(
     String studyUid,
@@ -36,4 +37,14 @@ public record CatalogStudy(
     Set<String> series,
     int imageCount,
     long firstStored,
-    long lastStored) {}
+    long lastStored,
+    int otherCount) {
+
+  /** Modalities of objects that are kept with a study but are not pictures of the patient. */
+  public static final java.util.Set<String> NOT_IMAGES = java.util.Set.of("PR", "KO", "SR");
+
+  /** The pictures alone, for the Studies list. */
+  public int pictureCount() {
+    return Math.max(0, imageCount - otherCount);
+  }
+}

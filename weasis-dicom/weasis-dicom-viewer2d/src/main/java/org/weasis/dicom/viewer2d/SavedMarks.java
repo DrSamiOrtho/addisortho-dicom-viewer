@@ -18,6 +18,7 @@ import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -27,6 +28,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
@@ -58,6 +60,7 @@ import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.library.StudyLibrary;
+import org.weasis.dicom.explorer.library.StudyStore;
 import org.weasis.dicom.explorer.pr.DicomPrSerializer;
 import org.weasis.dicom.explorer.pr.PrGraphicUtil;
 
@@ -132,6 +135,7 @@ public final class SavedMarks {
     }
     Optional<PRSpecialElement> pr = newest(DicomModel.getPrSpecialElements(series, img));
     if (pr.isEmpty()) {
+      fetchFromLibrary(series, img);
       return;
     }
     Attributes dcm = pr.get().getMediaReader().getDicomObject();
@@ -156,6 +160,59 @@ public final class SavedMarks {
     }
     restoredGraphics.put(img, added);
     view.getJComponent().repaint();
+  }
+
+  /** Studies already looked up in the library in this session. */
+  private static final Set<String> lookedUp = ConcurrentHashMap.newKeySet();
+
+  /**
+   * When a study was opened from somewhere else (a CD, Downloads), loads the marks this viewer
+   * saved for it in the study library, once per study and session. They then come back like marks
+   * opened with the study. Objects already in the viewer are skipped by the loader.
+   */
+  static void fetchFromLibrary(MediaSeries<DicomImageElement> series, DicomImageElement img) {
+    String study = TagD.getTagValue(img, Tag.StudyInstanceUID, String.class);
+    if (study == null
+        || !(series.getTagValue(TagW.ExplorerModel) instanceof DicomModel model)
+        || !lookedUp.add(study)) {
+      return;
+    }
+    Thread.ofVirtual()
+        .name("saved-marks-lookup") // NON-NLS
+        .start(
+            () -> {
+              List<File> found = marksInLibrary(study);
+              if (!found.isEmpty()) {
+                DicomModel.LOADING_EXECUTOR.execute(
+                    new LoadLocalDicom(
+                        found.toArray(File[]::new), false, model, OpeningViewer.NONE));
+              }
+            });
+  }
+
+  private static List<File> marksInLibrary(String study) {
+    List<File> found = new ArrayList<>();
+    try {
+      StudyLibrary library = StudyLibrary.getInstance();
+      for (var row : library.studies()) {
+        if (!study.equals(row.studyUid()) || !row.modalities().contains("PR")) { // NON-NLS
+          continue;
+        }
+        try (var files = Files.list(library.folderOf(row))) {
+          for (Path f : files.filter(Files::isRegularFile).toList()) {
+            Attributes header = StudyStore.readHeader(f);
+            if (header != null
+                && "PR".equals(header.getString(Tag.Modality)) // NON-NLS
+                && isOurs(header)) {
+              found.add(f.toFile());
+            }
+          }
+        }
+      }
+    } catch (IOException | RuntimeException e) {
+      LOGGER.warn("Saved marks could not be looked up in the study library", e);
+    }
+    return found;
   }
 
   /** The outcome of one save, for the message to the user. */

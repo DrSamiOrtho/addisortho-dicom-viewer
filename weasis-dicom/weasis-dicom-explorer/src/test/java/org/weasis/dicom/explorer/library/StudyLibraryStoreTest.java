@@ -730,6 +730,71 @@ class StudyLibraryStoreTest {
     assertEquals("7.7", StudyStore.readHeader(saved.file()).getString(Tag.SOPInstanceUID));
   }
 
+  private static Attributes marks(String sop) {
+    Attributes a = image(sop, "00123", (byte) 0);
+    a.setString(Tag.Modality, VR.CS, "PR");
+    a.setString(Tag.SOPClassUID, VR.UI, UID.GrayscaleSoftcopyPresentationStateStorage);
+    a.setString(Tag.SeriesInstanceUID, VR.UI, "9.9");
+    a.remove(Tag.PixelData);
+    return a;
+  }
+
+  @Test
+  void savedMarksAreKeptButNotCountedAsPictures() throws IOException {
+    commit(image("1.1", "00123", (byte) 1), "1.2.3");
+    commit(marks("1.2"), "1.2.3");
+
+    CatalogStudy row = catalog.studies().getFirst();
+    assertEquals(2, row.imageCount());
+    assertEquals(1, row.otherCount());
+    assertEquals(1, row.pictureCount());
+
+    catalog.save();
+    open();
+    assertEquals(1, catalog.studies().getFirst().pictureCount());
+  }
+
+  @Test
+  void aCatalogWrittenBeforeTheOtherCountStillLoads() throws IOException {
+    commit(image("1.1", "00123", (byte) 1), "1.2.3");
+    catalog.save();
+    Path file = root.resolve(".catalog/studies.tsv");
+    List<String> lines = Files.readAllLines(file);
+    List<String> old = new java.util.ArrayList<>();
+    old.add(lines.getFirst());
+    for (String line : lines.subList(1, lines.size())) {
+      old.add(
+          line.substring(0, line.lastIndexOf('\t'))); // the row as the previous version wrote it
+    }
+    Files.write(file, old);
+
+    open();
+
+    CatalogStudy row = catalog.studies().getFirst();
+    assertEquals(1, row.imageCount());
+    assertEquals(0, row.otherCount());
+  }
+
+  @Test
+  void anOlderRowHoldingMarksIsRecountedFromItsFiles() throws IOException {
+    commit(image("1.1", "00123", (byte) 1), "1.2.3");
+    commit(marks("1.2"), "1.2.3");
+    catalog.save();
+    Path file = root.resolve(".catalog/studies.tsv");
+    List<String> lines = Files.readAllLines(file);
+    List<String> old = new java.util.ArrayList<>();
+    old.add(lines.getFirst());
+    for (String line : lines.subList(1, lines.size())) {
+      old.add(line.substring(0, line.lastIndexOf('\t')));
+    }
+    Files.write(file, old);
+
+    open();
+    catalog.reconcile(root); // as the library does in the background at start
+
+    assertEquals(1, catalog.studies().getFirst().pictureCount());
+  }
+
   @Test
   void theSameDerivedObjectSavedTwiceIsKeptOnce() throws IOException {
     StudyStore.SavedDerived first = store.saveDerived(this::derived);

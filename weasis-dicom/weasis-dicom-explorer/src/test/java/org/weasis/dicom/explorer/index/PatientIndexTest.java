@@ -201,6 +201,34 @@ class PatientIndexTest {
     assertTrue(again.files().stream().anyMatch(f -> "MARK".equals(f.modality())));
   }
 
+  private static IndexedFile file(String sop, String modality) {
+    return new IndexedFile(
+        "/a/" + sop + ".dcm",
+        1,
+        1,
+        "S",
+        "SE",
+        sop,
+        modality,
+        "N",
+        "I",
+        null,
+        null,
+        "20260101",
+        null,
+        null);
+  }
+
+  @Test
+  void savedMarksAreListedButNotCountedAsPictures() {
+    StudyEntry s =
+        StudyEntry.of(List.of(file("SOP1", "DX"), file("SOP2", "PR"), file("SOP3", "PR")), false)
+            .getFirst();
+
+    assertEquals(1, s.imageCount());
+    assertEquals("DX/PR", s.modalities());
+  }
+
   @Test
   void theSameImageInTwoPlacesCountsOnce() {
     IndexedFile a =
