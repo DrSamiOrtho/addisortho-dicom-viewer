@@ -700,6 +700,7 @@ public class View2d extends DefaultView2d<DicomImageElement> {
       updateSegmentation(img);
       updatePrButtonState(img);
       updateKOSelectedState(img);
+      SavedMarks.restore(this, series);
     }
   }
 
@@ -728,6 +729,7 @@ public class View2d extends DefaultView2d<DicomImageElement> {
     DicomImageElement img = imageLayer.getSourceImage();
     if (img != null) {
       updatePrButtonState(img);
+      SavedMarks.restore(this, series);
     }
   }
 
@@ -880,6 +882,7 @@ public class View2d extends DefaultView2d<DicomImageElement> {
       g2d.translate(-p.getX(), -p.getY());
     }
     drawLoadingMessages(g2d);
+    SavedMarks.paintHiddenNote(this, g2d);
   }
 
   /** Paints the pending background builds, stacked at the bottom of the view. */

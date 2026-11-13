@@ -147,7 +147,11 @@ public class PRManager {
       return null;
     }
 
-    List<PRSpecialElement> prList = DicomModel.getPrSpecialElements(series, img);
+    // This viewer's own marks come back as drawings (SavedMarks), not as a presentation to apply
+    List<PRSpecialElement> prList =
+        DicomModel.getPrSpecialElements(series, img).stream()
+            .filter(pr -> !SavedMarks.isOurs(pr))
+            .toList();
     if (prList.isEmpty()) {
       return null;
     }

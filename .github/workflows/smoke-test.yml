@@ -691,6 +691,75 @@ jobs:
           }
           exit 0
 
+      - name: Studies at 1366 x 768 with 100, 125 and 150 % scaling
+        shell: pwsh
+        run: |
+          . "$env:RUNNER_TEMP\lib.ps1"
+          # A hosted runner cannot change the Windows display scale without signing out, so each launch sets
+          # Java's own UI scale, which is what sizes the viewer's Swing screens. The screen is set to 1366 x 768.
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public class Display {
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+            public struct DEVMODE {
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+              public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra; public int dmFields;
+              public int dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+              public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+              public short dmLogPixels; public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+              public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+            }
+            [DllImport("user32.dll")] static extern bool EnumDisplaySettings(string d, int m, ref DEVMODE dm);
+            [DllImport("user32.dll")] static extern int ChangeDisplaySettings(ref DEVMODE dm, int f);
+            public static int Set(int w, int h) {
+              DEVMODE dm = new DEVMODE(); dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+              EnumDisplaySettings(null, -1, ref dm);
+              dm.dmPelsWidth = w; dm.dmPelsHeight = h; dm.dmFields = 0x80000 | 0x100000;
+              return ChangeDisplaySettings(ref dm, 0);
+            }
+          }
+          "@
+          $rc = [Display]::Set(1366, 768)
+          Start-Sleep -Seconds 2
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          "ChangeDisplaySettings returned $rc; screen is now $($b.Width) x $($b.Height)"
+          if ($b.Width -eq 1366 -and $b.Height -eq 768) { Res PASS screen-1366x768 "$($b.Width) x $($b.Height)" } else { Res FAIL screen-1366x768 "could not set 1366 x 768 (rc $rc), screen is $($b.Width) x $($b.Height)" }
+
+          # Two public sample studies in a saved Studies folder; files must be older than 10 s to be indexed.
+          $home2 = $env:USERPROFILE
+          $folder = Join-Path $home2 'Desktop\ao-smoke-studies'
+          New-Item -ItemType Directory -Force $folder | Out-Null
+          Copy-Item "$env:EXTRA_DIR\CT_small.dcm", "$env:EXTRA_DIR\MR_small.dcm" $folder
+          $idx = Join-Path $home2 '.weasis\data\patient-search'
+          New-Item -ItemType Directory -Force $idx | Out-Null
+          $json = '{"folders": [' + (ConvertTo-Json $folder) + ']}'
+          Set-Content -Path (Join-Path $idx 'search-folders.json') -Value $json -Encoding utf8
+          Start-Sleep -Seconds 12
+
+          $exe = 'C:\Program Files\Addis Ortho Viewer\Addis Ortho Viewer.exe'
+          foreach ($scale in @('1.0', '1.25', '1.5')) {
+            Get-Process | Where-Object { $_.Path -like 'C:\Program Files\Addis*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+            $env:JAVA_TOOL_OPTIONS = "-Dsun.java2d.uiScale.enabled=true -Dsun.java2d.uiScale=$scale"
+            $p = Start-Process -FilePath $exe -PassThru
+            $main = $null
+            for ($i = 0; $i -lt 150 -and -not $main; $i++) {
+              $main = Get-Wins | Where-Object { $_ -match 'title=Addis Ortho DICOM Viewer' } | Select-Object -First 1
+              if (-not $main) { Start-Sleep -Seconds 1 }
+            }
+            Start-Sleep -Seconds 25
+            "--- scale $scale"; Get-Wins | Where-Object { $_ -match 'Addis' }
+            $pct = [int]([double]$scale * 100)
+            if ($main) { Res PASS "studies-window-$pct" $main } else { Res FAIL "studies-window-$pct" "no main window" }
+            Shot "win-studies-1366x768-$pct"
+          }
+          Remove-Item Env:JAVA_TOOL_OPTIONS -ErrorAction SilentlyContinue
+          Get-Process | Where-Object { $_.Path -like 'C:\Program Files\Addis*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+          exit 0
+
       - name: Print the Weasis logs
         if: always()
         shell: pwsh

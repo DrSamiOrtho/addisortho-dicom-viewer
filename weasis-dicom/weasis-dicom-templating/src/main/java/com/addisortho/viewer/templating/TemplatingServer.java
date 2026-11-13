@@ -87,6 +87,17 @@ public final class TemplatingServer implements Closeable {
     void accept(Handover handover, Handover.Plan plan);
   }
 
+  /** Keeps a saved plan for good, before the page is told it is stored. */
+  @FunctionalInterface
+  public interface PlanKeeper {
+    /**
+     * @param plan the plan as received, in the work folder, which is emptied on quit
+     * @return where the plan is kept
+     * @throws IOException when it is not kept: the page is told so
+     */
+    Path keep(Path plan) throws IOException;
+  }
+
   private final HttpServer server;
   private final ExecutorService executor;
   private final int port;
@@ -95,20 +106,33 @@ public final class TemplatingServer implements Closeable {
   private final PageFiles pages;
   private final Path workDir;
   private final PlanSink sink;
+  private final PlanKeeper keeper;
   private final Clock clock;
   private final SecureRandom random = new SecureRandom();
   private final Map<String, Handover> handovers = new ConcurrentHashMap<>();
+
+  /** For tests: plans stay in the work folder. */
+  TemplatingServer(int preferredPort, PageFiles pages, Path workDir, PlanSink sink, Clock clock)
+      throws IOException {
+    this(preferredPort, pages, workDir, sink, file -> file, clock);
+  }
 
   /**
    * Starts the server on {@code preferredPort} of 127.0.0.1, or on any free port when that one is
    * taken or is 0. The page keeps its in-browser plans per address, so a steady port keeps them.
    */
   public TemplatingServer(
-      int preferredPort, PageFiles pages, Path workDir, PlanSink sink, Clock clock)
+      int preferredPort,
+      PageFiles pages,
+      Path workDir,
+      PlanSink sink,
+      PlanKeeper keeper,
+      Clock clock)
       throws IOException {
     this.pages = pages;
     this.workDir = Files.createDirectories(workDir);
     this.sink = sink;
+    this.keeper = keeper;
     this.clock = clock;
     this.server = bind(preferredPort);
     this.port = server.getAddress().getPort();
@@ -363,7 +387,19 @@ public final class TemplatingServer implements Closeable {
       Files.write(part, body);
       Path file = dir.resolve("plan-" + r.sop() + ".dcm");
       Files.move(part, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-      plan = new Handover.Plan(r.sop(), r.series(), file);
+      Path kept;
+      try {
+        kept = keeper.keep(file);
+      } catch (IOException | RuntimeException e) {
+        Files.deleteIfExists(file);
+        LOGGER.error("Templating plan not kept in the study library", e);
+        send(ex, 507, error("not saved in the viewer: " + e.getMessage()), JSON);
+        return;
+      }
+      if (!kept.equals(file)) {
+        Files.deleteIfExists(file);
+      }
+      plan = new Handover.Plan(r.sop(), r.series(), kept);
       h.addPlan(plan);
     }
     try {

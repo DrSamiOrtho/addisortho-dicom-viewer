@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Clock;
 import java.util.Set;
 import org.dcm4che3.data.Tag;
@@ -27,6 +28,7 @@ import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.LoadLocalDicom;
+import org.weasis.dicom.explorer.library.StudyLibrary;
 
 /** The one templating server of the viewer, started on the first Template press. */
 final class TemplatingService {
@@ -48,6 +50,7 @@ final class TemplatingService {
               PageFiles.load(TemplatingService.class.getClassLoader(), "templating-web/"),
               AppProperties.buildAccessibleTempDirectory("templating"),
               TemplatingService::intoExplorer,
+              TemplatingService::intoLibrary,
               Clock.systemUTC());
     }
     return server;
@@ -100,6 +103,18 @@ final class TemplatingService {
     }
     // the page draws the viewer's footer on its saved picture unless the preference turns it off
     return ViewTransferHandler.isFooterEnabled() ? page : URI.create(page + "&footer=0");
+  }
+
+  /**
+   * Keeps a saved plan in the study library of this computer, in the X-ray's study, as stitches
+   * are: the templating work folder is emptied when the viewer closes.
+   */
+  private static Path intoLibrary(Path plan) throws IOException {
+    return StudyLibrary.getInstance()
+        .store()
+        .saveDerived(file -> Files.copy(plan, file, StandardCopyOption.REPLACE_EXISTING))
+        .instance()
+        .file();
   }
 
   /** Puts a saved plan into the explorer, in the X-ray's patient and study. */

@@ -35,6 +35,8 @@ project `web/uikit.js` (Full) and `web-quick/quick.js` (Quick). A dash means the
 | Ctrl+Z | Undo | - | yes | yes | yes |
 | Ctrl+E | Export the view | yes | yes | - | - |
 | Ctrl+P | Print | yes | - | - | - |
+| Ctrl+S | Save the marks with the study (14 Nov 2026) | yes | - | - | - |
+| D | Show or hide the marks (14 Nov 2026) | yes | - | - | - |
 | Up and Down | Previous and next image | yes | turn | size | size |
 | Page Up and Page Down | 10 images back and forward | yes | - | size | size |
 | Left and Right | Previous and next series | yes | turn | - | - |

@@ -32,6 +32,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Sequence;
@@ -139,7 +140,7 @@ public class DicomPrSerializer {
     }
     try {
       return createPresentationState(
-          model, parentAttributes, outputFile, seriesInstanceUID, sopInstanceUID, offset);
+          model, parentAttributes, outputFile, seriesInstanceUID, sopInstanceUID, offset, null);
     } catch (Exception e) {
       LOGGER.error("Cannot write Presentation State to file: {}", outputFile.getAbsolutePath(), e);
       return null;
@@ -190,13 +191,63 @@ public class DicomPrSerializer {
         model, imgAttributes, outputFile, seriesInstanceUID, sopInstanceUID, null);
   }
 
+  /**
+   * Writes the graphics of {@code img} as a presentation state, with {@code adjust} applied to the
+   * attributes just before they are saved (for example to set its own content label).
+   *
+   * @throws IOException when it could not be written
+   */
+  public static Attributes writeLabelled(
+      GraphicModel model,
+      DicomImageElement img,
+      File outputFile,
+      String seriesInstanceUID,
+      String sopInstanceUID,
+      Consumer<Attributes> adjust)
+      throws IOException {
+    Attributes imgAttributes = extractImageAttributes(img);
+    if (imgAttributes == null) {
+      throw new IOException("The image has no DICOM header");
+    }
+    writeCalibration(img, imgAttributes);
+    return writeLabelled(
+        model, imgAttributes, outputFile, seriesInstanceUID, sopInstanceUID, adjust);
+  }
+
+  /**
+   * Writes {@code model} as a presentation state of the image described by {@code image}, with
+   * {@code adjust} applied just before saving.
+   *
+   * @throws IOException when it could not be written
+   */
+  public static Attributes writeLabelled(
+      GraphicModel model,
+      Attributes image,
+      File outputFile,
+      String seriesInstanceUID,
+      String sopInstanceUID,
+      Consumer<Attributes> adjust)
+      throws IOException {
+    Objects.requireNonNull(model, "GraphicModel cannot be null");
+    Objects.requireNonNull(image, "Image attributes cannot be null");
+    try {
+      return createPresentationState(
+          model, image, outputFile, seriesInstanceUID, sopInstanceUID, null, adjust);
+    } catch (IOException e) {
+      throw e;
+    } catch (Exception e) {
+      throw new IOException("Cannot write the presentation state", e);
+    }
+  }
+
   private static Attributes createPresentationState(
       GraphicModel model,
       Attributes parentAttributes,
       File outputFile,
       String seriesInstanceUID,
       String sopInstanceUID,
-      Point2D offset)
+      Point2D offset,
+      Consumer<Attributes> adjust)
       throws Exception {
 
     GraphicModel serializedModel = getModelForSerialization(model, offset);
@@ -209,6 +260,9 @@ public class DicomPrSerializer {
     writeReferences(attributes, serializedModel, parentAttributes.getString(Tag.SOPClassUID));
     writeGraphics(serializedModel, attributes);
     writePrivateTags(serializedModel, attributes);
+    if (adjust != null) {
+      adjust.accept(attributes);
+    }
 
     if (saveToFile(outputFile, attributes)) {
       return attributes;
@@ -716,8 +770,25 @@ public class DicomPrSerializer {
     textSeq.add(textAttributes);
   }
 
+  private static Rectangle2D pointsBounds(List<Point2D> pts) {
+    Rectangle2D box = new Rectangle2D.Double();
+    boolean first = true;
+    for (Point2D p : pts) {
+      if (first) {
+        box.setRect(p.getX(), p.getY(), 0, 0);
+        first = false;
+      } else {
+        box.add(p);
+      }
+    }
+    return box;
+  }
+
   private static Attributes createAnnotationAttributes(AnnotationGraphic graphic) {
     Rectangle2D bounds = graphic.getLabelBounds();
+    if (bounds == null) {
+      bounds = pointsBounds(graphic.getPts()); // the label was never laid out on a screen
+    }
     Point2D anchor = graphic.getAnchorPoint();
     String text = String.join(CARRIAGE_RETURN_LINE_FEED, graphic.getLabels());
 

@@ -165,6 +165,7 @@ import org.weasis.core.ui.launcher.Launcher;
 import org.weasis.core.ui.launcher.Launcher.Type;
 import org.weasis.core.ui.pref.Monitor;
 import org.weasis.core.ui.pref.PreferenceDialog;
+import org.weasis.core.ui.util.AppShell;
 import org.weasis.core.ui.util.ColorLayerUI;
 import org.weasis.core.ui.util.DefaultAction;
 import org.weasis.core.ui.util.ToolBarContainer;
@@ -205,6 +206,7 @@ public class WeasisWin {
 
   private final Frame frame;
   private final RootPaneContainer rootPaneContainer;
+  private JComponent viewerToolbar;
 
   private final CFocusListener selectionListener =
       new CFocusListener() {
@@ -308,9 +310,7 @@ public class WeasisWin {
     scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
     scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER);
     scrollPane.setBorder(null);
-    rootPaneContainer
-        .getContentPane()
-        .add(brandedToolbar(scrollPane, toolbarContainer), BorderLayout.NORTH);
+    viewerToolbar = brandedToolbar(scrollPane, toolbarContainer);
 
     rootPaneContainer.setGlassPane(AppProperties.glassPane);
 
@@ -438,11 +438,22 @@ public class WeasisWin {
 
     // Allow dropping series into the empty main area
     CWorkingArea mainArea = GuiUtils.getUICore().getMainArea();
+    JPanel viewer = new JPanel(new BorderLayout());
+    viewer.add(viewerToolbar, BorderLayout.NORTH);
+    viewer.add(
+        new JLayer<>(GuiUtils.getUICore().getBaseArea(), new WelcomeLayerUI(mainArea)),
+        BorderLayout.CENTER);
     rootPaneContainer
         .getContentPane()
-        .add(
-            new JLayer<>(GuiUtils.getUICore().getBaseArea(), new WelcomeLayerUI(mainArea)),
-            BorderLayout.CENTER);
+        .add(AppShell.getInstance().build(viewer), BorderLayout.CENTER);
+    AppShell.getInstance()
+        .onReturnToViewer(
+            () -> {
+              ViewerPlugin<?> selected = getSelectedPlugin();
+              if (selected != null) {
+                selected.setSelectedAndGetFocus();
+              }
+            });
     mainArea.getComponent().setTransferHandler(new SeriesHandler());
     mainArea.setLocation(CLocation.base().normalRectangle(0, 0, 1, 1));
     mainArea.setVisible(true);
@@ -498,6 +509,9 @@ public class WeasisWin {
     List<MediaSeries<MediaElement>> seriesList = builder.getSeries();
     ViewerOpenOptions opts = builder.getViewerOpenOptions();
     ViewerPlacement placement = opts.placement();
+    if (!(placement instanceof ViewerPlacement.External)) {
+      AppShell.getInstance().showViewer(); // a viewer on another screen leaves this window alone
+    }
     TabFocusPolicy focusPolicy = opts.tabFocusPolicy();
 
     // -- ReuseViewer: try to reuse an existing viewer matching the same group --
