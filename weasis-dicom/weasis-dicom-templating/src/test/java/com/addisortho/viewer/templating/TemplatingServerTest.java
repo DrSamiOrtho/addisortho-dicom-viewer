@@ -196,6 +196,58 @@ class TemplatingServerTest {
   }
 
   @Test
+  void aPlanIsKeptBeforeThePageIsToldItIsStored() throws Exception {
+    server.close();
+    Path kept = Files.createDirectories(tmp.resolve("library"));
+    server =
+        new TemplatingServer(
+            0,
+            PageFiles.load(getClass().getClassLoader(), "templating-web-test/"),
+            tmp.resolve("work2"),
+            (h, p) -> received.add(p),
+            file -> Files.copy(file, kept.resolve("kept-" + file.getFileName())),
+            clock);
+    page = server.handOver(xray, "explorer");
+    base = page.toString().substring(0, page.toString().indexOf("templating/"));
+    byte[] plan = Dicom.part10(Dicom.plan("2.25.11", "2.25.12"));
+
+    assertEquals(200, post(plan).statusCode());
+
+    assertEquals(1, received.size());
+    Path file = received.get(0).file();
+    assertEquals(kept, file.getParent());
+    assertArrayEquals(plan, Files.readAllBytes(file));
+    try (var left = Files.walk(tmp.resolve("work2"))) {
+      assertTrue(left.noneMatch(f -> f.getFileName().toString().startsWith("plan-")));
+    }
+  }
+
+  @Test
+  void aPlanTheLibraryRefusesIsNotReportedAsStored() throws Exception {
+    server.close();
+    server =
+        new TemplatingServer(
+            0,
+            PageFiles.load(getClass().getClassLoader(), "templating-web-test/"),
+            tmp.resolve("work3"),
+            (h, p) -> received.add(p),
+            file -> {
+              throw new IOException("The disk is nearly full");
+            },
+            clock);
+    page = server.handOver(xray, "explorer");
+    base = page.toString().substring(0, page.toString().indexOf("templating/"));
+    byte[] plan = Dicom.part10(Dicom.plan("2.25.11", "2.25.12"));
+
+    HttpResponse<String> r = post(plan);
+
+    assertEquals(507, r.statusCode());
+    assertTrue(r.body().contains("The disk is nearly full"), r.body());
+    assertTrue(received.isEmpty());
+    assertEquals(507, post(plan).statusCode()); // not taken for a plan already held
+  }
+
+  @Test
   void refusesEverythingElseAtTheDoor() throws Exception {
     byte[] plan = Dicom.part10(Dicom.plan("2.25.11", "2.25.12"));
     String own = "http://127.0.0.1:" + server.port();
