@@ -94,6 +94,11 @@ public class ExportTree extends JPanel {
       if (!studyPathsSet.isEmpty()) {
         TreePath[] studyCheckingPaths = studyPathsSet.toArray(new TreePath[0]);
         checkboxTree.setCheckingPaths(studyCheckingPaths);
+        // only the newest saved marks of each image go with the study
+        List<TreePath> off = MarksExportDefaults.toUntick(checkTreeModel.getRootNode());
+        if (!off.isEmpty()) {
+          checkboxTree.removeCheckingPaths(off.toArray(new TreePath[0]));
+        }
       }
 
       List<TreePath> selectedPaths = checkTreeModel.getDefaultSelectedPaths();

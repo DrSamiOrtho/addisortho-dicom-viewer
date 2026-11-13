@@ -81,6 +81,9 @@ import org.weasis.dicom.codec.display.CharsetEncoding;
 public class DicomPrSerializer {
   private static final Logger LOGGER = LoggerFactory.getLogger(DicomPrSerializer.class);
 
+  /** The content label of the marks the Addis Ortho viewer saves with a study. */
+  public static final String AO_MARKS = "AO_MARKS"; // NON-NLS
+
   private static final String PIXEL = "PIXEL";
   private static final String GSPS = "GSPS"; // NON-NLS
   private static final String DESCRIPTION = "Weasis Graphics and Annotations"; // NON-NLS

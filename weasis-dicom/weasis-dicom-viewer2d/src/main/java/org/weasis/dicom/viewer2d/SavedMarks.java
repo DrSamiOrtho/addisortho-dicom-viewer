@@ -71,7 +71,7 @@ public final class SavedMarks {
   private static final Logger LOGGER = LoggerFactory.getLogger(SavedMarks.class);
 
   /** The content label that tells this viewer's marks from other presentation states. */
-  public static final String LABEL = "AO_MARKS"; // NON-NLS
+  public static final String LABEL = DicomPrSerializer.AO_MARKS;
 
   static final String SERIES_DESCRIPTION = "Marks (Addis Ortho)"; // NON-NLS
   static final String CONTENT_DESCRIPTION = "Marks saved in Addis Ortho Viewer"; // NON-NLS
