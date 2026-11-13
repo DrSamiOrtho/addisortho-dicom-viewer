@@ -48,14 +48,21 @@ public class DicomExport extends AbstractWizardDialog {
   private final DicomModel dicomModel;
   private final CheckTreeModel treeModel;
 
+  private final String studyUid;
+
   public DicomExport(Window parent, final DicomModel dicomModel) {
+    this(parent, dicomModel, null);
+  }
+
+  public DicomExport(Window parent, DicomModel dicomModel, String studyUid) {
     super(
         parent,
         Messages.getString("DicomExport.exp_dicom"),
         ModalityType.APPLICATION_MODAL,
         new Dimension(650, 500));
     this.dicomModel = dicomModel;
-    this.treeModel = new CheckTreeModel(dicomModel);
+    this.studyUid = studyUid;
+    this.treeModel = new CheckTreeModel(dicomModel, studyUid);
 
     JButton exportAndClose = new JButton(Messages.getString("DicomExport.exp_close"));
     exportAndClose.addActionListener(
@@ -131,6 +138,20 @@ public class DicomExport extends AbstractWizardDialog {
   protected void initTreeCheckingModel() {
     TreeCheckingModel checkingModel = treeModel.getCheckingModel();
     checkingModel.setCheckingMode(CheckingMode.PROPAGATE_PRESERVING_UNCHECK);
+
+    if (studyUid != null) {
+      List<TreePath> paths = new ArrayList<>();
+      for (var nodes = treeModel.getRootNode().breadthFirstEnumeration();
+          nodes.hasMoreElements(); ) {
+        DefaultMutableTreeNode node = (DefaultMutableTreeNode) nodes.nextElement();
+        if (node.getLevel() == 3) {
+          paths.add(new TreePath(node.getPath()));
+        }
+      }
+      checkingModel.setCheckingPaths(paths.toArray(TreePath[]::new));
+      treeModel.setDefaultSelectionPaths(paths);
+      return;
+    }
 
     if (GuiUtils.getUICore().getExplorerPlugin(DicomExplorer.NAME)
         instanceof DicomExplorer explorer) {

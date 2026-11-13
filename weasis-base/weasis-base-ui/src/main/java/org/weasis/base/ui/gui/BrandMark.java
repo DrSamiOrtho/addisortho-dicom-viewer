@@ -28,10 +28,11 @@ import org.weasis.core.api.util.ResourceUtil;
 import org.weasis.core.api.util.ResourceUtil.LogoIcon;
 import org.weasis.core.ui.editor.SeriesViewerUI;
 import org.weasis.core.ui.editor.image.ViewerPlugin;
+import org.weasis.core.ui.util.AppShell;
 
 /**
  * The Addis Ortho mark at the left of the toolbar, as tall as the toolbar buttons. Clicking it goes
- * back to the start screen: after a confirmation it closes every open viewer, as "Close All" does.
+ * to Studies. Profiles without a Studies screen use the original welcome screen.
  */
 class BrandMark extends JButton {
   private final JComponent buttonRow;
@@ -78,6 +79,11 @@ class BrandMark extends JButton {
   }
 
   private void goHome() {
+    AppShell shell = AppShell.getInstance();
+    if (shell.hasHome()) {
+      shell.show(AppShell.Place.STUDIES);
+      return;
+    }
     List<ViewerPlugin<?>> viewers = new ArrayList<>(GuiUtils.getUICore().getViewerPlugins());
     viewers.removeIf(v -> !v.getDockable().isCloseable());
     if (viewers.isEmpty()) {

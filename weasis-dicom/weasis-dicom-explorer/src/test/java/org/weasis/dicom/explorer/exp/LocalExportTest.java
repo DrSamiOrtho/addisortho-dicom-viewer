@@ -41,14 +41,39 @@ import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.media.DicomDirWriter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.weasis.core.api.media.data.MediaSeriesGroup;
+import org.weasis.core.api.media.data.MediaSeriesGroupNode;
+import org.weasis.core.api.media.data.TagW;
 import org.weasis.dicom.codec.DcmMediaReader;
 import org.weasis.dicom.codec.DicomElement;
+import org.weasis.dicom.codec.DicomSeries;
+import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.imp.DicomDirLoader;
 
 class LocalExportTest {
 
   @TempDir Path tmp;
+
+  @Test
+  void studiesHomeExportContainsOnlyTheRequestedStudy() {
+    DicomModel model = new DicomModel();
+    for (int i = 1; i <= 2; i++) {
+      var patient = new MediaSeriesGroupNode(TagW.PatientPseudoUID, "demo" + i, null);
+      var study = new MediaSeriesGroupNode(TagD.get(Tag.StudyInstanceUID), "1.2." + i, null);
+      model.addHierarchyNode(MediaSeriesGroupNode.rootNode, patient);
+      model.addHierarchyNode(patient, study);
+      model.addHierarchyNode(study, new DicomSeries("1.2." + i + ".1"));
+    }
+    var filtered = new CheckTreeModel(model, "1.2.2").getRootNode();
+    assertEquals(1, filtered.getChildCount());
+    var studyNode = (DefaultMutableTreeNode) filtered.getFirstChild().getChildAt(0);
+    assertEquals(
+        "1.2.2",
+        ((MediaSeriesGroup) studyNode.getUserObject()).getTagValue(TagD.get(Tag.StudyInstanceUID)));
+    assertEquals(0, new CheckTreeModel(model, "1.2.9").getRootNode().getChildCount());
+    assertEquals(2, new CheckTreeModel(model).getRootNode().getChildCount());
+  }
 
   @Test
   void namesTheFolderAfterThePatient() {

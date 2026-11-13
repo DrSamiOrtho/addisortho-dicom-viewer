@@ -12,8 +12,24 @@ package org.weasis.core.ui.util;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.formdev.flatlaf.FlatDarkLaf;
 import java.awt.Color;
+import java.util.List;
+import javax.swing.JButton;
+import javax.swing.JLabel;
+import javax.swing.JMenuItem;
+import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
+import javax.swing.JScrollBar;
+import javax.swing.JScrollPane;
+import javax.swing.JTable;
+import javax.swing.JTextArea;
+import javax.swing.JTextField;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 class AoDesignTest {
   private static final double READABLE = 4.5;
@@ -33,5 +49,41 @@ class AoDesignTest {
   @Test
   void blackOnWhiteIsTheMaximum() {
     assertEquals(21.0, AoDesign.contrast(Color.BLACK, Color.WHITE), 0.01);
+  }
+
+  /** A misspelt style is only logged by FlatLaf, and the screen silently stays dark. */
+  @Test
+  void everyLightSurfaceStyleIsUnderstoodByTheLookAndFeel() {
+    FlatDarkLaf.setup();
+    Logger logger = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
+    ListAppender<ILoggingEvent> problems = new ListAppender<>();
+    problems.start();
+    logger.addAppender(problems);
+    try {
+      JPanel root = new JPanel();
+      JButton primary = new JButton("a");
+      AoDesign.primary(primary);
+      JTable table = new JTable();
+      root.add(primary);
+      root.add(new JButton("b"));
+      root.add(new JTextField());
+      root.add(new JTextArea());
+      root.add(new JLabel("c"));
+      root.add(new JScrollPane(table));
+      root.add(table.getTableHeader());
+      JScrollBar bar = new JScrollBar();
+      root.add(bar);
+      AoDesign.lightSurface(root);
+      JPopupMenu menu = new JPopupMenu();
+      menu.add(new JMenuItem("d"));
+      menu.addSeparator();
+      AoDesign.lightMenu(menu);
+
+      assertEquals(
+          List.of(), problems.list.stream().map(ILoggingEvent::getFormattedMessage).toList());
+      assertEquals(AoDesign.GREEN, primary.getBackground());
+    } finally {
+      logger.detachAppender(problems);
+    }
   }
 }

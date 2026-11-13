@@ -49,8 +49,14 @@ public class CheckTreeModel {
   protected final DicomModel dicomModel;
 
   public CheckTreeModel(DicomModel dicomModel) {
+    this(dicomModel, null);
+  }
+
+  /** A study-scoped tree for Export and Send launched from a Studies row. */
+  CheckTreeModel(DicomModel dicomModel, String studyUid) {
     this.dicomModel = dicomModel == null ? new DicomModel() : dicomModel;
-    this.model = buildModel(this.dicomModel);
+    this.model =
+        studyUid == null ? buildModel(this.dicomModel) : buildModel(this.dicomModel, studyUid);
     this.rootNode = (DefaultMutableTreeNode) model.getRoot();
     this.checkingModel = new DefaultTreeCheckingModel(model);
     this.defaultSelectedPaths = Collections.synchronizedList(new ArrayList<>());
@@ -181,6 +187,10 @@ public class CheckTreeModel {
   }
 
   protected synchronized DefaultTreeModel buildModel(DicomModel dicomModel) {
+    return buildModel(dicomModel, null);
+  }
+
+  private DefaultTreeModel buildModel(DicomModel dicomModel, String studyUid) {
     Collection<MediaSeriesGroup> patients = dicomModel.getChildren(MediaSeriesGroupNode.rootNode);
     DefaultMutableTreeNode rootNode =
         new DefaultMutableTreeNode(
@@ -190,6 +200,10 @@ public class CheckTreeModel {
     for (MediaSeriesGroup pt : patients) {
       DefaultMutableTreeNode patientNode = new ToolTipPatientNode(pt, true);
       for (MediaSeriesGroup study : dicomModel.getChildren(pt)) {
+        if (studyUid != null
+            && !studyUid.equals(study.getTagValue(TagD.get(Tag.StudyInstanceUID)))) {
+          continue;
+        }
         DefaultMutableTreeNode studyNode = new ToolTipStudyNode(study, true);
         for (MediaSeriesGroup item : dicomModel.getChildren(study)) {
           if (item instanceof Series) {
@@ -203,6 +217,9 @@ public class CheckTreeModel {
         } else {
           patientNode.insert(studyNode, index);
         }
+      }
+      if (studyUid != null && patientNode.isLeaf()) {
+        continue;
       }
       List<?> children = Collections.list(rootNode.children());
       int index = Collections.binarySearch(children, patientNode, DicomSorter.PATIENT_COMPARATOR);

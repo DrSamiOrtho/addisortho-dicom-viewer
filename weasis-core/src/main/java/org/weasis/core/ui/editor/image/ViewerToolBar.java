@@ -137,7 +137,9 @@ public class ViewerToolBar<E extends ImageElement> extends WtoolBar implements A
 
     if ((activeMouse & InputEvent.BUTTON3_DOWN_MASK) == InputEvent.BUTTON3_DOWN_MASK) {
       mouseRight = buildMouseButton(actions, MouseActions.T_RIGHT);
-      add(mouseRight);
+      if (mouseLeft == null) {
+        add(mouseRight);
+      }
     } else {
       mouseRight = null;
     }
@@ -154,14 +156,18 @@ public class ViewerToolBar<E extends ImageElement> extends WtoolBar implements A
             }
           };
       mouseWheel.setToolTipText(Messages.getString("ViewerToolBar.change"));
-      add(mouseWheel);
+      if (mouseLeft == null) {
+        add(mouseWheel);
+      }
     } else {
       mouseWheel = null;
     }
 
     if ((activeMouse & InputEvent.BUTTON2_DOWN_MASK) == InputEvent.BUTTON2_DOWN_MASK) {
       mouseMiddle = buildMouseButton(actions, MouseActions.T_MIDDLE);
-      add(mouseMiddle);
+      if (mouseLeft == null) {
+        add(mouseMiddle);
+      }
     } else {
       mouseMiddle = null;
     }
@@ -270,7 +276,29 @@ public class ViewerToolBar<E extends ImageElement> extends WtoolBar implements A
         }
       }
     }
+    if (MouseActions.T_LEFT.equals(type)) {
+      if (mouseRight != null || mouseMiddle != null || mouseWheel != null) {
+        popupMouseButtons.addSeparator();
+      }
+      addMouseMenu(popupMouseButtons, mouseRight, "ViewerToolBar.right");
+      addMouseMenu(popupMouseButtons, mouseMiddle, "ViewerToolBar.middle");
+      addMouseMenu(popupMouseButtons, mouseWheel, "ViewerToolBar.wheel");
+    }
     return popupMouseButtons;
+  }
+
+  private void addMouseMenu(JPopupMenu popup, DropDownButton button, String title) {
+    if (button == null) {
+      return;
+    }
+    JMenu menu = new JMenu(Messages.getString(title));
+    menu.getPopupMenu().setLabel(button.getType());
+    JPopupMenu choices =
+        button == mouseWheel ? getPopupMenuScroll(button) : getPopupMenuButton(button);
+    for (Component item : choices.getComponents()) {
+      menu.add(item);
+    }
+    popup.add(menu);
   }
 
   private JPopupMenu getPopupMenuScroll(DropDownButton dropButton) {
@@ -305,9 +333,7 @@ public class ViewerToolBar<E extends ImageElement> extends WtoolBar implements A
       if (view != null) {
         view.setMouseActions(mouseActions);
       }
-      if (popupMenu.getInvoker() instanceof DropDownButton) {
-        changeButtonState(popupMenu.getLabel(), item.getActionCommand());
-      }
+      changeButtonState(popupMenu.getLabel(), item.getActionCommand());
     }
   }
 
