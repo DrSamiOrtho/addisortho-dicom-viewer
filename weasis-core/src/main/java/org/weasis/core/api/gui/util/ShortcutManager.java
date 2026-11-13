@@ -376,6 +376,8 @@ public final class ShortcutManager {
   public static final String ID_DICOM_FIRST_PATIENT = "dicom.firstPatient";
   public static final String ID_DICOM_LAST_PATIENT = "dicom.lastPatient";
   public static final String ID_DICOM_TOGGLE_SEG = "dicom.toggleSegmentation";
+  public static final String ID_DICOM_SAVE_MARKS = "dicom.saveMarks";
+  public static final String ID_DICOM_TOGGLE_MARKS = "dicom.toggleMarks";
 
   // -- Shortcut IDs: Docking --
   public static final String ID_DOCKING_MAXIMIZE = "docking.maximize";
@@ -818,6 +820,20 @@ public final class ShortcutManager {
         ShortcutContext.DICOM_VIEWER,
         KeyEvent.VK_S,
         KeyEvent.ALT_MASK);
+    register(
+        ID_DICOM_SAVE_MARKS,
+        Messages.getString("ShortcutManager.save_marks"),
+        CATEGORY_DISPLAY,
+        ShortcutContext.DICOM_VIEWER,
+        KeyEvent.VK_S,
+        KeyEvent.CTRL_MASK);
+    register(
+        ID_DICOM_TOGGLE_MARKS,
+        Messages.getString("ShortcutManager.toggle_marks"),
+        CATEGORY_DISPLAY,
+        ShortcutContext.DICOM_VIEWER,
+        KeyEvent.VK_D,
+        0);
 
     // ---- MPR-specific shortcuts (dicom viewer2d EventManager.keyPressed() for MPR) ----
     register(

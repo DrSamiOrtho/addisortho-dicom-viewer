@@ -210,6 +210,9 @@ public class MeasureToolBar extends WtoolBar {
     }
   }
 
+  /** Adds items at the end of the Draw menu, each time it opens. */
+  protected void extendDrawMenu(JPopupMenu menu) {}
+
   /** The small word under the icon, as on the other tool bars. */
   private static <B extends javax.swing.AbstractButton> B labelled(B button, String word) {
     button.putClientProperty(
@@ -260,6 +263,9 @@ public class MeasureToolBar extends WtoolBar {
           protected JPopupMenu getPopupMenu() {
             JPopupMenu m =
                 (getMenuModel() == null) ? new JPopupMenu() : getMenuModel().createJPopupMenu();
+            if (draw) {
+              extendDrawMenu(m);
+            }
             m.setInvoker(this);
             return m;
           }
