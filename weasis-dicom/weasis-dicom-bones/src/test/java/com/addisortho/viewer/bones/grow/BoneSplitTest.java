@@ -113,4 +113,62 @@ class BoneSplitTest {
             () -> BoneSplit.split(cubes, new int[] {102, 52, 22}, new int[] {107, 52, 22}, 12));
     assertEquals(SplitException.Reason.NOT_IN_BONE, e.reason());
   }
+
+  /**
+   * Thick slices (review of 11 Nov 2026, B8): a plate two slices thick joined to a smaller one by a
+   * neck two pixels wide, on 0.5 mm pixels and 3 mm slices. Eroding a voxel on every axis wore both
+   * plates away at the first step, across the slices, and nothing could be erased; with the voxel
+   * size the first steps work in the plane and the neck goes first.
+   */
+  @Test
+  void onThickSlicesTheNeckIsCutInThePlaneBeforeTheSlicesAreEaten() throws Exception {
+    BitVolume bits = new BitVolume(40, 20, 2);
+    for (int z = 0; z < 2; z++) {
+      for (int y = 0; y < 20; y++) {
+        for (int x = 0; x < 40; x++) {
+          boolean big = x <= 19;
+          boolean neck = x >= 20 && x <= 25 && (y == 9 || y == 10);
+          boolean small = x >= 26 && y >= 4 && y <= 15;
+          if (big || neck || small) {
+            bits.set(x, y, z);
+          }
+        }
+      }
+    }
+    BoxMask bone = new BoxMask(new VoxelBox(0, 39, 0, 19, 0, 1), bits);
+    int[] keep = {8, 10, 0};
+    int[] cut = {33, 10, 1};
+
+    SplitException e =
+        assertThrows(SplitException.class, () -> BoneSplit.split(bone, keep, cut, 12));
+    assertEquals(SplitException.Reason.NOT_SEPARABLE, e.reason(), "voxel counts: nothing is left");
+
+    Split split = BoneSplit.split(bone, keep, cut, BoneSplit.depthFor(0.5, 0.5), 0.5, 0.5, 3);
+    assertEquals(bone.count(), split.kept().count() + split.cut().count(), "every voxel kept once");
+    assertTrue(split.kept().contains(8, 10, 0) && split.kept().contains(8, 10, 1));
+    assertTrue(split.cut().contains(33, 10, 0) && split.cut().contains(33, 10, 1));
+    assertTrue(
+        split.cut().box().x0() >= 20,
+        "the cut runs through the neck, from x " + split.cut().box().x0());
+  }
+
+  @Test
+  void erosionCrossesTheSlicesOnlyAsOftenAsTheirDistanceAllows() {
+    // Cubic voxels: every step, as before.
+    for (int depth = 1; depth <= 12; depth++) {
+      assertTrue(BoneSplit.acrossSlices(depth, 0.5, 0.5));
+    }
+    // 0.5 mm pixels, 3 mm slices: the sixth and the twelfth step.
+    int across = 0;
+    for (int depth = 1; depth <= 12; depth++) {
+      boolean now = BoneSplit.acrossSlices(depth, 0.5, 3);
+      assertEquals(depth == 6 || depth == 12, now, "step " + depth);
+      across += now ? 1 : 0;
+    }
+    assertEquals(2, across);
+    assertEquals(12, BoneSplit.depthFor(0.5, 0.5), "the depth the 12 voxels were set on");
+    assertEquals(6, BoneSplit.depthFor(1.0, 1.0));
+    assertEquals(21, BoneSplit.depthFor(0.29, 0.29));
+    assertEquals(4, BoneSplit.depthFor(3, 3), "a coarse grid still gets a try");
+  }
 }

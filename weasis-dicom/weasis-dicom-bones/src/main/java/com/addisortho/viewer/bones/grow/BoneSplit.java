@@ -26,6 +26,31 @@ public final class BoneSplit {
   public static final int MAX_DEPTH = 12;
 
   /**
+   * Deepest erosion tried, in mm: {@link #MAX_DEPTH} voxels of the 0.5 mm pixels the depth was set
+   * on. The erosion is bounded by this distance on every axis, whatever the voxel size.
+   */
+  public static final double MAX_DEPTH_MM = 6;
+
+  /**
+   * Erosion steps for {@link #MAX_DEPTH_MM} on a grid, one in-plane voxel each: no fewer than 4, so
+   * a coarse grid still gets a try, and no more than 24, so a very fine one does not take long.
+   */
+  public static int depthFor(double mmX, double mmY) {
+    return Math.clamp(Math.round(MAX_DEPTH_MM / Math.min(mmX, mmY)), 4, 24);
+  }
+
+  /**
+   * Whether erosion step {@code depth} (1 for the first) also eats across the slices: only when the
+   * depth reached in the plane, at {@code pace} mm a step, has caught up with one more slice
+   * distance. On cubic voxels that is every step; on 0.5 mm pixels and 3 mm slices every sixth, so
+   * a part two slices thick is not gone after the first step (review of 11 Nov 2026, B8).
+   */
+  static boolean acrossSlices(int depth, double pace, double mmZ) {
+    return (int) Math.floor(depth * pace / mmZ + 1e-9)
+        > (int) Math.floor((depth - 1) * pace / mmZ + 1e-9);
+  }
+
+  /**
    * The two parts.
    *
    * @param kept the part holding the bone's starting point
@@ -69,6 +94,18 @@ public final class BoneSplit {
    */
   public static Split split(BoxMask bone, int[] keep, int[] cut, int maxDepth)
       throws SplitException {
+    return split(bone, keep, cut, maxDepth, 1, 1, 1);
+  }
+
+  /**
+   * As above on a grid whose voxels are {@code mmX} by {@code mmY} by {@code mmZ}: each step erodes
+   * one voxel in the plane, and across the slices only as often as keeps the depth in mm the same
+   * on every axis.
+   */
+  public static Split split(
+      BoxMask bone, int[] keep, int[] cut, int maxDepth, double mmX, double mmY, double mmZ)
+      throws SplitException {
+    double pace = Math.min(mmX, mmY);
     Thread caller = Thread.currentThread();
     VoxelBox box = bone.box();
     // One clear voxel around the bone, so the erosion eats the bone's faces on the block's edges.
@@ -89,7 +126,9 @@ public final class BoneSplit {
     for (int depth = 0; depth <= maxDepth; depth++) {
       RegionGrow.checkCancelled(caller);
       if (depth > 0) {
-        core = core.morph(1, false, false, null, caller);
+        BitVolume eroded = core.emptyCopy();
+        core.step(eroded, false, false, acrossSlices(depth, pace, mmZ), caller);
+        core = eroded;
       }
       int[] ks = core.get(k[0], k[1], k[2]) ? k : RegionGrow.nearestInside(solid, core, k, caller);
       int[] cs = core.get(c[0], c[1], c[2]) ? c : RegionGrow.nearestInside(solid, core, c, caller);

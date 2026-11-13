@@ -156,34 +156,75 @@ final class GrowSession {
     return bones.stream().filter(b -> b.id() == id).findFirst();
   }
 
+  /** How far from a bone, in mm, a click on its surface still counts as on it. */
+  static final double NEAR_CLICK_MM = 1.5;
+
+  private double mmX = 1;
+  private double mmY = 1;
+  private double mmZ = 1;
+
+  /** The voxel size of the session's CT, along the columns, the rows and across the slices. */
+  void voxelSize(double x, double y, double z) {
+    if (x > 0 && y > 0 && z > 0) {
+      mmX = x;
+      mmY = y;
+      mmZ = z;
+    }
+  }
+
+  double[] voxelSize() {
+    return new double[] {mmX, mmY, mmZ};
+  }
+
+  /**
+   * The bone a click on a surface means: the one holding the voxel, otherwise the nearest within
+   * {@link #NEAR_CLICK_MM}, or within one pixel where the pixels are wider than that. Across slices
+   * further apart than that no bone is taken from the next slice.
+   */
+  Optional<Found> boneNearClick(int[] voxel) {
+    return boneNear(voxel, Math.max(NEAR_CLICK_MM, Math.max(mmX, mmY)), mmX, mmY, mmZ);
+  }
+
   /**
    * The bone holding the voxel; otherwise the bone with a voxel nearest to it within {@code radius}
    * voxels, as a click on the surface may land just outside the bone.
    */
   Optional<Found> boneNear(int[] voxel, int radius) {
+    return boneNear(voxel, radius, 1, 1, 1);
+  }
+
+  /**
+   * The bone holding the voxel; otherwise the bone with a voxel nearest to it within {@code
+   * radiusMm}, the distance in mm with the voxel size of each axis. A count of voxels reached 9 to
+   * 15 mm across 3 to 5 mm slices and took the bone of the next slice for the one clicked (review
+   * of 11 Nov 2026, B8).
+   */
+  Optional<Found> boneNear(int[] voxel, double radiusMm, double mmX, double mmY, double mmZ) {
     for (Bone b : bones) {
       if (b.mask().contains(voxel[0], voxel[1], voxel[2])) {
         return Optional.of(new Found(b, voxel));
       }
     }
     Found best = null;
-    long bestDistance = Long.MAX_VALUE;
+    double bestDistance = Double.MAX_VALUE;
+    double limit = radiusMm * radiusMm + 1e-9;
+    int rx = (int) Math.floor(radiusMm / mmX + 1e-9);
+    int ry = (int) Math.floor(radiusMm / mmY + 1e-9);
+    int rz = (int) Math.floor(radiusMm / mmZ + 1e-9);
     for (Bone b : bones) {
       VoxelBox box = b.mask().box();
-      for (int z = Math.max(box.z0(), voxel[2] - radius);
-          z <= Math.min(box.z1(), voxel[2] + radius);
-          z++) {
-        for (int y = Math.max(box.y0(), voxel[1] - radius);
-            y <= Math.min(box.y1(), voxel[1] + radius);
+      for (int z = Math.max(box.z0(), voxel[2] - rz); z <= Math.min(box.z1(), voxel[2] + rz); z++) {
+        for (int y = Math.max(box.y0(), voxel[1] - ry);
+            y <= Math.min(box.y1(), voxel[1] + ry);
             y++) {
-          for (int x = Math.max(box.x0(), voxel[0] - radius);
-              x <= Math.min(box.x1(), voxel[0] + radius);
+          for (int x = Math.max(box.x0(), voxel[0] - rx);
+              x <= Math.min(box.x1(), voxel[0] + rx);
               x++) {
-            long dx = x - voxel[0];
-            long dy = y - voxel[1];
-            long dz = z - voxel[2];
-            long d = dx * dx + dy * dy + dz * dz;
-            if (d < bestDistance && d <= (long) radius * radius && b.mask().contains(x, y, z)) {
+            double dx = (x - voxel[0]) * mmX;
+            double dy = (y - voxel[1]) * mmY;
+            double dz = (z - voxel[2]) * mmZ;
+            double d = dx * dx + dy * dy + dz * dz;
+            if (d < bestDistance && d <= limit && b.mask().contains(x, y, z)) {
               bestDistance = d;
               best = new Found(b, new int[] {x, y, z});
             }

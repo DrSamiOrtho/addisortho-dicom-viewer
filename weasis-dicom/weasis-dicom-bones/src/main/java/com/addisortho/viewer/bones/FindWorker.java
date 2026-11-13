@@ -9,7 +9,9 @@
 package com.addisortho.viewer.bones;
 
 import com.addisortho.viewer.bones.grow.AutoSplit;
+import com.addisortho.viewer.bones.grow.JointShells;
 import com.addisortho.viewer.bones.grow.VoxelBox;
+import com.addisortho.viewer.bones.grow.WeakBone;
 import java.awt.Color;
 import java.util.List;
 import javax.swing.SwingWorker;
@@ -49,9 +51,14 @@ final class FindWorker extends SwingWorker<AutoSplit.Result, Void> {
     AutoSplit.Options options =
         AutoSplit.Options.of(
             ct.grid().columnSpacing(), ct.grid().rowSpacing(), ct.grid().sliceSpacing());
-    AutoSplit.Result r =
+    AutoSplit.Result apart =
         AutoSplit.refineBorders(
-            AutoSplit.split(box, ct::huSource, shown, options), ct::huSource, options);
+            JointShells.split(
+                AutoSplit.split(box, ct::huSource, shown, options), ct::huSource, options),
+            ct::huSource,
+            options);
+    // Last, once the bones are told apart: each takes the thin and weak bone beside it.
+    AutoSplit.Result r = WeakBone.grow(apart, box, ct::huSource, shown, options);
     colours = BoneColors.assign(r.pieces().stream().map(AutoSplit.Piece::mask).toList());
     LOGGER.info(
         "Bones found: {} bones, {} fragments joined, {} specks dropped, grid factor {}, {} ms",

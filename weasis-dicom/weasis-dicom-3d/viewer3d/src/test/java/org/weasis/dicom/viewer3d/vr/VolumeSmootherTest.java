@@ -313,4 +313,102 @@ class VolumeSmootherTest {
     short[][] out = smooth(gap, w, h, sigma, VolumeSmoother.sigmaZ(sigma, 1.0, 3.0));
     assertTrue((out[3][4 * w + 4] & 0xFFFF) - SHIFT <= 10, "retain the low-density gap");
   }
+
+  /** The filter as the 3D view uses it on a CT: thin plates, ridges and edges are kept. */
+  private static short[][] smoothKeepingThin(short[][] slices, int w, int h) {
+    double sigma = VolumeSmoother.SIGMA_XY;
+    VolumeSmoother smoother = new VolumeSmoother(w, h, sigma, sigma, true);
+    List<short[]> out = new ArrayList<>();
+    for (short[] s : slices) {
+      out.addAll(smoother.push(s.clone()));
+    }
+    out.addAll(smoother.finish());
+    return out.toArray(short[][]::new);
+  }
+
+  @Test
+  void thinCortexKeepsItsDensityWhenThinBoneIsKept() {
+    int w = 17;
+    int h = 17;
+    int d = 9;
+    // A plate one voxel thick standing across the slices, 300 above the soft tissue around it.
+    short[][] plate = filled(w, h, d, SHIFT);
+    for (short[] slice : plate) {
+      for (int y = 0; y < h; y++) {
+        slice[y * w + 8] = (short) (SHIFT + 300);
+      }
+    }
+    double sigma = VolumeSmoother.SIGMA_XY;
+    int onPlate = 8 * w + 8;
+    int plain = (smooth(plate, w, h, sigma, sigma)[4][onPlate] & 0xFFFF) - SHIFT;
+    int kept = (smoothKeepingThin(plate, w, h)[4][onPlate] & 0xFFFF) - SHIFT;
+    assertTrue(plain < 215, "the Gaussian alone thins the plate out: " + plain);
+    assertEquals(300, kept, "the plate keeps its density");
+
+    // The same plate running obliquely through each slice.
+    short[][] oblique = filled(w, h, d, SHIFT);
+    for (short[] slice : oblique) {
+      for (int k = 0; k < w; k++) {
+        slice[k * w + k] = (short) (SHIFT + 300);
+      }
+    }
+    assertEquals(300, (smoothKeepingThin(oblique, w, h)[4][onPlate] & 0xFFFF) - SHIFT);
+
+    // A plate lying in one slice.
+    short[][] flat = filled(w, h, d, SHIFT);
+    java.util.Arrays.fill(flat[4], (short) (SHIFT + 300));
+    assertEquals(300, (smoothKeepingThin(flat, w, h)[4][onPlate] & 0xFFFF) - SHIFT);
+  }
+
+  @Test
+  void keepingThinBoneNeverRaisesAVoxelAboveTheScanOrTheGaussian() {
+    int w = 17;
+    int h = 17;
+    int d = 9;
+    double sigma = VolumeSmoother.SIGMA_XY;
+    // A lone bright voxel is noise: it still falls to a third, and nothing around it rises.
+    short[][] speck = filled(w, h, d, SHIFT);
+    int at = 8 * w + 8;
+    speck[4][at] = (short) (SHIFT + 900);
+    short[][] plain = smooth(speck, w, h, sigma, sigma);
+    short[][] kept = smoothKeepingThin(speck, w, h);
+    assertTrue((kept[4][at] & 0xFFFF) - SHIFT <= 300, "a lone voxel falls to a third");
+    for (int z = 0; z < d; z++) {
+      for (int i = 0; i < w * h; i++) {
+        if (z != 4 || i != at) {
+          assertEquals(plain[z][i], kept[z][i], "around the speck, voxel " + i + " of slice " + z);
+        }
+      }
+    }
+    // Noise: no voxel above the larger of its own value and the Gaussian, none below the Gaussian.
+    java.util.Random random = new java.util.Random(7);
+    short[][] noise = new short[d][w * h];
+    for (short[] slice : noise) {
+      for (int i = 0; i < slice.length; i++) {
+        slice[i] = (short) (SHIFT + random.nextInt(400));
+      }
+    }
+    short[][] gauss = smooth(noise, w, h, sigma, sigma);
+    short[][] out = smoothKeepingThin(noise, w, h);
+    for (int z = 0; z < d; z++) {
+      for (int i = 0; i < w * h; i++) {
+        int g = gauss[z][i] & 0xFFFF;
+        int v = noise[z][i] & 0xFFFF;
+        int o = out[z][i] & 0xFFFF;
+        assertTrue(o >= g && o <= Math.max(g, v), "voxel " + i + " of slice " + z);
+      }
+    }
+    // A gap between dense surfaces is not closed any further than the Gaussian closes it.
+    short[][] gap = filled(w, h, d, SHIFT + 1000);
+    for (short[] slice : gap) {
+      for (int y = 0; y < h; y++) {
+        slice[y * w + 8] = (short) SHIFT;
+      }
+    }
+    int inGap = 8 * w + 8;
+    assertEquals(
+        smooth(gap, w, h, sigma, sigma)[4][inGap],
+        smoothKeepingThin(gap, w, h)[4][inGap],
+        "the gap is as open as the Gaussian leaves it");
+  }
 }

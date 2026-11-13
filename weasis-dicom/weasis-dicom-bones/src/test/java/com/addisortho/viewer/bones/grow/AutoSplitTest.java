@@ -10,6 +10,7 @@ package com.addisortho.viewer.bones.grow;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -482,6 +483,29 @@ class AutoSplitTest {
 
   private static long voxels(Result r) {
     return r.pieces().stream().mapToLong(piece -> piece.mask().count()).sum();
+  }
+
+  /**
+   * A block over the limit for the joint lines (review of 11 Nov 2026, B4): the two bones still
+   * come out as one, and the result now says the joints were not looked for, so the panel can.
+   */
+  @Test
+  void aBoneTooLargeForTheJointLinesSaysTheyWereSkipped() {
+    Phantom joint = pressedTogether(400, 8);
+    Result opened = split(joint);
+    assertEquals(2, opened.pieces().size());
+    assertFalse(opened.jointsSkipped());
+
+    Result skipped = split(joint, AutoSplit.Options.of(1, 1, 1).withMaxJointVoxels(1_000));
+    assertEquals(1, skipped.pieces().size());
+    assertTrue(skipped.jointsSkipped());
+
+    // Not looking for them on purpose is not a skip.
+    assertFalse(split(joint, AutoSplit.Options.of(1, 1, 1).withJointHu(0)).jointsSkipped());
+    // The border redraw carries the flag on.
+    assertTrue(
+        AutoSplit.refineBorders(skipped, () -> joint, AutoSplit.Options.of(1, 1, 1))
+            .jointsSkipped());
   }
 
   @Test

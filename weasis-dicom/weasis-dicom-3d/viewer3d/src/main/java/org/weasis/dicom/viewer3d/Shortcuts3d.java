@@ -38,8 +38,8 @@ import org.weasis.dicom.viewer3d.vr.View3dVideoExport;
  *   <li>Ctrl+plus / Ctrl+minus zoom, Ctrl+0 fits the visible part, 0 restores the default window,
  *       Ctrl+S toggles the shading, Ctrl+R resets the scene, Ctrl+Alt+0 restores the whole volume.
  *   <li>Scalpel: Delete cuts inside the area, Enter cuts outside, Escape clears the area (then a
- *       pending measure; Ctrl+Shift+Backslash resets the view), Ctrl+Z / Ctrl+Y undo and redo a cut or a
- *       crop box change, Ctrl+Shift+Alt+Z clears the history.
+ *       pending measure; Ctrl+Shift+Backslash resets the view), Ctrl+Z / Ctrl+Y undo and redo a cut
+ *       or a crop box change, Ctrl+Shift+Alt+Z clears the history.
  *   <li>1 to 6: anterior, posterior, left, right, superior, inferior, centred (see {@link
  *       StandardView}).
  *   <li>Ctrl+F2 exports a rotation video (RadiAnt's advanced movie).

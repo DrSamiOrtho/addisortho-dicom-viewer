@@ -146,7 +146,8 @@ public final class VolumeBuilder {
         volTexture.getWidth(),
         volTexture.getHeight(),
         sigmaXY,
-        VolumeSmoother.sigmaZ(sigmaXY, texel.x, texel.z));
+        VolumeSmoother.sigmaZ(sigmaXY, texel.x, texel.z),
+        true);
   }
 
   private static class TextureLoader extends Thread {

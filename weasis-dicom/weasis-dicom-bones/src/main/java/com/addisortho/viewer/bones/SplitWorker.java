@@ -58,6 +58,11 @@ final class SplitWorker extends SwingWorker<Split, Void> {
     this(kind, bone, null, null, voxel, null, null, List.of());
   }
 
+  /** As above, with the voxel size along x, y and z so the cut is as deep in mm on every axis. */
+  SplitWorker(Kind kind, Bone bone, int[] voxel, double[] mm) {
+    this(kind, bone, null, null, voxel, mm, null, List.of());
+  }
+
   /**
    * Separates a fragment from the bone it presses on, along the darkest surface between the two
    * clicks on the CT (a fracture line or a joint space). Both clicks may be on one bone (the
@@ -145,6 +150,10 @@ final class SplitWorker extends SwingWorker<Split, Void> {
       return AutoSplit.splitBorder(
           neighbour.mask(), bone.mask(), keep, voxel, mm[0], mm[1], mm[2], hu, BORDER_BAND_MM);
     }
-    return BoneSplit.split(bone.mask(), bone.anchor(), voxel, BoneSplit.MAX_DEPTH);
+    if (mm == null) {
+      return BoneSplit.split(bone.mask(), bone.anchor(), voxel, BoneSplit.MAX_DEPTH);
+    }
+    return BoneSplit.split(
+        bone.mask(), bone.anchor(), voxel, BoneSplit.depthFor(mm[0], mm[1]), mm[0], mm[1], mm[2]);
   }
 }

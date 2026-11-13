@@ -126,4 +126,33 @@ class GrowSessionTest {
     assertTrue(s.boneNear(new int[] {20, 12, 12}, 3).isEmpty(), "too far");
     assertTrue(s.boneNear(new int[] {16, 12, 12}, 0).isEmpty(), "on the bone only");
   }
+
+  /**
+   * A click near a bone, in mm (review of 11 Nov 2026, B8): on 0.5 mm pixels and 3 mm slices a
+   * click two pixels beside the bone is on it, a click in the next slice is 3 mm away and is not.
+   * Three voxels each way took the bone of the next slices for the one clicked.
+   */
+  @Test
+  void aClickNearABoneIsMeasuredInMillimetres() {
+    GrowSession s = new GrowSession("ct");
+    Bone bone = bone(s, "Tibia 1", new VoxelBox(10, 14, 10, 14, 5, 5));
+    s.set(s.with(bone));
+    s.voxelSize(0.5, 0.5, 3);
+
+    assertTrue(s.boneNearClick(new int[] {12, 12, 5}).isPresent(), "inside");
+    Optional<Found> beside = s.boneNearClick(new int[] {17, 12, 5});
+    assertTrue(beside.isPresent(), "1.5 mm beside the bone, in its slice");
+    assertArrayEquals(new int[] {14, 12, 5}, beside.get().voxel(), "the nearest voxel of the bone");
+    assertTrue(s.boneNearClick(new int[] {18, 12, 5}).isEmpty(), "2 mm beside");
+    assertTrue(s.boneNearClick(new int[] {12, 12, 6}).isEmpty(), "the next slice, 3 mm away");
+    assertTrue(
+        s.boneNear(new int[] {12, 12, 8}, 3).isPresent(), "by voxels it was taken, 9 mm away");
+
+    // Pixels wider than the 1.5 mm: one pixel beside still counts, the next slice only when it is
+    // as near.
+    s.voxelSize(2, 2, 2);
+    assertTrue(s.boneNearClick(new int[] {15, 12, 5}).isPresent());
+    assertTrue(s.boneNearClick(new int[] {12, 12, 6}).isPresent());
+    assertTrue(s.boneNearClick(new int[] {16, 12, 5}).isEmpty());
+  }
 }

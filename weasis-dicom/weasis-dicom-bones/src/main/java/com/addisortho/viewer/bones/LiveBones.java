@@ -105,6 +105,19 @@ final class LiveBones {
     return java.util.Optional.of(live.update(session.bones(), session.selected(), selectedColor));
   }
 
+  /** Lets go of the live labels of a session whose CT is closed. */
+  static void release(GrowSession session) {
+    LiveBones live = BY_SESSION.remove(session);
+    if (live != null) {
+      live.dispose();
+    }
+  }
+
+  /** How many sessions have live labels. */
+  static int liveCount() {
+    return BY_SESSION.size();
+  }
+
   /** Whether the session's bones are shown live. */
   static boolean isLive(GrowSession session) {
     return BY_SESSION.containsKey(session);
@@ -124,16 +137,21 @@ final class LiveBones {
     }
     // Take out first what changed, then stamp: a voxel moving from one bone to another ends in
     // the new one.
+    // Of a bone that changed only the voxels it lost and the voxels it gained are written, so the
+    // views redraw the slices a brush stroke touched and not every slice of the bone.
     for (Map.Entry<Integer, BoxMask> e : List.copyOf(shown.entrySet())) {
       Bone now = byId.get(e.getKey());
-      if (now == null || now.mask() != e.getValue()) {
-        clear(e.getValue(), e.getKey(), dirty);
+      if (now == null) {
+        clear(e.getValue(), null, e.getKey(), dirty);
         shown.remove(e.getKey());
+      } else if (now.mask() != e.getValue()) {
+        clear(e.getValue(), now.mask(), e.getKey(), dirty);
       }
     }
     for (Bone b : bones) {
-      if (shown.get(b.id()) != b.mask()) {
-        stamp(b.mask(), b.id(), dirty);
+      BoxMask was = shown.get(b.id());
+      if (was != b.mask()) {
+        stamp(b.mask(), was, b.id(), dirty);
         shown.put(b.id(), b.mask());
       }
     }
@@ -196,18 +214,20 @@ final class LiveBones {
     shown.clear();
   }
 
-  private void stamp(BoxMask mask, int id, int[] dirty) {
+  private void stamp(BoxMask mask, BoxMask except, int id, int[] dirty) {
     forEachVoxel(
         mask,
+        except,
         dirty,
         (x, y, z) -> {
           labels.setLabel(x, y, z, id);
         });
   }
 
-  private void clear(BoxMask mask, int id, int[] dirty) {
+  private void clear(BoxMask mask, BoxMask except, int id, int[] dirty) {
     forEachVoxel(
         mask,
+        except,
         dirty,
         (x, y, z) -> {
           if (labels.hasLabel(x, y, z, id)) {
@@ -221,8 +241,11 @@ final class LiveBones {
     void at(int x, int y, int z);
   }
 
-  /** Runs {@code action} on the image-volume voxel of every voxel of {@code mask}. */
-  private void forEachVoxel(BoxMask mask, int[] dirty, VoxelAction action) {
+  /**
+   * Runs {@code action} on the image-volume voxel of every voxel of {@code mask} that is not in
+   * {@code except} (when given).
+   */
+  private void forEachVoxel(BoxMask mask, BoxMask except, int[] dirty, VoxelAction action) {
     VoxelBox box = mask.box();
     BitVolume bits = mask.bits();
     int[] src = new int[3];
@@ -239,6 +262,9 @@ final class LiveBones {
           src[0] = box.x0() + x;
           src[1] = box.y0() + y;
           src[2] = box.z0() + z;
+          if (except != null && except.contains(src[0], src[1], src[2])) {
+            continue;
+          }
           map.apply(src, dst);
           action.at(dst[0], dst[1], dst[2]);
           if (dst[2] < dirty[0]) {

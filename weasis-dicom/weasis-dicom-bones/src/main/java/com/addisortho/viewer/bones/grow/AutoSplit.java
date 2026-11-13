@@ -158,6 +158,27 @@ public final class AutoSplit {
           maxJointVoxels);
     }
 
+    /** The same with another size of block up to which the joint lines are looked for. */
+    public Options withMaxJointVoxels(long voxels) {
+      return new Options(
+          boneHu,
+          denseHu,
+          mmX,
+          mmY,
+          mmZ,
+          minBoneMm3,
+          minDepthMm,
+          neckRatio,
+          fragmentMm3,
+          attachMm,
+          speckMm3,
+          maxWorkVoxels,
+          jointHu,
+          jointReachMm,
+          jointMaxHu,
+          voxels);
+    }
+
     /** The same with another size under which a piece is a fragment of its neighbour. */
     public Options withFragmentMm3(double mm3) {
       return new Options(
@@ -195,10 +216,28 @@ public final class AutoSplit {
    * @param specks loose specks dropped
    * @param factor coarsening of the grid worked on, 1 for the CT's own; the largest of the three
    *     axes' factors
+   * @param jointsSkipped the joint lines were not looked for because the block holding the bone is
+   *     over {@link Options#maxJointVoxels()}: bones pressed together at a small joint may have
+   *     come out as one, and the caller says so (review of 11 Nov 2026, B4: this was silent)
    */
-  public record Result(List<Piece> pieces, int fragments, int specks, int factor, long millis) {}
+  public record Result(
+      List<Piece> pieces,
+      int fragments,
+      int specks,
+      int factor,
+      long millis,
+      boolean jointsSkipped) {
 
-  private static final float INF = 1e12f;
+    public Result(List<Piece> pieces, int fragments, int specks, int factor, long millis) {
+      this(pieces, fragments, specks, factor, millis, false);
+    }
+
+    Result withJointsSkipped(boolean skipped) {
+      return new Result(pieces, fragments, specks, factor, millis, skipped);
+    }
+  }
+
+  static final float INF = 1e12f;
 
   private AutoSplit() {}
 
@@ -258,10 +297,11 @@ public final class AutoSplit {
             box.z0() + tight.z0(),
             box.z0() + tight.z1());
     BitVolume joints = null;
-    if (o.jointHu() > 0 && tight.voxels() <= o.maxJointVoxels()) {
+    boolean skipped = o.jointHu() > 0 && tight.voxels() > o.maxJointVoxels();
+    if (o.jointHu() > 0 && !skipped) {
       joints = openJointLines(dense, solid, block, hu, shown, o, caller);
     }
-    return new Work(solid, dense, joints, block, o, caller).run(start);
+    return new Work(solid, dense, joints, block, o, caller).run(start).withJointsSkipped(skipped);
   }
 
   /** The 13 directions of a voxel's 26 neighbours, one of each opposite pair. */
@@ -283,6 +323,12 @@ public final class AutoSplit {
 
   /** A value no CT holds, for the voxels outside the block or not shown. */
   private static final short NO_VALUE = Short.MIN_VALUE;
+
+  /**
+   * How many times the joint reach one voxel step may be long and still be looked along: 1.5 keeps
+   * every direction of a grid up to 2.4 mm a step, the thin-slice CTs the reach was set on.
+   */
+  private static final double JOINT_STEP_SLACK = 1.5;
 
   /**
    * Clears from the dense bone the voxels of the joint lines. A voxel may be one when it is darker
@@ -335,7 +381,14 @@ public final class AutoSplit {
     for (int d = 0; d < steps.length; d++) {
       int[] n = HALF_NEIGHBOURS[d];
       double mm = Math.sqrt(sq(n[0] * o.mmX()) + sq(n[1] * o.mmY()) + sq(n[2] * o.mmZ()));
-      steps[d] = Math.max(1, (int) Math.round(o.jointReachMm() / mm));
+      // A direction whose first voxel already lies well beyond the reach is not looked along: on
+      // 3 to 5 mm slices one step across them is two or three times the reach, and the bone found
+      // there is another level of the bone, not the far side of a joint line (review of 11 Nov
+      // 2026, B8). Up to JOINT_STEP_SLACK times the reach one step is still taken, as before.
+      steps[d] =
+          mm > JOINT_STEP_SLACK * o.jointReachMm()
+              ? 0
+              : Math.max(1, (int) Math.round(o.jointReachMm() / mm));
     }
     // For each direction, the directions square to it, as bits.
     int[] square = new int[HALF_NEIGHBOURS.length];
@@ -1381,6 +1434,35 @@ public final class AutoSplit {
   }
 
   /**
+   * Splits one bone in two from two sets of its voxels, flooded brightest first, so the two sides
+   * meet along the darkest surface between the sets.
+   *
+   * @throws BoneSplit.SplitException when one side comes out empty
+   */
+  static BoneSplit.Split splitFrom(
+      BoxMask bone,
+      BoxMask keepSeeds,
+      BoxMask cutSeeds,
+      double mmX,
+      double mmY,
+      double mmZ,
+      HuSource hu)
+      throws BoneSplit.SplitException {
+    return flood(
+        bone,
+        anyVoxel(keepSeeds),
+        anyVoxel(cutSeeds),
+        keepSeeds,
+        cutSeeds,
+        null,
+        mmX,
+        mmY,
+        mmZ,
+        hu,
+        null);
+  }
+
+  /**
    * Draws the border between two bones again, along the darkest surface between two clicks, one on
    * each.
    *
@@ -1631,7 +1713,8 @@ public final class AutoSplit {
         found.fragments(),
         found.specks(),
         found.factor(),
-        found.millis() + millis(start));
+        found.millis() + millis(start),
+        found.jointsSkipped());
   }
 
   /**
