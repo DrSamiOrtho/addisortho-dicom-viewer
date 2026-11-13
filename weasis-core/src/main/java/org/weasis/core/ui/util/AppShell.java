@@ -184,7 +184,7 @@ public final class AppShell {
     }
 
     private FlatSVGIcon tinted(Color color) {
-      FlatSVGIcon copy = icon.derive(ICON, ICON);
+      FlatSVGIcon copy = new FlatSVGIcon(icon);
       copy.setColorFilter(new FlatSVGIcon.ColorFilter(_ -> color));
       return copy;
     }
